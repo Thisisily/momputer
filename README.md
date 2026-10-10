@@ -8,6 +8,7 @@
   <img src="https://img.shields.io/badge/Tauri-2-000?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2">
   <img src="https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Cursor%20%C2%B7%20Gemini%20%C2%B7%20Copilot-000?style=flat-square" alt="Works with Claude Code, Codex, Cursor, Gemini and Copilot">
   <img src="https://img.shields.io/badge/license-MIT-000?style=flat-square" alt="MIT license">
+  <a href="https://github.com/Thisisily/momputer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Thisisily/momputer/ci.yml?branch=main&style=flat-square&label=build&labelColor=000&color=2fe07a" alt="Build status"></a>
 </p>
 
 <p align="center"><b>Your AI agents leave the stove on. Mom turns it off.</b></p>
