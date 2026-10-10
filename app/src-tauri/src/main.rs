@@ -1,4 +1,4 @@
-// momputer: a computer mom for your AI agents.
+// momputer: a mom for your AI.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use mom_core::containers::{self, Machines};

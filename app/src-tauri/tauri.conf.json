@@ -33,7 +33,7 @@
     "targets": ["nsis", "msi"],
     "publisher": "momputer contributors",
     "category": "Utility",
-    "shortDescription": "A computer mom for your AI agents",
+    "shortDescription": "A mom for your AI",
     "longDescription": "Shows every runtime your AI agents left running, who started it, and cleans up after them.",
     "copyright": "MIT",
     "icon": [

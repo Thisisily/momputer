@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/hero.png" width="100%" alt="momputer: a cartoon granny with her hair in a bun and giant round glasses smiles from a round white screen next to the dot-matrix word momputer, with the line 'A computer mom for your AI agents' and three tiny status lights">
+  <img src="docs/hero.png" width="100%" alt="momputer: a cartoon granny with her hair in a bun and giant round glasses smiles from a round white screen next to the dot-matrix word momputer, with the line 'A mom for your AI' and three tiny status lights">
 </p>
 
 <p align="center">
@@ -11,7 +11,8 @@
   <a href="https://github.com/Thisisily/momputer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Thisisily/momputer/ci.yml?branch=main&style=flat-square&label=build&labelColor=000&color=2fe07a" alt="Build status"></a>
 </p>
 
-<p align="center"><b>Your AI agents leave the stove on. Mom turns it off.</b></p>
+<p align="center"><b>Your AI agents leave the stove on. Mom turns it off.</b><br>
+<sub>A Windows tray widget for people who run Claude Code, Codex, Cursor, Gemini or Copilot: it finds leftover dev servers, watchers, headless browsers, old <code>node_modules</code> and caches, says which agent left them, and cleans them up.</sub></p>
 
 <p align="center">
   <img src="docs/showcase.png" width="100%" alt="Three views of the widget: the Running tab with programs Claude left behind, each with a red light and a Stop button; the details of Claude Code's scratch folders, listing what goes and what stays; and the Upkeep tab, with 15 GB mom can free up">
