@@ -18,11 +18,14 @@ const END: &str = "<!-- momputer:house-rules:end -->";
 
 const CLI_HINT: &str = "If the `mom` command is available: `mom mine` lists what you left running, `mom stop mine` stops it, and `mom tidy <folder>` grades a folder and lists what to fix.";
 
+/// The rules, always with plain LF line endings: Notepad, or a Git checkout that converts
+/// line endings, must not make mom think the rules she wrote into CLAUDE.md are out of date.
 pub fn current(paths: &Paths) -> String {
     std::fs::read_to_string(paths.rules_file())
         .ok()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_RULES.to_string())
+        .replace("\r\n", "\n")
 }
 
 pub fn is_customized(paths: &Paths) -> bool {

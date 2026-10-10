@@ -128,6 +128,8 @@ fn resolve(slug: &str) -> Option<Vec<String>> {
                 cur.push(&n);
                 parts.push(n);
             }
+            // Nothing on disk matched even the first folder: a guess beats a raw slug.
+            None if parts.is_empty() => return None,
             None => {
                 parts.push(rest);
                 break;
@@ -331,6 +333,8 @@ mod tests {
         assert_eq!(guess("C--Workspace-storefront"), "storefront");
         assert_eq!(guess("C--Users-me-side-project"), "side-project");
         assert_eq!(guess("C--Users-me"), "home folder");
+        // Same answer whether or not C:\Workspace exists on this machine.
+        assert_eq!(project_name("C--Workspace-nosuchproject-mom"), "nosuchproject-mom");
         let parts = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(name_from_parts(&parts(&["Workspace", "Desktop-Client", ".claude", "worktrees", "fix-dates"])), "Desktop-Client (worktree fix-dates)");
         assert_eq!(name_from_parts(&parts(&["Workspace", "storefront"])), "storefront");
