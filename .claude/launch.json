@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ui-preview",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "5199", "--bind", "127.0.0.1", "--directory", "app/ui"],
+      "port": 5199
+    }
+  ]
+}

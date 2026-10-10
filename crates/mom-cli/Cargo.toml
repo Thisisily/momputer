@@ -1,0 +1,23 @@
+[package]
+name = "mom-cli"
+description = "mom: the command line for momputer. Lets you (and your agents) see and clean up what was left running."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mom"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+mom-core.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

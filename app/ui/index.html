@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>momputer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <header class="titlebar">
+      <div class="brand">
+        <span class="led" id="live"></span>
+        <span class="wordmark dot" id="wordmark">momputer</span>
+        <span class="checked num" id="checked"></span>
+      </div>
+      <div class="win-buttons">
+        <button class="icon-btn" id="btn-refresh" title="Look again" aria-label="Look again">
+          <svg viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M13.5 2.5v3h-3"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-pin" title="Keep on top of other windows" aria-label="Keep on top" aria-pressed="false">
+          <svg viewBox="0 0 16 16"><path d="M6 2.5h4l-.6 4 2.1 2H4.5l2.1-2z"/><path d="M8 8.5v5"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings" aria-pressed="false">
+          <svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.6M8 12.6v1.6M1.8 8h1.6M12.6 8h1.6M3.6 3.6l1.1 1.1M11.3 11.3l1.1 1.1M3.6 12.4l1.1-1.1M11.3 4.7l1.1-1.1"/></svg>
+        </button>
+        <button class="icon-btn" id="btn-hide" title="Tuck into the tray (mom keeps watching)" aria-label="Hide">
+          <svg viewBox="0 0 16 16"><path d="M4 8h8"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <section class="note" aria-live="polite">
+      <div class="screen" id="face" tabindex="0" role="button" aria-label="Mom. Click to boop her, drag to move the widget."></div>
+      <div class="readout">
+        <div class="big" id="big"></div>
+        <div class="big-label" id="big-label"></div>
+        <p class="line" id="mom-line">Having a look around…</p>
+      </div>
+      <div class="alarm" id="alarm" hidden></div>
+      <div class="note-actions" id="note-actions" hidden>
+        <button class="primary" id="btn-clean"><span class="led red" aria-hidden="true"></span><span id="clean-label">Clean up</span></button>
+        <span class="note-sub" id="note-sub"></span>
+      </div>
+    </section>
+
+    <nav class="tabs" role="tablist" aria-label="What mom looks after">
+      <span class="tab-thumb" id="tab-thumb" aria-hidden="true"></span>
+      <button class="tab" role="tab" data-tab="running" aria-selected="true">Running<span class="count num" id="count-running"></span></button>
+      <button class="tab" role="tab" data-tab="upkeep" aria-selected="false">Upkeep</button>
+      <button class="tab" role="tab" data-tab="rooms" aria-selected="false">Rooms</button>
+      <button class="tab" role="tab" data-tab="rules" aria-selected="false">House rules</button>
+    </nav>
+
+    <main class="page" id="page" role="tabpanel"></main>
+
+    <div class="sheet" id="sheet" hidden>
+      <div class="backdrop" data-act="close-sheet"></div>
+      <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <div class="sheet-grip" aria-hidden="true"></div>
+        <div class="sheet-body" id="sheet-body"></div>
+      </div>
+    </div>
+    <div class="toast" id="toast" role="status" hidden></div>
+  </div>
+  <script src="vendor/gsap.min.js"></script>
+  <script src="vendor/MorphSVGPlugin.min.js"></script>
+  <script src="vendor/idiomorph.min.js"></script>
+  <script src="mock.js"></script>
+  <script src="mom.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
