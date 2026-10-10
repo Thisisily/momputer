@@ -228,4 +228,4 @@ protect = ["ollama serve"]    # never touch these (matched against the command l
 
 ## License
 
-MIT. Made by a computer mom who is not mad, just disappointed.
+MIT. See [LICENSE](LICENSE).
