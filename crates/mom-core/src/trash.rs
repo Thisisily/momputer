@@ -124,6 +124,8 @@ pub struct TrashCtx<'a> {
     pub project_roots: Vec<PathBuf>,
     pub docker_running: bool,
     pub now: u64,
+    /// Running as administrator: then only the spots that need one are cleaned (see `clean`).
+    pub elevated: bool,
 }
 
 impl<'a> TrashCtx<'a> {
@@ -157,6 +159,7 @@ impl<'a> TrashCtx<'a> {
             project_roots: builds::default_roots(paths, &cfg.rooms),
             docker_running: crate::containers::docker_running(table),
             now: now_secs(),
+            elevated: crate::elevate::is_elevated(),
         }
     }
 
@@ -1543,7 +1546,7 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     };
     let pick = pick.filter(|p| !p.is_default());
     // As administrator, mom only cleans what needs one. Your own files are cleaned as you.
-    let elevated = crate::elevate::is_elevated();
+    let elevated = ctx.elevated;
     if elevated && !needs_admin(id) {
         r.message = "Run this as yourself, not as administrator: it cleans your own files.".into();
         return r;
@@ -1799,6 +1802,7 @@ mod tests {
             project_roots: vec![],
             docker_running: false,
             now: now_secs(),
+            elevated: false, // tests may well run as administrator (CI does)
         }
     }
 
@@ -1941,6 +1945,21 @@ mod tests {
         assert!(!cleans_without_asking("windows-junk"), "never cleaned without asking");
         let r = CleanReport { id: "windows-junk".into(), freed: 5, deleted: 1, skipped: 2, message: String::new() };
         assert!(result_message("windows-junk", &r).contains("a folder other users can change"), "{}", result_message("windows-junk", &r));
+    }
+
+    #[test]
+    fn as_administrator_your_own_files_are_left_alone() {
+        let root = fixture("elevated");
+        let paths = Paths::under(&root);
+        write(&paths.temp.join("old-a").join("a.log"), 100, 30);
+        let cfg = TrashConfig::default();
+        let mut ctx = ctx(&paths, &cfg);
+        ctx.elevated = true;
+        let r = clean("old-temp", &ctx, None);
+        assert_eq!(r.deleted, 0);
+        assert!(r.message.contains("not as administrator"), "{}", r.message);
+        assert!(paths.temp.join("old-a").join("a.log").exists());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
