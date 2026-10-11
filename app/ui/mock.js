@@ -357,7 +357,9 @@
       s.reclaimableBytes -= freed;
       s.reclaimableItems = s.items.filter((i) => i.goes).length;
       emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
-      return { id, freed, deleted: goes.length, skipped: 0, message: `Took out ${(freed / 1024 / MB).toFixed(1)} GB of trash.` };
+      const size = `${(freed / 1024 / MB).toFixed(1)} GB`;
+      const message = s.action === "recycle" ? `Moved ${goes.length} files (${size}) to the Recycle Bin. Changed your mind? It's all in there.` : `Took out ${size} of trash.`;
+      return { id, freed, deleted: goes.length, skipped: 0, message };
     },
     get_health: async () => (await wait(150), JSON.parse(JSON.stringify(health))),
     room_paths: () => [room.path],

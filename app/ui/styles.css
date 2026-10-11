@@ -442,6 +442,17 @@ textarea:focus-visible,
   box-shadow: none;
 }
 
+/* Pressed once: asking "Sure?" */
+.primary.armed {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--red);
+}
+
+/* Working on it: still lit, not greyed out like a button that can't be pressed. */
+.primary.busy:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
 /* ---------------------------------------------------------------- tabs, with a thumb that slides */
 
 .tabs {
