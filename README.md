@@ -193,7 +193,13 @@ autoStopAfterMinutes = 20     # ...once nobody has come back for them this long
 autoStopOrphans = false       # also orphans nobody can be traced to
 
 [ui]
+notifications = true          # the master switch (also in the widget's settings)
+notifyLeftovers = true        # "somebody left the lights on"...
+notifyAfterMinutes = 10       # ...only for leftovers nobody came back for in this long
+notifyEveryMinutes = 30       # ...and at most one note this often
+notifyMeltdown = true         # leftovers burning CPU for two minutes, at most hourly
 cpuAlertPercent = 25.0        # meltdown alarm threshold
+notifyCleanups = true         # what mom turned off by herself
 
 [hooks]
 enabled = true
@@ -226,6 +232,7 @@ protect = ["ollama serve"]    # never touch these (matched against the command l
 - [GSAP](https://gsap.com) for mom's animation, free under GreenSock's [standard license](https://gsap.com/standard-license).
 - [idiomorph](https://github.com/bigskysoftware/idiomorph) (0BSD), so lists update in place.
 - [Geist](https://vercel.com/font) and [Doto](https://github.com/oliverlalan/Doto) fonts, under the SIL Open Font License.
+- [Lucide](https://lucide.dev) icons (ISC).
 
 ## License
 

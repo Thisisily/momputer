@@ -93,11 +93,13 @@
     return sameDay ? time : `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
   };
 
+  // Icons from Lucide (ISC).
+  const icon = (paths) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${paths}</svg>`;
   const ICON = {
-    chevron: '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5"/></svg>',
-    folder: '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5c0-.8.7-1.5 1.5-1.5h2.8l1.4 1.6h4.8c.8 0 1.5.7 1.5 1.5v5.4c0 .8-.7 1.5-1.5 1.5h-9c-.8 0-1.5-.7-1.5-1.5z"/></svg>',
-    close: '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>',
-    out: '<svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M9 3h4v4M13 3 7.5 8.5M11.5 9.5V13h-8V5H7"/></svg>',
+    chevron: icon('<path d="m9 18 6-6-6-6"/>'),
+    folder: icon('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'),
+    close: icon('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+    out: icon('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
   };
 
   const CATEGORY = {
@@ -954,9 +956,9 @@
     const st = state.settings;
     if (!st) return "";
     const c = st.config;
-    const sw = (key, on, label, note) => `<div class="switch-row" id="set-${key}">
+    const sw = (key, on, label, note, off = false) => `<div class="switch-row${off ? " unavailable" : ""}" id="set-${key}">
         <span class="label">${label}</span>
-        <button class="switch" role="switch" aria-checked="${on}" aria-label="${esc(label.replace(/<[^>]+>/g, ""))}" data-set="${key}"></button>
+        <button class="switch" role="switch" aria-checked="${on}" aria-label="${esc(label.replace(/<[^>]+>/g, ""))}" data-set="${key}" ${off ? "disabled" : ""}></button>
         <small>${note}</small>
       </div>`;
     const num = (key, value, min, max) => `<input class="inline-num num" type="number" min="${min}" max="${max}" value="${value}" data-num="${key}">`;
@@ -972,9 +974,18 @@
       )}
       ${section(
         "s-tell",
-        "Telling you",
+        "Notifications",
         "",
-        sw("notifications", c.ui.notifications, "Notifications", `A note when an agent leaves things running, and an alarm when leftovers pass ${num("cpuAlertPercent", c.ui.cpuAlertPercent, 5, 100)}% CPU.`)
+        sw("notifications", c.ui.notifications, "Notifications", "Mom's notes in the corner of your screen. Switch this off and she keeps quiet.") +
+          sw(
+            "notifyLeftovers",
+            c.ui.notifyLeftovers,
+            "Leftovers",
+            `When agents leave things running and nobody comes back for them in ${num("notifyAfterMinutes", c.ui.notifyAfterMinutes, 1, 1440)} minutes. At most one note every ${num("notifyEveryMinutes", c.ui.notifyEveryMinutes, 5, 1440)} minutes.`,
+            !c.ui.notifications
+          ) +
+          sw("notifyMeltdown", c.ui.notifyMeltdown, "CPU alarm", `When leftovers burn more than ${num("cpuAlertPercent", c.ui.cpuAlertPercent, 5, 100)}% CPU for two minutes. At most once an hour.`, !c.ui.notifications) +
+          sw("notifyCleanups", c.ui.notifyCleanups, "Clean-up reports", "When mom turns things off by herself.", !c.ui.notifications)
       )}
       ${section(
         "s-widget",
@@ -1446,9 +1457,13 @@
       if (key === "autoStopOrphans") c.leftovers.autoStopOrphans = on;
       if (key === "includeOrphans") c.leftovers.includeUnknownOrphans = on;
       if (key === "notifications") c.ui.notifications = on;
+      if (key === "notifyLeftovers") c.ui.notifyLeftovers = on;
+      if (key === "notifyMeltdown") c.ui.notifyMeltdown = on;
+      if (key === "notifyCleanups") c.ui.notifyCleanups = on;
       if (key === "alwaysOnTop") c.ui.alwaysOnTop = on;
     });
     if (key === "autoStop") toast(on ? "Deal. I'll clean up after them myself." : "Fine. I'll just tell you.");
+    if (key === "notifications") toast(on ? "I'll let you know when it matters." : "Okay. Not a peep.");
   });
 
   $("#sheet-body").addEventListener("change", (e) => {
@@ -1460,6 +1475,8 @@
       const key = input.dataset.num;
       if (key === "autoStopAfterMinutes") c.leftovers.autoStopAfterMinutes = Math.max(1, Math.round(v));
       if (key === "cpuAlertPercent") c.ui.cpuAlertPercent = Math.min(100, Math.max(5, v));
+      if (key === "notifyAfterMinutes") c.ui.notifyAfterMinutes = Math.min(1440, Math.max(1, Math.round(v)));
+      if (key === "notifyEveryMinutes") c.ui.notifyEveryMinutes = Math.min(1440, Math.max(5, Math.round(v)));
       if (key === "scanIntervalSecs") c.ui.scanIntervalSecs = Math.min(60, Math.max(1, Math.round(v)));
     });
   });

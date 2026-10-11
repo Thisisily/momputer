@@ -49,6 +49,8 @@ struct Shared {
     notified: Mutex<Option<HashSet<String>>>,
     last_toast: Mutex<u64>,
     last_alarm: Mutex<u64>,
+    /// When leftovers started burning more CPU than the alarm allows, if they still are.
+    melting_since: Mutex<Option<u64>>,
     tray_state: Mutex<(bool, String)>,
     diary: Mutex<VecDeque<Note>>,
     placed: AtomicBool,
@@ -155,13 +157,24 @@ mod toasts {
 
     pub const APP_ID: &str = "dev.momputer.app";
     const PICTURE: &[u8] = include_bytes!("../icons/128x128@2x.png");
+    const FACE: &[u8] = include_bytes!("../icons/toast.png");
+
+    /// Mom's round face, shown big in every notification.
+    pub fn face(state_dir: &Path) -> std::path::PathBuf {
+        state_dir.join("mom-face.png")
+    }
+
+    fn keep(path: &Path, bytes: &[u8]) {
+        if std::fs::read(path).map(|b| b != bytes).unwrap_or(true) {
+            let _ = std::fs::create_dir_all(path.parent().unwrap_or(path));
+            let _ = std::fs::write(path, bytes);
+        }
+    }
 
     pub fn register(state_dir: &Path) {
         let picture = state_dir.join("mom.png");
-        if std::fs::read(&picture).map(|b| b != PICTURE).unwrap_or(true) {
-            let _ = std::fs::create_dir_all(state_dir);
-            let _ = std::fs::write(&picture, PICTURE);
-        }
+        keep(&picture, PICTURE);
+        keep(&face(state_dir), FACE);
         if let Ok(key) = windows_registry::CURRENT_USER.create(format!(r"SOFTWARE\Classes\AppUserModelId\{APP_ID}")) {
             let _ = key.set_string("DisplayName", "mom");
             let _ = key.set_string("IconBackgroundColor", "0");
@@ -174,7 +187,9 @@ fn toast(app: &AppHandle, title: &str, body: &str) {
     #[cfg(windows)]
     {
         let handle = app.clone();
+        let face = toasts::face(&app.state::<S>().paths.state_dir());
         let sent = tauri_winrt_notification::Toast::new(toasts::APP_ID)
+            .icon(&face, tauri_winrt_notification::IconCrop::Circular, "mom")
             .title(title)
             .text1(body)
             .on_activated(move |_| {
@@ -297,14 +312,18 @@ fn auto_stop(app: &AppHandle, s: &Shared, cfg: &Config, table: &mom_core::procs:
         human_bytes(report.freed_mem)
     );
     s.note(text.clone());
-    if cfg.ui.notifications {
+    if cfg.ui.notifications && cfg.ui.notify_cleanups {
         toast(app, "Mom cleaned up", &text);
     }
     true
 }
 
+/// Tells you about leftovers without nagging. A leftover has to sit there a while first (agents
+/// often tidy up a minute later), everything new is gathered into one note, and there's at most
+/// one note per `notify_every_minutes`. The CPU alarm needs the heat to last, and rings hourly at most.
 fn alerts(app: &AppHandle, s: &Shared, cfg: &Config, snap: &Snapshot) {
     let now = now_secs();
+    let ui = &cfg.ui;
     let leftovers: Vec<&Group> = snap.groups.iter().filter(|g| g.is_leftover()).collect();
     let ids: HashSet<String> = leftovers.iter().map(|g| g.id.clone()).collect();
     let mut notified = s.notified.lk();
@@ -313,17 +332,23 @@ fn alerts(app: &AppHandle, s: &Shared, cfg: &Config, snap: &Snapshot) {
         *notified = Some(ids);
         return;
     };
-    let fresh: Vec<&&Group> = leftovers.iter().filter(|g| !seen.contains(&g.id)).collect();
     seen.retain(|id| ids.contains(id));
-    seen.extend(fresh.iter().map(|g| g.id.clone()));
-    if !cfg.ui.notifications {
-        return;
-    }
+
+    let wait = ui.notify_after_minutes * 60;
+    let ripe: Vec<&Group> = {
+        let since = s.leftover_since.lk();
+        leftovers
+            .iter()
+            .copied()
+            .filter(|g| !seen.contains(&g.id) && since.get(&g.id).is_some_and(|t| now.saturating_sub(*t) >= wait))
+            .collect()
+    };
     let mut last_toast = s.last_toast.lk();
-    if !fresh.is_empty() && now.saturating_sub(*last_toast) > 45 {
-        let who = fresh[0].owner.agent.map(|a| a.nickname()).unwrap_or("Somebody");
-        let place = fresh[0].project.as_deref().map(|p| format!(" in {p}")).unwrap_or_default();
-        let what: Vec<String> = fresh
+    let gap = ui.notify_every_minutes.max(1) * 60;
+    if ui.notifications && ui.notify_leftovers && !ripe.is_empty() && now.saturating_sub(*last_toast) >= gap {
+        let agents: HashSet<&str> = ripe.iter().map(|g| g.owner.agent.map(|a| a.nickname()).unwrap_or("Somebody")).collect();
+        let who = if agents.len() == 1 { agents.into_iter().next().unwrap_or("Somebody") } else { "Your agents" };
+        let what: Vec<String> = ripe
             .iter()
             .take(3)
             .map(|g| {
@@ -331,20 +356,32 @@ fn alerts(app: &AppHandle, s: &Shared, cfg: &Config, snap: &Snapshot) {
                 format!("{}{port}", g.name)
             })
             .collect();
+        let more = if ripe.len() > 3 { format!(" and {} more", ripe.len() - 3) } else { String::new() };
+        let mem: u64 = ripe.iter().map(|g| g.mem).sum();
         let body = format!(
-            "{who} left {} thing{} running{place}: {}. Want me to turn {} off?",
-            fresh.len(),
-            if fresh.len() == 1 { "" } else { "s" },
+            "{who} left {} thing{} running: {}{more} ({}). Open momputer to turn {} off.",
+            ripe.len(),
+            if ripe.len() == 1 { "" } else { "s" },
             what.join(", "),
-            if fresh.len() == 1 { "it" } else { "them" }
+            human_bytes(mem),
+            if ripe.len() == 1 { "it" } else { "them" }
         );
         toast(app, "Somebody left the lights on", &body);
         *last_toast = now;
+        seen.extend(ripe.iter().map(|g| g.id.clone()));
+    }
+
+    let mut melting_since = s.melting_since.lk();
+    if snap.summary.leftover_cpu >= ui.cpu_alert_percent {
+        melting_since.get_or_insert(now);
+    } else {
+        *melting_since = None;
     }
     let mut last_alarm = s.last_alarm.lk();
-    if snap.summary.leftover_cpu >= cfg.ui.cpu_alert_percent && now.saturating_sub(*last_alarm) > 600 {
+    let lasting = melting_since.is_some_and(|t| now.saturating_sub(t) >= 120);
+    if ui.notifications && ui.notify_meltdown && lasting && now.saturating_sub(*last_alarm) >= 3600 {
         let body = format!(
-            "Leftovers are burning {:.0}% of your CPU ({} things). Open momputer and press Clean up.",
+            "Leftovers have been burning {:.0}% of your CPU for a while ({} things). Open momputer and press Clean up.",
             snap.summary.leftover_cpu, snap.summary.leftovers
         );
         toast(app, "Your computer is melting", &body);
@@ -785,6 +822,7 @@ fn main() {
         notified: Mutex::new(None),
         last_toast: Mutex::new(0),
         last_alarm: Mutex::new(0),
+        melting_since: Mutex::new(None),
         tray_state: Mutex::new((false, String::new())),
         diary: Mutex::new(VecDeque::new()),
         placed: AtomicBool::new(false),

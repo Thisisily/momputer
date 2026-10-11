@@ -121,7 +121,18 @@ impl Default for TrashConfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct UiConfig {
     pub always_on_top: bool,
+    /// The master switch for every notification.
     pub notifications: bool,
+    /// "Somebody left the lights on": things agents left running.
+    pub notify_leftovers: bool,
+    /// Leftovers burning CPU.
+    pub notify_meltdown: bool,
+    /// What mom turned off by herself.
+    pub notify_cleanups: bool,
+    /// Agents often tidy up a minute later, so a leftover has to sit this long before mom says anything.
+    pub notify_after_minutes: u64,
+    /// At most one leftover notification this often; anything new in between waits for the next one.
+    pub notify_every_minutes: u64,
     pub scan_interval_secs: u64,
     /// Leftovers using more than this share of the machine's CPU set off the meltdown alarm.
     pub cpu_alert_percent: f32,
@@ -132,6 +143,11 @@ impl Default for UiConfig {
         UiConfig {
             always_on_top: false,
             notifications: true,
+            notify_leftovers: true,
+            notify_meltdown: true,
+            notify_cleanups: true,
+            notify_after_minutes: 10,
+            notify_every_minutes: 30,
             scan_interval_secs: 3,
             cpu_alert_percent: 25.0,
         }

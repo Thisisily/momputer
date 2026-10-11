@@ -16,11 +16,15 @@ require("../app/ui/mom.js");
 const out = path.join(__dirname, "..", "app", "icons-src");
 fs.mkdirSync(out, { recursive: true });
 
+// Mom's face as a nested SVG at a given spot.
+const faceAt = (x, y, w) =>
+  window.momFace
+    .svg("look")
+    .replace(/^<svg class="[^"]*"/, `<svg x="${x}" y="${y}" width="${w}" height="${Math.round((w * 216) / 304)}"`)
+    .replace(/ role="img" aria-label="[^"]*"/, "");
+
 // The app icon: a black tile, mom on her round white screen, and a tiny red light.
-const face = window.momFace
-  .svg("look")
-  .replace(/^<svg class="[^"]*"/, '<svg x="64" y="206" width="896" height="637"')
-  .replace(/ role="img" aria-label="[^"]*"/, "");
+const face = faceAt(64, 206, 896);
 const icon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <defs>
     <clipPath id="screen"><circle cx="512" cy="524" r="400"/></clipPath>
@@ -34,6 +38,16 @@ const icon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
 </svg>
 `;
 fs.writeFileSync(path.join(out, "icon.svg"), icon);
+
+// The picture in mom's notifications: just her, on her round screen. Windows crops it to a
+// circle. Render it like the tray icons and keep 128x128@2x.png as app/src-tauri/icons/toast.png.
+const toast = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs><clipPath id="screen"><circle cx="512" cy="512" r="512"/></clipPath></defs>
+  <circle cx="512" cy="512" r="512" fill="#fff"/>
+  <g clip-path="url(#screen)">${faceAt(-58, 96, 1140)}</g>
+</svg>
+`;
+fs.writeFileSync(path.join(out, "toast.svg"), toast);
 
 // The tray: bun, head, a grey cap of hair, giant glasses, and a light that says how things are.
 function tray(alert) {
@@ -57,4 +71,4 @@ function tray(alert) {
 }
 fs.writeFileSync(path.join(out, "tray.svg"), tray(false));
 fs.writeFileSync(path.join(out, "tray-alert.svg"), tray(true));
-console.log("wrote app/icons-src/icon.svg, tray.svg, tray-alert.svg");
+console.log("wrote app/icons-src/icon.svg, toast.svg, tray.svg, tray-alert.svg");
