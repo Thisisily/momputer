@@ -31,6 +31,7 @@
     cleaning: null,
     archive: null, // where old conversations go, and what's been moved there
     bringing: null, // the moved folder being brought back
+    deleteConfirm: null, // the moved folder whose Delete was pressed once
     showAllStartup: false,
     roomPaths: [],
     rooms: {},
@@ -824,7 +825,7 @@
           : `<div class="split-legend num"><span>${bytes(s.totalBytes)} in all. The tool works out what's safe to drop.</span></div>`
       }
       <div class="callout"><h3>What the button does</h3><p>${esc(effectNow(s, p))}</p></div>
-      ${s.action === "move" ? archiveBox() : ""}
+      ${s.action === "move" ? archiveBox(s.id) : ""}
       ${s.note ? `<p class="sheet-note"><span class="led red"></span>${esc(s.note)}</p>` : ""}
       ${
         p.goes.length
@@ -871,8 +872,8 @@
       </div>`;
   }
 
-  /** Where moved conversations go, and what's already there (with a way back for each). */
-  function archiveBox() {
+  /** Where a clean-up moves things, and what it's already moved there (with a way back for each). */
+  function archiveBox(spotId) {
     const a = state.archive;
     if (!a) return "";
     const where = a.dir
@@ -880,18 +881,20 @@
           <span class="dim num">${a.reachable ? (a.free != null ? `${bytes(a.free)} free` : "") : "not connected"}</span>
           <button class="link-btn" data-act="choose-archive">Change</button></div>`
       : `<p class="list-hint">Pick a folder on another drive (an external one is fine). Mom makes a momputer-archive folder there.</p>`;
-    const moved = a.moved || [];
+    // Moved before mom said which clean-up moved what: those were conversations.
+    const moved = (a.moved || []).filter((m) => (m.spot || "old-conversations") === spotId);
     if (!moved.length) return where;
     const rows = moved
       .slice()
       .sort((x, y) => y.movedAt - x.movedAt)
       .map((m) => {
         const busy = state.bringing === m.from;
+        const sure = state.deleteConfirm === m.from;
         const why = !m.reachable ? `${driveOf(a.dir)} isn't connected, so this can't be opened right now` : !m.linked ? "Its link is gone (the app may have removed it)" : `moved ${ageLong(Math.max(0, Date.now() / 1000 - m.movedAt))} ago`;
         return `<div class="item stays moved" id="mv-${hash(m.from)}"><span class="led ${m.reachable && m.linked ? "green" : "red"}"></span>
-          <span class="item-main"><span class="item-name">${esc(m.name)}</span><span class="item-sub">${esc(why)}</span></span>
-          <span class="item-size num">${bytes(m.bytes)}</span>
-          <button class="mini-btn wide" data-act="bring-back" data-from="${esc(m.from)}" ${busy || !m.reachable || state.bringing ? "disabled" : ""}>${busy ? "Bringing…" : "Bring back"}</button></div>`;
+          <span class="item-main"><span class="item-name" title="${esc(m.name)}">${esc(m.name)}</span><span class="item-sub">${esc(`${bytes(m.bytes)} · ${why}`)}</span></span>
+          <span class="moved-acts"><button class="mini-btn wide" data-act="bring-back" data-from="${esc(m.from)}" ${busy || !m.reachable || state.bringing ? "disabled" : ""}>${busy ? "Bringing…" : "Bring back"}</button>
+          <button class="mini-btn wide${sure ? " sure" : ""}" data-act="delete-moved" data-from="${esc(m.from)}" title="Delete it from ${esc(driveOf(a.dir))} for good" ${busy || state.bringing ? "disabled" : ""}>${sure ? "Sure? Delete" : "Delete"}</button></span></div>`;
       })
       .join("");
     const total = moved.reduce((t, m) => t + m.bytes, 0);
@@ -1185,7 +1188,7 @@
 
   async function openSheet(sheet) {
     if (sheet.kind === "settings") state.settings = await invoke("get_settings");
-    if (sheet.kind === "spot" && sheet.id === "old-conversations") loadArchive();
+    if (sheet.kind === "spot" && (state.trash.spots.find((x) => x.id === sheet.id) || {}).action === "move") loadArchive();
     const wasOpen = !!state.sheet;
     state.sheet = sheet;
     state.cleanConfirm = null;
@@ -1522,6 +1525,27 @@
         state.bringing = el.dataset.from;
         renderSheet();
         await act(invoke("bring_back", { from: el.dataset.from }));
+        state.bringing = null;
+        loadArchive();
+        break;
+      }
+      case "delete-moved": {
+        const from = el.dataset.from;
+        clearTimeout(cleanTimer);
+        if (state.deleteConfirm !== from) {
+          // First press asks; this one can't be undone.
+          state.deleteConfirm = from;
+          renderSheet();
+          cleanTimer = setTimeout(() => {
+            state.deleteConfirm = null;
+            renderSheet();
+          }, 6000);
+          break;
+        }
+        state.deleteConfirm = null;
+        state.bringing = from;
+        renderSheet();
+        await act(invoke("delete_moved", { from }));
         state.bringing = null;
         loadArchive();
         break;

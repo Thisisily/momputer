@@ -20,6 +20,9 @@ enum Spot {
     Agents,
     Apps,
     Worktrees,
+    Shaders,
+    Games,
+    Dev,
 }
 
 impl Spot {
@@ -30,6 +33,9 @@ impl Spot {
             "agent-leftovers" => Spot::Agents,
             "app-leftovers" => Spot::Apps,
             "cursor-worktrees" => Spot::Worktrees,
+            "shader-cache" => Spot::Shaders,
+            "game-junk" => Spot::Games,
+            "dev-leftovers" => Spot::Dev,
             _ => return None,
         })
     }
@@ -513,6 +519,112 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
             }))
             .collect(),
     ));
+    // Older versions apps keep next to the one they run.
+    let chrome = local.join("Google").join("Chrome").join("User Data");
+    list.push(agent("Chrome", Spot::Apps, vec![chrome.join("Snapshots")]).junk(vec![src(
+        chrome.join("Snapshots"),
+        ("Snapshot of an older version", "snapshots of older versions"),
+        any,
+    )
+    .keep_newest(1)
+    .named(|_, rel| format!("version {} snapshot", rel[0]))]));
+    // Apps installed with Squirrel (Slack, Discord, GitHub Desktop...) keep each version they
+    // updated from, as app-<version>, and its package.
+    for app in subdirs(local, &[]).into_iter().filter(|d| d.join("Update.exe").is_file() && !super::browsers::hands_off(&name_of(d))) {
+        list.push(agent("Squirrel apps", Spot::Apps, vec![app.clone()]).junk(vec![
+            src(app.clone(), ("Older version", "older versions"), |n| n.starts_with("app-"))
+                .keep_newest(1)
+                .named(|dir, rel| format!("{} {}", name_of(dir), rel[0].trim_start_matches("app-"))),
+            src(app.join("packages"), ("Older package", "older update packages"), |n| n.ends_with(".nupkg"))
+                .files()
+                .keep_newest(1),
+        ]));
+    }
+    // Adobe keeps plug-in data per major version of each app; the newest is the one in use.
+    let uxp = roaming.join("Adobe").join("UXP").join("PluginsStorage");
+    for app in subdirs(&uxp, &[]) {
+        list.push(agent("Adobe", Spot::Apps, vec![app.clone()]).junk(vec![src(app, ("Older version's plug-in data", "older versions' plug-in data"), any)
+            .keep_newest(1)
+            .named(|dir, rel| format!("{} {} plug-in data", name_of(dir), rel[0]))]));
+    }
+    let epic = local.join("EpicGamesLauncher").join("Saved");
+    list.push(agent("Epic Games", Spot::Apps, vec![epic.clone(), local.join("Epic Games")]).junk(vec![
+        src(epic, ("Older web cache", "older web caches"), |n| n.starts_with("webcache")).keep_newest(1),
+        src(local.join("Epic Games").join("EOSOverlay"), ("Overlay browser cache", "overlay browser caches"), |n| n == "BrowserCache"),
+    ]));
+    list.push(agent("PowerToys", Spot::Apps, vec![local.join("Microsoft").join("PowerToys")]).junk(vec![src(
+        local.join("Microsoft").join("PowerToys").join("Updates"),
+        ("Downloaded update", "downloaded update installers"),
+        any,
+    )]));
+
+    // ---- Graphics drivers' shader caches: per file, so only shaders nobody has used go.
+    let low = local.parent().map(|a| a.join("LocalLow")).unwrap_or_default();
+    let mut nvidia = Vec::new();
+    for base in [local.join("NVIDIA"), low.join("NVIDIA"), low.join("NVIDIA").join("PerDriverVersion")] {
+        for cache in ["DXCache", "GLCache", "OptixCache"] {
+            nvidia.push(src(base.join(cache), ("Shader", "shaders"), any).named(|dir, rel| format!("{} {}", name_of(dir), rel.join(" / "))));
+        }
+    }
+    nvidia.push(src(roaming.join("NVIDIA").join("ComputeCache"), ("Compute shader", "compute shaders"), any));
+    list.push(agent("NVIDIA", Spot::Shaders, vec![local.join("NVIDIA"), low.join("NVIDIA")]).junk(nvidia));
+    let amd = local.join("AMD");
+    list.push(agent("AMD", Spot::Shaders, vec![amd.clone()]).junk(
+        ["DxCache", "DxcCache", "VkCache", "GLCache", "OglCache"].iter().map(|c| src(amd.join(c), ("Shader", "shaders"), any)).collect(),
+    ));
+    list.push(agent("Intel", Spot::Shaders, vec![local.join("Intel").join("ShaderCache")]).junk(vec![src(
+        local.join("Intel").join("ShaderCache"),
+        ("Shader", "shaders"),
+        any,
+    )]));
+    list.push(agent("DirectX", Spot::Shaders, vec![local.join("D3DSCache")]).junk(vec![src(local.join("D3DSCache"), ("Shader cache", "shader caches"), any)]));
+
+    // ---- Games: logs and crash reports, never saves.
+    list.push(agent("Unity games", Spot::Games, vec![low.clone()]).junk(vec![src(low.clone(), ("Log", "logs"), |n| {
+        n == "Player.log" || n == "Player-prev.log"
+    })
+    .depth(2)
+    .files()
+    .named(|_, rel| format!("{} · {}", rel[1], rel[2]))]));
+    let mut unreal = Vec::new();
+    for game in subdirs(local, &[]) {
+        let saved = game.join("Saved");
+        if saved.join("Logs").is_dir() || saved.join("Crashes").is_dir() {
+            unreal.push(src(saved.join("Logs"), ("Log", "logs"), any).named(|dir, rel| format!("{} · {}", game_of(dir), rel[0])));
+            unreal.push(src(saved.join("Crashes"), ("Crash report", "crash reports"), any).named(|dir, rel| format!("{} · crash {}", game_of(dir), rel[0])));
+        }
+    }
+    list.push(agent("Unreal games", Spot::Games, vec![local.clone()]).junk(unreal));
+    let godot = roaming.join("Godot").join("app_userdata");
+    list.push(agent("Godot games", Spot::Games, vec![godot.clone()]).junk(
+        subdirs(&godot, &[])
+            .into_iter()
+            .map(|g| src(g, ("Shader cache", "shader caches"), |n| n == "shader_cache" || n == "vulkan").named(|dir, rel| format!("{} · {}", name_of(dir), rel[0])))
+            .collect(),
+    ));
+
+    // ---- Developer tools' caches without a clean-up of their own.
+    let cache = home.join(".cache");
+    list.push(agent("Developer tools", Spot::Dev, vec![home.clone()]).junk(vec![
+        src(cache.clone(), ("GitHub Actions runner cache", "act's caches"), |n| n == "act" || n == "actcache").named(|_, rel| format!("act · {}", rel[0])),
+        src(cache.join("firebase").join("emulators"), ("Firebase emulator", "Firebase emulators"), any).named(|_, rel| format!("Firebase · {}", rel[0])),
+        src(local.join("Pub"), ("Dart package cache", "Dart and Flutter package caches"), |n| n == "Cache").named(|_, _| "Dart · package cache".into()),
+        src(local.clone(), ("Dart analysis cache", "Dart analysis caches"), |n| n == ".dartServer").named(|_, _| "Dart · analysis server cache".into()),
+        src(local.join("Cypress").join("Cache"), ("Cypress version", "older Cypress versions"), any).keep_newest(1).named(|_, rel| format!("Cypress {}", rel[0])),
+        src(local.clone(), ("Playwright for Go", "Playwright for Go downloads"), |n| n == "ms-playwright-go").named(|_, _| "Playwright for Go".into()),
+        src(local.join("node-gyp").join("Cache"), ("Node headers", "Node headers node-gyp downloaded"), any).named(|_, rel| format!("node-gyp · Node {}", rel[0])),
+        src(roaming.clone(), ("Old npm cache", "an old npm cache nothing uses"), |n| n == "npm-cache").named(|_, _| "npm · old cache in AppData\\Roaming".into()),
+        src(home.clone(), ("Old npm cache", "an old npm cache nothing uses"), |n| n == "npm-cache").named(|_, _| "npm · old cache in your home folder".into()),
+        src(local.join("0install.net"), ("Zero Install download", "Zero Install downloads"), |n| n == "implementations").named(|_, _| "Zero Install · downloaded apps".into()),
+        src(local.clone(), ("Installer temp files", "installer temp files"), |n| n == "SquirrelTemp").named(|_, _| "Squirrel installer temp files".into()),
+        src(local.join("Microsoft"), ("Editor extension cache", "editor extension caches"), |n| n == "vscode-cpptools" || n == "TypeScript")
+            .named(|_, rel| format!("VS Code · {} cache", rel[0])),
+        src(roaming.join("UnityHub"), ("Downloaded installer", "Unity Hub downloads"), |n| n == "downloads").named(|_, _| "Unity Hub · downloads".into()),
+        src(local.join("JxBrowser"), ("Unpacked browser", "unpacked JxBrowser runtimes"), any).named(|_, rel| format!("JxBrowser {}", rel[0])),
+        src(local.join("cache"), ("Installer cache", "installer caches"), |n| n.starts_with("qt-unified")).named(|_, _| "Qt installer cache".into()),
+        src(home.join(".gradle").join("wrapper").join("dists"), ("Gradle version", "Gradle versions projects downloaded"), any).named(|_, rel| format!("Gradle · {}", rel[0])),
+    ]));
+
     // Downloaded updates (apps built with electron-builder keep the last installer in <app>-updater).
     let updaters: Vec<PathBuf> = subdirs(local, &[]).into_iter().filter(|d| name_of(d).ends_with("-updater")).collect();
     list.push(
@@ -526,6 +638,11 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
     list
 }
 
+/// The game a ...\<Game>\Saved\Logs folder belongs to.
+fn game_of(logs: &Path) -> String {
+    logs.parent().and_then(Path::parent).map(name_of).unwrap_or_default()
+}
+
 fn claude_chat(ctx: &TrashCtx, _root: &Path, rel: &[String]) -> String {
     let project = super::claude::project_name(&rel[0]);
     match rel.get(1) {
@@ -536,6 +653,17 @@ fn claude_chat(ctx: &TrashCtx, _root: &Path, rel: &[String]) -> String {
             format!("{project} · {what}")
         }
     }
+}
+
+/// Every agent tool's and app's folders, so other clean-ups leave them to these. (Not the
+/// shader, game and developer-tool entries: they stand for whole areas like LocalLow.)
+pub(super) fn homes(ctx: &TrashCtx) -> Vec<PathBuf> {
+    agents(ctx)
+        .into_iter()
+        .filter(|a| !matches!(a.spot, Spot::Shaders | Spot::Games | Spot::Dev))
+        .flat_map(|a| a.homes.into_iter().chain(a.chats.into_iter().map(|c| c.root)))
+        .filter(|h| h.exists())
+        .collect()
 }
 
 // ------------------------------------------------------------------ leftovers
@@ -577,7 +705,7 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
     };
     f.available = !here.is_empty();
     // One tool's clean-up names items plainly; one covering several says whose each is.
-    let mixed = matches!(spot, Spot::Agents | Spot::Apps | Spot::Claude);
+    let mixed = !matches!(spot, Spot::Codex | Spot::Worktrees);
     let mut list = Vec::new();
     let mut from: Vec<(&Agent, &Source)> = Vec::new();
     for a in &all {
@@ -594,8 +722,12 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
     }
     let mut found: Vec<(Cand, &Agent, &Source)> =
         super::cands(list, ctx.now).into_iter().zip(from).map(|(c, (a, s))| (c, a, s)).collect();
-    // "Keep the newest": the newest few of each such source stay, whatever their age.
-    found.sort_by_key(|(c, _, s)| (s.dir.clone(), c.age));
+    // "Keep the newest": the newest few of each such source stay, whatever their age. Newest by
+    // version where the names have one (Photoshop 27 over 26, even if 26 was touched later), else
+    // by when it last changed.
+    found.sort_by(|(a, _, sa), (b, _, sb)| {
+        sa.dir.cmp(&sb.dir).then_with(|| version_in(&name_of(&b.path)).cmp(&version_in(&name_of(&a.path)))).then(a.age.cmp(&b.age))
+    });
     let mut kept_per: std::collections::HashMap<PathBuf, usize> = std::collections::HashMap::new();
     for (mut c, a, s) in found {
         if s.empty_only && (c.files > 0 || c.links > 0 || c.bytes > 0) {
@@ -623,6 +755,33 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
     }
     f.available = f.available || !f.cands.is_empty();
     f
+}
+
+/// The version in a name: "27", "app-4.51.180", "slack-4.51.180-full.nupkg", "webcache_4430",
+/// "151.0.7922.174". A commit hash or a plain word has none.
+fn version_in(name: &str) -> Option<Vec<u64>> {
+    let nums = |v: &str| v.split('.').map(|x| x.parse::<u64>().ok()).collect::<Option<Vec<u64>>>();
+    if !name.is_empty() && name.chars().all(|c| c.is_ascii_digit()) {
+        return nums(name);
+    }
+    // A dotted run of numbers anywhere: 4.51.180.
+    let b = name.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_digit() && (i == 0 || !b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'v') {
+            let start = i;
+            while i < b.len() && (b[i].is_ascii_digit() || (b[i] == b'.' && i + 1 < b.len() && b[i + 1].is_ascii_digit())) {
+                i += 1;
+            }
+            let run = &name[start..i];
+            if run.contains('.') {
+                return nums(run);
+            }
+        }
+        i += 1;
+    }
+    // A number after an underscore at the end: webcache_4430.
+    name.rsplit_once('_').map(|(_, n)| n).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())).and_then(nums)
 }
 
 /// Agent folders hold links to shared skills; one with a link inside is never a leftover.
@@ -675,6 +834,9 @@ pub(super) fn untouched(id: &str) -> &'static str {
     match id {
         "claude-leftovers" => "Your chats, projects, settings, plugins and memory aren't touched.",
         "app-leftovers" => "The builds they run now, your extensions, settings and unsaved files aren't touched.",
+        "shader-cache" => "Games and apps keep working: a shader one needs is made again the first time it's used.",
+        "game-junk" => "Saves and settings aren't touched.",
+        "dev-leftovers" => "Your projects and tools aren't touched; anything needed is downloaded or built again.",
         _ => "Their chats, sessions, settings, sign-ins, skills and memory aren't touched.",
     }
 }
@@ -928,6 +1090,72 @@ mod tests {
         for m in crate::archive::list(&paths) {
             crate::archive::bring_back(&paths, &m.from).unwrap();
         }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn shaders_game_logs_dev_caches_and_older_versions_go_saves_and_newest_stay() {
+        let root = fixture("more");
+        let paths = Paths::under(&root);
+        let (l, low) = (paths.local_appdata.clone(), root.join("LocalLow"));
+        write(&l.join("NVIDIA").join("DXCache").join("old.toc"), 500, 90);
+        write(&l.join("NVIDIA").join("DXCache").join("new.toc"), 400, 1);
+        write(&low.join("Pixel Forge").join("Swordship").join("Player.log"), 300, 90);
+        write(&low.join("Pixel Forge").join("Swordship").join("save.dat"), 300, 400);
+        write(&l.join("Atlas").join("Saved").join("Logs").join("Atlas.log"), 200, 90);
+        write(&l.join("Atlas").join("Saved").join("SaveGames").join("slot1.sav"), 200, 400);
+        write(&l.join("Pub").join("Cache").join("hosted").join("pkg"), 100, 100);
+        write(&l.join("Slack").join("Update.exe"), 10, 400);
+        write(&l.join("Slack").join("app-4.40.0").join("slack.exe"), 600, 200);
+        write(&l.join("Slack").join("app-4.41.0").join("slack.exe"), 600, 5);
+        let snaps = l.join("Google").join("Chrome").join("User Data").join("Snapshots");
+        write(&snaps.join("151.0.1").join("x"), 70, 100);
+        write(&snaps.join("154.0.2").join("x"), 70, 10);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let going = |id: &str| {
+            let mut v: Vec<String> = measure(id, &ctx).unwrap().items.into_iter().filter(|i| i.goes).map(|i| i.name).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(going("shader-cache"), vec!["NVIDIA · DXCache old.toc"]);
+        assert_eq!(going("game-junk"), vec!["Unity games · Swordship · Player.log", "Unreal games · Atlas · Atlas.log"]);
+        assert_eq!(going("dev-leftovers"), vec!["Developer tools · Dart · package cache"]);
+        assert_eq!(going("app-leftovers"), vec!["Chrome · version 151.0.1 snapshot", "Squirrel apps · Slack 4.40.0"]);
+        for id in ["shader-cache", "game-junk", "dev-leftovers", "app-leftovers"] {
+            clean(id, &ctx, None);
+        }
+        assert!(low.join("Pixel Forge").join("Swordship").join("save.dat").exists());
+        assert!(l.join("Atlas").join("Saved").join("SaveGames").join("slot1.sav").exists());
+        assert!(l.join("NVIDIA").join("DXCache").join("new.toc").exists());
+        assert!(l.join("Slack").join("app-4.41.0").exists() && !l.join("Slack").join("app-4.40.0").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_newest_version_is_kept_by_number_not_by_date() {
+        use super::version_in;
+        assert!(version_in("27") > version_in("26"));
+        assert!(version_in("app-4.51.180") > version_in("app-4.50.143"));
+        assert!(version_in("slack-4.51.180-full.nupkg") > version_in("slack-4.50.143-full.nupkg"));
+        assert!(version_in("153.0.8010.54") > version_in("152.0.7977.84"));
+        assert!(version_in("webcache_4430") > version_in("webcache_4147"));
+        assert!(version_in("webcache_4147") > version_in("webcache"));
+        assert_eq!(version_in("0fb762053c34788bb7760d5673f8a6d4c8589d50"), None);
+
+        // Photoshop 27 is in use, though 26 was touched more recently: 25 and 26 go, 27 stays.
+        let root = fixture("versions");
+        let paths = Paths::under(&root);
+        let phsp = paths.appdata.join("Adobe").join("UXP").join("PluginsStorage").join("PHSP");
+        write(&phsp.join("25").join("a"), 100, 560);
+        write(&phsp.join("26").join("a"), 100, 100);
+        write(&phsp.join("27").join("a"), 100, 380);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("app-leftovers", &ctx).unwrap();
+        let state = |n: &str| spot.items.iter().find(|i| i.name.contains(n)).map(|i| (i.goes, i.reason.clone())).unwrap();
+        assert_eq!(state("PHSP 27"), (false, "The newest one, kept".to_string()));
+        assert!(state("PHSP 26").0 && state("PHSP 25").0);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

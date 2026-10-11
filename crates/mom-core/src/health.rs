@@ -386,6 +386,12 @@ pub fn startup_apps(paths: &Paths) -> Vec<StartupApp> {
     out
 }
 
+/// Reading the registry, for other parts of mom (installed programs, say).
+#[cfg(windows)]
+pub(crate) mod reg {
+    pub(crate) use super::os::{string_values, subkeys, Hive};
+}
+
 #[cfg(windows)]
 mod os {
     use super::{Drive, Memory};
@@ -393,7 +399,7 @@ mod os {
     use std::collections::HashMap;
     use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ,
+        RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ,
         REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_SZ,
     };
 
@@ -446,6 +452,26 @@ mod os {
             out
         }
 
+        /// Names of the keys inside this one.
+        fn subkeys(&self) -> Vec<String> {
+            let mut out = Vec::new();
+            let mut name = vec![0u16; 512];
+            let mut i = 0u32;
+            loop {
+                let mut len = name.len() as u32;
+                // SAFETY: the buffer and its length are ours and valid for the call.
+                let rc = unsafe {
+                    RegEnumKeyExW(self.0, i, name.as_mut_ptr(), &mut len, std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut())
+                };
+                if rc != 0 {
+                    break; // ERROR_NO_MORE_ITEMS
+                }
+                out.push(String::from_utf16_lossy(&name[..len as usize]));
+                i += 1;
+            }
+            out
+        }
+
         fn dword(&self, value: &str) -> Option<u32> {
             let w = wide(value);
             let mut kind = 0u32;
@@ -467,6 +493,11 @@ mod os {
     fn utf16_string(data: &[u8]) -> String {
         let units: Vec<u16> = data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
         String::from_utf16_lossy(&units)
+    }
+
+    /// Names of the keys inside a key.
+    pub fn subkeys(hive: Hive, path: &str) -> Vec<String> {
+        Key::open(hive, path).map(|k| k.subkeys()).unwrap_or_default()
     }
 
     /// Text values of a key, with %VARIABLES% left as they are.

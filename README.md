@@ -56,10 +56,12 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
       <ul>
         <li>Claude Code's scratch from finished sessions, named after what each session was doing</li>
         <li>what agent tools leave lying around: logs, temp files, undo snapshots, pasted text, caches and old Cursor worktrees, from Claude Code and the Claude app, Codex and its app, OpenCode, OpenClaw, Hermes, Pi, Copilot, Gemini, Qwen, Goose, Cline, Roo, Kilo, Continue, Kimi, Vibe, Junie, Mux, Crush, Droid, Zed, Warp, Windsurf, Kiro, Aider and more. All of it is kept for 67 days first, and nothing they need (chats, sessions, settings, skills, memory) is ever touched</li>
-        <li>old builds, downloaded extension packages and crash reports VS Code and its forks keep, and the update installers apps leave behind</li>
+        <li>old builds, downloaded extension packages and crash reports VS Code and its forks keep, older versions Squirrel apps (Slack, Discord, GitHub Desktop) and Chrome keep, and the update installers apps leave behind</li>
+        <li>shaders your graphics driver compiled for games you no longer play, games' logs and crash reports (never saves), and developer caches with no clean-up of their own (Dart, Flutter, Cypress, act, Firebase, VS Code's C++ and TypeScript caches)</li>
         <li>old <code>node_modules</code> and <code>target</code> folders in projects you stopped working on</li>
         <li>npm, bun, pip, uv, cargo and other developer caches</li>
-        <li>browser caches, crash dumps, old installers in Downloads, and the Recycle Bin</li>
+        <li>browser caches (and the same caches inside Cursor, VS Code, Slack and other apps built like browsers), crash dumps, old installers in Downloads, and the Recycle Bin</li>
+        <li><b>forgotten app data</b>: big folders of apps you uninstalled, an app's older versions, and models and games you haven't opened in ages. Mom guesses which app a folder belongs to, so these move to your archive drive instead of being deleted, and keys, passwords, wallets, browser profiles and messages are never offered</li>
       </ul>
       <p>Tap any of them and she lists every folder that goes, every one that stays and why, and tells you what the button does (deleted for good, Recycle Bin, or the tool's own prune) <b>before</b> you press it. Untick anything you want to keep, or tick something she'd keep just because it's new.</p>
       <p><b>Old conversations</b> don't get deleted: mom moves them to another drive (an external one is fine) and leaves a link in each one's place, so Codex, Claude Code, Cursor and the rest still open them from where they were. Bring back puts any of them back.</p>

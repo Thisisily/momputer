@@ -617,6 +617,19 @@ async fn bring_back(from: String, app: AppHandle, s: State<'_, S>) -> Res<String
     Ok(format!("{} is back where it was ({}).", m.name, human_bytes(m.bytes)))
 }
 
+/// Deletes a moved folder from the archive for good (and its link).
+#[tauri::command]
+async fn delete_moved(from: String, app: AppHandle, s: State<'_, S>) -> Res<String> {
+    let s = s.inner().clone();
+    let s2 = s.clone();
+    let m = tauri::async_runtime::spawn_blocking(move || mom_core::archive::delete_moved(&s.paths, std::path::Path::new(&from)))
+        .await
+        .map_err(err)??;
+    s2.note(format!("Deleted {} from the archive.", m.name));
+    measure_trash_now(app, s2, None);
+    Ok(format!("Deleted {} ({}) for good.", m.name, human_bytes(m.bytes)))
+}
+
 /// Disks, memory, uptime, startup apps and the checkups built from them.
 #[tauri::command]
 async fn get_health(s: State<'_, S>) -> Res<mom_core::health::Health> {
@@ -918,6 +931,7 @@ fn main() {
             archive_info,
             choose_archive_dir,
             bring_back,
+            delete_moved,
             get_health,
             get_rooms,
             room_paths,

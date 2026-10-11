@@ -209,6 +209,20 @@
       ],
     }),
     spot({
+      id: "forgotten-apps", label: "Forgotten app data", group: "personal", action: "move", safety: "review",
+      what: "Big folders apps keep in AppData and your home folder: the data of apps you've since uninstalled, folders of an app's older versions, and things nobody has touched in a long time. Mom guesses which app each belongs to, so nothing here is deleted: it moves to your archive drive with a link left behind. Keys, passwords, wallets and browser profiles are never offered.",
+      effect: "Moves 4 folders (6.2 GB) to a drive you choose, with a link left in each one's place: data of apps you've uninstalled. Nothing is deleted. Bring back puts any of them back, and once you're sure you don't need one, Delete for good removes it from there. Mom guesses which app a folder belongs to, so look through the list first.",
+      totalBytes: 8.9 * GB, reclaimableBytes: 6.2 * GB, reclaimableItems: 4, keptItems: 2,
+      items: [
+        item("Nimbus Studio (AppData\\Roaming)", "41,200 files, mostly images", 3.9 * GB, true, "Its app isn't installed any more. Untouched for 412 days", 412 * D2, 41200),
+        item("Google\\AndroidStudio2021.2 (AppData\\Roaming)", "8,100 files", 1.1 * GB, true, "An older version; AndroidStudio2024.2 is the one in use. Untouched for 705 days", 705 * D2, 8100),
+        item("Atlas Engine (AppData\\LocalLow)", "310 files, mostly data files", 800 * MB, true, "Its app isn't installed any more. Untouched for 290 days", 290 * D2, 310),
+        item("SquirrelTemp (AppData\\Local)", "12 files", 400 * MB, true, "Its app isn't installed any more. Untouched for 649 days", 649 * D2, 12),
+        recent(item(".affinity (your home folder)", "2,900 files", 1.9 * GB, false, "Its app is still installed, but nobody has touched this in 416 days", 416 * D2, 2900)),
+        recent(item("Figma (AppData\\Local)", "600 files", 800 * MB, false, "Its app isn't installed any more. Untouched for 101 days", 101 * D2, 600)),
+      ],
+    }),
+    spot({
       id: "old-temp", label: "Old temp files", group: "windows", action: "delete", safety: "safe", path: "C:\\Users\\me\\AppData\\Local\\Temp",
       what: "Files programs and installers left in your Temp folder and never cleaned up.",
       effect: "Deletes 4,634 items (all empty) from your Temp folder that nobody has touched in 7 days, permanently (they don't go to the Recycle Bin). Anything newer, or in use by a running program, stays. Programs make new temp files when they need them.",
@@ -414,7 +428,7 @@
       emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
       const size = `${(freed / 1024 / MB).toFixed(1)} GB`;
       if (s.action === "move") {
-        for (const i of goes) archive.moved.push({ from: i.path, to: `${archive.dir}\${i.name}`, archive: archive.dir, name: i.name, bytes: i.bytes, files: i.files, movedAt: Date.now() / 1000, linked: true, reachable: true });
+        for (const i of goes) archive.moved.push({ from: i.path, to: `${archive.dir}\\${i.name}`, archive: archive.dir, name: i.name, spot: s.id, bytes: i.bytes, files: i.files, movedAt: Date.now() / 1000, linked: true, reachable: true });
       }
       const message =
         s.action === "recycle"
@@ -437,6 +451,12 @@
       const m = archive.moved.find((x) => x.from === from);
       archive.moved = archive.moved.filter((x) => x.from !== from);
       return `${m.name} is back where it was.`;
+    },
+    delete_moved: async ({ from }) => {
+      await wait(500);
+      const m = archive.moved.find((x) => x.from === from);
+      archive.moved = archive.moved.filter((x) => x.from !== from);
+      return `Deleted ${m.name} for good.`;
     },
     get_health: async () => (await wait(150), JSON.parse(JSON.stringify(health))),
     room_paths: () => [room.path],

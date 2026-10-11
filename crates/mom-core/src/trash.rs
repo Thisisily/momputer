@@ -10,6 +10,7 @@ mod bin;
 mod browsers;
 mod builds;
 mod claude;
+mod forgotten;
 mod harness;
 mod walk;
 
@@ -64,7 +65,7 @@ pub struct Spot {
     pub measured_at: u64,
     /// A blocker or a tip ("Close Edge to clear its cache.").
     pub note: Option<String>,
-    /// Biggest first: up to 40 that go, then up to 20 that stay.
+    /// Biggest first: up to 60 that go, then up to 40 that stay.
     pub items: Vec<Item>,
 }
 
@@ -468,9 +469,10 @@ const DEFS: &[Def] = &[
     Def {
         id: "browser-cache",
         label: "Browser caches",
-        detail: "Saved copies of web pages, images and scripts. Browsers rebuild them as you browse.",
-        what: "Copies of web pages, images and scripts your browsers saved so sites load faster. \
-               Browsers rebuild them as you browse.",
+        detail: "Saved copies of web pages, images and scripts. Browsers and apps rebuild them as you go.",
+        what: "Copies of web pages, images and scripts your browsers saved so sites load faster, and the same caches \
+               inside apps built like browsers (Cursor, VS Code, the Claude and Codex apps, Slack, Discord). They're \
+               rebuilt as you go.",
         group: "windows",
         action: "delete",
         safety: "safe",
@@ -494,6 +496,54 @@ const DEFS: &[Def] = &[
         what: "Files and folders you deleted. They sit in the Recycle Bin, taking up space, until it's emptied.",
         group: "windows",
         action: "empty-bin",
+        safety: "review",
+        owner: None,
+    },
+    Def {
+        id: "shader-cache",
+        label: "Graphics shader caches",
+        detail: "Shaders your graphics driver compiled for games and apps. Unused ones are made again if ever needed.",
+        what: "When a game or app draws something new, the graphics driver (NVIDIA, AMD, Intel) or DirectX compiles \
+               a shader for it and keeps it, so next time is quicker. Shaders of games you no longer play just sit \
+               there; these caches easily reach gigabytes.",
+        group: "windows",
+        action: "delete",
+        safety: "safe",
+        owner: None,
+    },
+    Def {
+        id: "game-junk",
+        label: "Game logs and crash reports",
+        detail: "Logs and crash reports games write every time they run.",
+        what: "Unity games write a Player.log every time they run, Unreal games keep logs and crash reports, and \
+               Godot games keep shader caches. Your saves and settings live next to them and are never touched.",
+        group: "windows",
+        action: "delete",
+        safety: "safe",
+        owner: None,
+    },
+    Def {
+        id: "dev-leftovers",
+        label: "Other developer caches",
+        detail: "Caches of Dart, Flutter, Cypress, act, Firebase, node-gyp and VS Code's language tools.",
+        what: "Developer tools without a clean-up of their own keep caches too: Dart and Flutter's package and \
+               analysis caches, Cypress and Playwright downloads, act's runner images, Firebase emulators, node-gyp's \
+               Node headers, VS Code's C++ and TypeScript caches, Gradle versions, and installer leftovers.",
+        group: "dev",
+        action: "delete",
+        safety: "safe",
+        owner: None,
+    },
+    Def {
+        id: "forgotten-apps",
+        label: "Forgotten app data",
+        detail: "Big folders of apps you uninstalled, older versions, and things untouched for a long time.",
+        what: "Big folders apps keep in AppData and your home folder: the data of apps you've since uninstalled, \
+               folders of an app's older versions, and things nobody has touched in a long time. Mom guesses which \
+               app each belongs to, so nothing here is deleted: it moves to your archive drive with a link left \
+               behind. Keys, passwords, wallets and browser profiles are never offered.",
+        group: "personal",
+        action: "move",
         safety: "review",
         owner: None,
     },
@@ -733,8 +783,10 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
     let la = &ctx.paths.local_appdata;
     match id {
         "claude-temp" => claude::find(ctx, agent_age),
-        "codex-temp" | "claude-leftovers" | "agent-leftovers" | "app-leftovers" | "cursor-worktrees" => harness::find(id, ctx, agent_age),
+        "codex-temp" | "claude-leftovers" | "agent-leftovers" | "app-leftovers" | "cursor-worktrees" | "shader-cache" | "game-junk"
+        | "dev-leftovers" => harness::find(id, ctx, agent_age),
         "old-conversations" => harness::conversations(ctx, ctx.cfg.conversations_after_days * 86_400),
+        "forgotten-apps" => forgotten::find(ctx, &harness::homes(ctx)),
         "render-temp" => {
             let mut f = Found::at(ctx.paths.temp.clone());
             let mut list = Vec::new();
@@ -1152,7 +1204,7 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
     let (n_go, n_stay) = (goes.len() as u64, stays.len() as u64);
     let new_bytes = stays.iter().filter(|c| c.optional).map(|c| c.bytes).sum();
     let new_items = stays.iter().filter(|c| c.optional).count() as u64;
-    let items = goes.into_iter().take(40).chain(stays.into_iter().take(20)).map(Cand::into_item).collect();
+    let items = goes.into_iter().take(60).chain(stays.into_iter().take(40)).map(Cand::into_item).collect();
     Spot {
         id: def.id.into(),
         label: def.label.into(),
@@ -1233,6 +1285,20 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
                 )
             }
         }
+        "forgotten-apps" => {
+            let place = ctx.cfg.archive_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_else(|| "a drive you choose".into());
+            if n == 0 {
+                nothing("no big folders of uninstalled apps, older versions or long-forgotten things.")
+            } else {
+                format!(
+                    "Moves {} to {place}, with a link left in each one's place: data of {}. Nothing is deleted. Bring back \
+                     puts any of them back, and once you're sure you don't need one, Delete for good removes it from \
+                     there. Mom guesses which app a folder belongs to, so look through the list first.",
+                    count_size(n, "folder", "folders", bytes),
+                    harness::tools(goes)
+                )
+            }
+        }
         "cursor-worktrees" if n == 0 => nothing(&format!("every worktree is in use or was worked in during the last {kept}.")),
         "cursor-worktrees" => format!(
             "Moves {} that Cursor's agents made, and nobody has touched in {kept}, to the Recycle Bin. Changes in them \
@@ -1240,7 +1306,7 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
              projects aren't touched (Git keeps a note of each worktree until you run `git worktree prune`).",
             count_size(n, "worktree", "worktrees", bytes)
         ),
-        "claude-leftovers" | "agent-leftovers" | "app-leftovers" => {
+        "claude-leftovers" | "agent-leftovers" | "app-leftovers" | "shader-cache" | "game-junk" | "dev-leftovers" => {
             if n == 0 {
                 nothing(&format!("everything they left is in use or from the last {kept}."))
             } else {
@@ -1353,7 +1419,7 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
                 format!(
                     "Deletes the saved web data of {}, {forever}. Pages load a bit slower the first time you visit them \
                      again. Logins, history, bookmarks, passwords and open tabs aren't touched.",
-                    count_size(n, "browser profile", "browser profiles", bytes)
+                    count_size(n, "browser profile or app", "browser profiles and apps", bytes)
                 )
             };
             match open.as_slice() {
@@ -1521,7 +1587,7 @@ fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport) -> CleanRep
     };
     let mut why = None;
     for c in chosen {
-        match crate::archive::move_out(ctx.paths, &c.path, &root, &c.name) {
+        match crate::archive::move_out(ctx.paths, &c.path, &root, &c.name, &r.id) {
             Ok(m) => {
                 r.freed += m.bytes;
                 r.deleted += 1;

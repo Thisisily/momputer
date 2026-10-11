@@ -27,6 +27,9 @@ pub struct Moved {
     pub archive: PathBuf,
     /// What mom calls it ("Codex · July 2026").
     pub name: String,
+    /// The clean-up that moved it ("old-conversations").
+    #[serde(default)]
+    pub spot: String,
     pub bytes: u64,
     pub files: u64,
     pub moved_at: u64,
@@ -210,7 +213,7 @@ pub fn free_space(p: &Path) -> Option<u64> {
 const MARGIN: u64 = 1 << 30;
 
 /// Moves a folder into the archive at `root` and leaves a link in its place.
-pub fn move_out(paths: &Paths, from: &Path, root: &Path, name: &str) -> Result<Moved, String> {
+pub fn move_out(paths: &Paths, from: &Path, root: &Path, name: &str, spot: &str) -> Result<Moved, String> {
     let meta = std::fs::symlink_metadata(from).map_err(|_| format!("{name} isn't there any more."))?;
     if meta.is_symlink() {
         return Err(format!("{name} has already been moved."));
@@ -270,7 +273,16 @@ pub fn move_out(paths: &Paths, from: &Path, root: &Path, name: &str) -> Result<M
         Ok(seen) if seen == (files, bytes) => {}
         _ => return undo_swap(format!("{name} didn't open through its link, so it was put back.")),
     }
-    let moved = Moved { from: from.to_path_buf(), to, archive: root.to_path_buf(), name: name.to_string(), bytes, files, moved_at: now_secs() };
+    let moved = Moved {
+        from: from.to_path_buf(),
+        to,
+        archive: root.to_path_buf(),
+        name: name.to_string(),
+        spot: spot.to_string(),
+        bytes,
+        files,
+        moved_at: now_secs(),
+    };
     let mut all = list(paths);
     all.retain(|m| m.from != moved.from);
     all.push(moved.clone());
@@ -336,6 +348,31 @@ pub fn bring_back(paths: &Paths, from: &Path) -> Result<Moved, String> {
     Ok(m)
 }
 
+/// Deletes a moved folder from the archive for good, and its link. For things nobody needs
+/// back (the data of an app that's gone, say).
+pub fn delete_moved(paths: &Paths, from: &Path) -> Result<Moved, String> {
+    let mut all = list(paths);
+    let Some(m) = all.iter().find(|m| m.from == from).cloned() else {
+        return Err("Mom didn't move that one.".into());
+    };
+    if is_link(from) {
+        remove_link(from).map_err(|e| format!("Couldn't remove the link to {}: {e}", m.name))?;
+    }
+    if m.to.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&m.to) {
+            // Put the link back, so what's left still opens from where it was.
+            let _ = make_link(from, &m.to);
+            return Err(format!("Couldn't delete {} from {}: {e}", m.name, m.archive.display()));
+        }
+    }
+    all.retain(|x| x.from != m.from);
+    save(paths, &all);
+    if all.iter().all(|x| x.archive != m.archive) {
+        let _ = std::fs::remove_file(m.archive.join(MANIFEST));
+    }
+    Ok(m)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,7 +400,7 @@ mod tests {
         let archive = root.join("F").join("momputer-archive");
         std::fs::create_dir_all(&archive).unwrap();
 
-        let m = move_out(&paths, &month, &archive, "Codex · July 2026").unwrap();
+        let m = move_out(&paths, &month, &archive, "Codex · July 2026", "old-conversations").unwrap();
         assert_eq!((m.files, m.bytes), (2, 5000));
         assert!(m.to.starts_with(&archive) && m.to.ends_with("sessions/2026/07"), "{}", m.to.display());
         // The agent still finds everything where it was, with its dates.
@@ -379,12 +416,19 @@ mod tests {
         let now = status(&paths);
         assert!(now[0].linked && now[0].reachable);
         // Moving it again does nothing.
-        assert!(move_out(&paths, &month, &archive, "again").is_err());
+        assert!(move_out(&paths, &month, &archive, "again", "old-conversations").is_err());
 
         let back = bring_back(&paths, &month).unwrap();
         assert_eq!(back.from, month);
         assert!(!is_link(&month) && month.join("02").join("rollout-b.jsonl").is_file());
         assert!(!m.to.exists(), "gone from the archive");
+        assert!(list(&paths).is_empty());
+
+        // Or, moved again and then deleted for good: the link and the copy go, nothing else.
+        let m = move_out(&paths, &month, &archive, "Codex · July 2026", "old-conversations").unwrap();
+        delete_moved(&paths, &month).unwrap();
+        assert!(!month.exists() && !m.to.exists());
+        assert!(paths.home.join(".codex").join("sessions").join("2026").is_dir());
         assert!(list(&paths).is_empty());
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -401,7 +445,7 @@ mod tests {
         {
             use std::os::windows::fs::OpenOptionsExt;
             let held = std::fs::OpenOptions::new().read(true).share_mode(1).open(day.join("a.jsonl")).unwrap();
-            let err = move_out(&paths, &day, &archive, "day").unwrap_err();
+            let err = move_out(&paths, &day, &archive, "day", "old-conversations").unwrap_err();
             assert!(err.contains("using"), "{err}");
             drop(held);
             assert!(!is_link(&day) && day.join("a.jsonl").is_file());
@@ -412,7 +456,7 @@ mod tests {
         let elsewhere = root.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
         make_link(&day.join("linked"), &elsewhere).unwrap();
-        assert!(move_out(&paths, &day, &archive, "day").unwrap_err().contains("link inside"));
+        assert!(move_out(&paths, &day, &archive, "day", "old-conversations").unwrap_err().contains("link inside"));
         remove_link(&day.join("linked")).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
     }

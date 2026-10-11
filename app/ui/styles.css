@@ -1350,7 +1350,7 @@ button.row-name:hover {
 
 /* "Bring back" on a moved conversation */
 .item.moved {
-  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
 }
 
 .mini-btn.wide {
@@ -1362,6 +1362,16 @@ button.row-name:hover {
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+}
+
+.moved-acts {
+  display: flex;
+  gap: 6px;
+}
+
+.mini-btn.wide.sure {
+  background: var(--red);
+  color: #fff;
 }
 
 .mini-btn.wide:disabled {

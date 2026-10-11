@@ -13,6 +13,7 @@ pub mod config;
 pub mod containers;
 pub mod health;
 pub mod hooks;
+pub mod installed;
 pub mod kill;
 pub mod paths;
 pub mod ports;

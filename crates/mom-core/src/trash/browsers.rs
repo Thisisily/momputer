@@ -4,6 +4,11 @@
 //! cache2 for Firefox). Cookies, logins, history, bookmarks and passwords live elsewhere in the
 //! profile and are never read or deleted. A browser that's open keeps its cache: it holds the
 //! files open, and pulling them out from under it can upset it.
+//!
+//! Apps built on Electron (Cursor, VS Code, the Claude and Codex apps, Slack, Discord...) are
+//! browsers inside, with the same caches, plus one set per built-in browser tab (Partitions).
+//! The same rules apply: cache folders only, never Cookies, Local Storage or IndexedDB, and only
+//! while the app is closed.
 
 use super::{entries, name_of, tally_many, Cand, Found, Tally, TrashCtx, ENTRY_CAP};
 use std::path::{Path, PathBuf};
@@ -18,10 +23,40 @@ const CHROMIUM: &[(&str, &str, &[&str])] = &[
 
 const CACHE_DIRS: &[&str] = &["Cache", "Code Cache", "GPUCache"];
 
+/// The caches of an Electron app: the browser ones, and the graphics ones it rebuilds on start.
+const APP_CACHE_DIRS: &[&str] =
+    &["Cache", "Code Cache", "GPUCache", "DawnCache", "DawnWebGPUCache", "DawnGraphiteCache", "GrShaderCache", "ShaderCache"];
+
+/// Electron apps whose process isn't called after their folder: (folder, processes).
+const APP_EXES: &[(&str, &[&str])] = &[
+    ("Code", &["code.exe"]),
+    ("Code - Insiders", &["code - insiders.exe"]),
+    ("Claude", &["claude.exe"]),
+    ("Codex", &["codex.exe", "chatgpt.exe"]),
+    ("discord", &["discord.exe"]),
+    ("Microsoft Teams", &["teams.exe", "ms-teams.exe"]),
+    ("ai.opencode.desktop", &["opencode.exe", "opencode-desktop.exe"]),
+];
+
+/// Folders in %APPDATA% that aren't apps' own (or are handled elsewhere).
+const NOT_APPS: &[&str] = &["Opera Software", "Microsoft", "Mozilla", "npm", "npm-cache"];
+
+/// Wallet and password apps: their caches hold no keys, but mom leaves them be all the same.
+const HANDS_OFF: &[&str] = &[
+    "wallet", "coin", "ledger", "trezor", "keepkey", "atomic", "exodus", "electrum", "metamask", "binance", "kraken",
+    "bitcoin", "crypto", "guarda", "bitwarden", "keepass", "1password", "lastpass", "dashlane", "authy",
+];
+
+pub(super) fn hands_off(name: &str) -> bool {
+    let n: String = name.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
+    HANDS_OFF.iter().any(|w| n.contains(w))
+}
+
 /// One browser profile's cache, spread over one or more folders.
 struct Profile {
     browser: String,
-    exe: &'static str,
+    /// Its processes: while any runs, the cache stays.
+    exes: Vec<String>,
     label: String,
     home: PathBuf,
     targets: Vec<PathBuf>,
@@ -47,7 +82,7 @@ pub(super) fn find(ctx: &TrashCtx) -> Found {
         }
         let mut c = Cand::new(p.home.clone(), format!("{}, {}", p.browser, p.label), &t, ctx.now);
         c.targets = p.targets;
-        let c = if ctx.running(p.exe) {
+        let c = if p.exes.iter().any(|e| ctx.running(e)) {
             if !open.contains(&p.browser) {
                 open.push(p.browser.clone());
             }
@@ -109,7 +144,7 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
                 Some((_, shown)) if !shown.is_empty() && *shown != n => format!("{shown} ({n})"),
                 _ => default_label(&n),
             };
-            out.push(Profile { browser: browser.to_string(), exe, label, home: dir, targets });
+            out.push(Profile { browser: browser.to_string(), exes: vec![exe.to_string()], label, home: dir, targets });
         }
     }
     // Opera keeps its cache in Local and the rest of the profile in Roaming, and older versions
@@ -152,7 +187,7 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
         }
         for (profile, targets) in by_profile {
             let home = targets[0].parent().map(Path::to_path_buf).unwrap_or_default();
-            out.push(Profile { browser: browser.clone(), exe: "opera.exe", label: default_label(&profile), home, targets });
+            out.push(Profile { browser: browser.clone(), exes: vec!["opera.exe".into()], label: default_label(&profile), home, targets });
         }
     }
     let ff = local.join("Mozilla").join("Firefox").join("Profiles");
@@ -165,11 +200,49 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
         let shown = n.split_once('.').map(|(_, p)| p).unwrap_or(&n);
         out.push(Profile {
             browser: "Firefox".into(),
-            exe: "firefox.exe",
+            exes: vec!["firefox.exe".into()],
             label: format!("{shown} profile"),
             home: dir.clone(),
             targets: vec![cache],
         });
+    }
+    out.extend(apps(local, roaming));
+    out
+}
+
+/// Electron apps: any folder in %APPDATA% (or a Store app's copy of it) with a browser cache in
+/// it. One item per app, its built-in browser tabs' caches included.
+fn apps(local: &Path, roaming: &Path) -> Vec<Profile> {
+    let mut homes: Vec<PathBuf> = entries(roaming).into_iter().filter(|d| !NOT_APPS.contains(&name_of(d).as_str())).collect();
+    for pkg in entries(&local.join("Packages")) {
+        homes.extend(entries(&pkg.join("LocalCache").join("Roaming")));
+    }
+    let mut out = Vec::new();
+    for home in homes {
+        if !std::fs::symlink_metadata(&home).map(|m| m.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = name_of(&home);
+        if hands_off(&name) {
+            continue;
+        }
+        // Only Electron apps have these two side by side.
+        if !home.join("Code Cache").is_dir() && !home.join("Partitions").is_dir() {
+            continue;
+        }
+        let mut targets = existing(APP_CACHE_DIRS.iter().map(|c| home.join(c)));
+        for part in entries(&home.join("Partitions")) {
+            targets.extend(existing(APP_CACHE_DIRS.iter().map(|c| part.join(c))));
+        }
+        if targets.is_empty() {
+            continue;
+        }
+        let exes = match APP_EXES.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)) {
+            Some((_, e)) => e.iter().map(|x| x.to_string()).collect(),
+            None => vec![format!("{}.exe", name.to_ascii_lowercase())],
+        };
+        let label = if home.join("Partitions").is_dir() { "app and built-in browser" } else { "app" };
+        out.push(Profile { browser: name, exes, label: label.into(), home, targets });
     }
     out
 }
@@ -221,23 +294,46 @@ mod tests {
         write(&paths.appdata.join("Opera Software").join("Opera Stable").join("Default").join("GPUCache").join("g"), 70, 1);
         write(&paths.local_appdata.join("Opera Software").join("Opera Stable").join("Default").join("Cache").join("c"), 30, 1);
 
+        // Cursor: its caches and its built-in browser's, never cookies or storage.
+        let cursor = paths.appdata.join("Cursor");
+        write(&cursor.join("Code Cache").join("js").join("a"), 800, 1);
+        write(&cursor.join("Partitions").join("cursor-browser").join("Cache").join("Cache_Data").join("b"), 1200, 1);
+        write(&cursor.join("Partitions").join("cursor-browser").join("Cookies"), 10, 1);
+        write(&cursor.join("Local Storage").join("leveldb").join("c"), 10, 1);
+        // A wallet app's cache is left alone.
+        write(&paths.appdata.join("Ledger Live").join("Code Cache").join("e"), 600, 1);
+        // Slack is open, so its cache stays.
+        write(&paths.appdata.join("Slack").join("Code Cache").join("d"), 600, 1);
+
         let cfg = TrashConfig::default();
         let mut ctx = ctx(&paths, &cfg);
+        ctx.running_exes.insert("slack.exe".into());
         ctx.running_exes.insert("msedge.exe".into());
         ctx.running_exes.insert("msedgewebview2.exe".into()); // apps' web views aren't Edge
         let spot = measure("browser-cache", &ctx).unwrap();
-        let names: Vec<(&str, bool)> = spot.items.iter().map(|i| (i.name.as_str(), i.goes)).collect();
+        let mut names: Vec<(&str, bool)> = spot.items.iter().map(|i| (i.name.as_str(), i.goes)).collect();
+        names.sort();
         assert_eq!(
             names,
-            vec![("Chrome, Work (Profile 2)", true), ("Firefox, default-release profile", true), ("Opera, Default profile", true), ("Edge, Default profile", false)]
+            vec![
+                ("Chrome, Work (Profile 2)", true),
+                ("Cursor, app and built-in browser", true),
+                ("Edge, Default profile", false),
+                ("Firefox, default-release profile", true),
+                ("Opera, Default profile", true),
+                ("Slack, app", false),
+            ]
         );
-        assert_eq!(spot.items[3].reason, "Edge is open");
-        assert_eq!(spot.note.as_deref(), Some("Close Edge to clear its cache."));
-        assert!(spot.effect.contains("Edge is open, so its cache stays"), "{}", spot.effect);
-        assert_eq!((spot.reclaimable_bytes, spot.kept_bytes), (2900, 4000));
+        assert_eq!(spot.items.iter().find(|i| i.name.starts_with("Edge")).unwrap().reason, "Edge is open");
+        assert_eq!(spot.note.as_deref(), Some("Close Edge and Slack to clear their caches."));
+        assert_eq!((spot.reclaimable_bytes, spot.kept_bytes), (4900, 4600));
 
         let r = clean("browser-cache", &ctx, None);
-        assert_eq!((r.deleted, r.freed), (3, 2900));
+        assert_eq!((r.deleted, r.freed), (4, 4900));
+        assert!(!cursor.join("Code Cache").exists() && !cursor.join("Partitions").join("cursor-browser").join("Cache").exists());
+        assert!(cursor.join("Partitions").join("cursor-browser").join("Cookies").exists());
+        assert!(cursor.join("Local Storage").join("leveldb").join("c").exists());
+        assert!(paths.appdata.join("Slack").join("Code Cache").exists(), "Slack is open");
         assert!(!chrome.join("Profile 2").join("Code Cache").exists());
         assert!(chrome.join("Local State").exists());
         assert!(edge.join("Default").join("Cache").exists(), "Edge is open");
