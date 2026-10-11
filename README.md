@@ -55,12 +55,14 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
       <p>Everything that can go, and exactly what it is:</p>
       <ul>
         <li>Claude Code's scratch from finished sessions, named after what each session was doing</li>
-        <li>what Claude Code, Codex, OpenCode, OpenClaw, Hermes and Pi leave lying around: logs, temp files, undo snapshots, pasted text, caches, and old Cursor worktrees. All of it is kept for 67 days first, and nothing they need (chats, sessions, settings, memory) is ever touched</li>
+        <li>what agent tools leave lying around: logs, temp files, undo snapshots, pasted text, caches and old Cursor worktrees, from Claude Code and the Claude app, Codex and its app, OpenCode, OpenClaw, Hermes, Pi, Copilot, Gemini, Qwen, Goose, Cline, Roo, Kilo, Continue, Kimi, Vibe, Junie, Mux, Crush, Droid, Zed, Warp, Windsurf, Kiro, Aider and more. All of it is kept for 67 days first, and nothing they need (chats, sessions, settings, skills, memory) is ever touched</li>
+        <li>old builds, downloaded extension packages and crash reports VS Code and its forks keep, and the update installers apps leave behind</li>
         <li>old <code>node_modules</code> and <code>target</code> folders in projects you stopped working on</li>
         <li>npm, bun, pip, uv, cargo and other developer caches</li>
         <li>browser caches, crash dumps, old installers in Downloads, and the Recycle Bin</li>
       </ul>
       <p>Tap any of them and she lists every folder that goes, every one that stays and why, and tells you what the button does (deleted for good, Recycle Bin, or the tool's own prune) <b>before</b> you press it. Untick anything you want to keep, or tick something she'd keep just because it's new.</p>
+      <p><b>Old conversations</b> don't get deleted: mom moves them to another drive (an external one is fine) and leaves a link in each one's place, so Codex, Claude Code, Cursor and the rest still open them from where they were. Bring back puts any of them back.</p>
     </td>
   </tr>
   <tr>
@@ -173,6 +175,7 @@ Listing the machine costs a single `NtQuerySystemInformation` call. Only runtime
 
 - Stop Windows' own processes, an agent itself, or whoever asked her (the agent and shell running `mom`).
 - Stop a recycled PID: she re-checks every process's start time right before stopping it.
+- Move your conversations without asking. They only move when you press the button, a folder at a time: copied, checked file by file, linked, and only then removed from where they were. If anything goes wrong on the way, it's all put back.
 - Delete anything without showing you first. Every clean-up lists what goes and what stays, and nothing happens until you press its button and then press again to confirm. Anything in use can't be ticked at all.
   - Tidying moves things, and undo is one click.
   - Your own files, like old installers, go to the Recycle Bin.
@@ -209,6 +212,8 @@ stopOnSessionEnd = false
 
 [trash]
 agentScratchDays = 67         # what agents leave behind stays this long before mom suggests clearing it
+conversationsAfterDays = 67   # conversations nobody opened this long can move to another drive...
+archiveDir = 'F:\momputer-archive'  # ...here (pick it in the widget)
 tempMinAgeDays = 7            # other temp files
 ```
 
@@ -216,7 +221,7 @@ tempMinAgeDays = 7            # other temp files
 
 - **Teach mom a new agent:** add its markers to `mark_from_env` and its process to `agent_process` in [`crates/mom-core/src/agents.rs`](crates/mom-core/src/agents.rs).
 - **Teach mom a new runtime or naming trick:** [`classify.rs`](crates/mom-core/src/classify.rs) has tables and real-world test cases.
-- **Find more trash:** each clean-up is a spot in [`trash.rs`](crates/mom-core/src/trash.rs) with what it is, what cleaning does and the items it found. PC checkups live in [`health.rs`](crates/mom-core/src/health.rs).
+- **Find more trash:** each clean-up is a spot in [`trash.rs`](crates/mom-core/src/trash.rs) with what it is, what cleaning does and the items it found. Another agent tool's leftovers and conversations go in `agents()` in [`trash/harness.rs`](crates/mom-core/src/trash/harness.rs): where it lives, which folders hold leftovers, and which hold one conversation each. PC checkups live in [`health.rs`](crates/mom-core/src/health.rs).
 - **Give mom new lines:** [`voice.rs`](crates/mom-core/src/voice.rs).
 - **Work on the widget:** it's plain HTML, CSS and JS in [`app/ui`](app/ui), with no build step. Serve the folder (`python -m http.server -d app/ui`) and it runs in any browser with realistic mock data. Its libraries and fonts are pinned in `package.json` and copied into `app/ui/vendor` by `npm install && npm run vendor`. The copies are committed, so building the app never needs npm.
 - **Give mom a new face:** she's drawn in SVG in [`app/ui/mom.js`](app/ui/mom.js), with eyes, brows, mouths and extras combined per mood, and animated with GSAP. [`app/art/mom-reference.webp`](app/art/mom-reference.webp) is the reference sheet she's drawn from. `node scripts/icons.js` redraws the app and tray icons from the same SVG.

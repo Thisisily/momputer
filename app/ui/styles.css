@@ -1348,6 +1348,46 @@ button.row-name:hover {
   color: var(--ink);
 }
 
+/* "Bring back" on a moved conversation */
+.item.moved {
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+}
+
+.mini-btn.wide {
+  width: auto;
+  padding: 0 11px;
+  border-radius: 13px;
+  background: var(--card-2);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.mini-btn.wide:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Where old conversations go */
+.archive-where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 9px;
+  margin: 0 4px 12px;
+  font-size: 12.5px;
+}
+
+.archive-path {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.archive-where .link-btn {
+  margin-left: auto;
+}
+
 .more {
   margin: 0;
   padding: 9px 0;
@@ -1753,6 +1793,15 @@ button.row-name:hover {
 
 .toast[hidden] {
   display: none;
+}
+
+/* Never in the way: clicks go through it, and over a details sheet it sits above the buttons. */
+.toast {
+  pointer-events: none;
+}
+
+.sheet:not([hidden]) ~ .toast {
+  bottom: 78px;
 }
 
 /* ---------------------------------------------------------------- mom's moods (the rest is GSAP, in mom.js) */

@@ -218,59 +218,52 @@ const DEFS: &[Def] = &[
     },
     Def {
         id: "claude-leftovers",
-        label: "Claude Code leftovers",
-        detail: "Debug logs, shell snapshots, rewind backups and pasted text from old sessions.",
-        what: "What Claude Code keeps in your home folder besides your chats: debug logs, snapshots of your shell, \
-               backups of files it edited (so a session can be rewound), pasted text, half-written copies of its \
-               settings file and its folders in Temp.",
+        label: "Claude leftovers",
+        detail: "Debug logs, shell snapshots, rewind backups and pasted text from old sessions, and the Claude app's old logs.",
+        what: "What Claude Code keeps besides your chats: debug logs, snapshots of your shell, backups of files it \
+               edited (so a session can be rewound), pasted text, MCP server logs, half-written copies of its settings \
+               file and its folders in Temp. Also the Claude app's old logs, crash reports and older built-in versions.",
         group: "agents",
         action: "delete",
         safety: "safe",
         owner: Some(AgentKind::ClaudeCode),
     },
     Def {
-        id: "opencode-leftovers",
-        label: "OpenCode leftovers",
-        detail: "OpenCode's logs and the undo snapshots it keeps of old projects.",
-        what: "OpenCode's logs, and the snapshots it takes of a project as it works so changes can be undone. \
-               Snapshots can grow to many gigabytes.",
+        id: "agent-leftovers",
+        label: "Other agents' leftovers",
+        detail: "Logs, temp files, caches and snapshots other agent tools leave behind.",
+        what: "Logs, temp files, caches, undo snapshots and debug output from the other agent tools on this PC: \
+               OpenCode, OpenClaw, Hermes, Pi, Copilot, Gemini, Qwen, Goose, Cline, Roo, Kilo, Continue, Kimi, Vibe, \
+               Junie, Mux, Crush, Droid, Zed, Warp, Windsurf, Kiro, Aider and others. Only their leftover folders are \
+               looked in.",
         group: "agents",
         action: "delete",
         safety: "safe",
-        owner: Some(AgentKind::OpenCode),
+        owner: None,
     },
     Def {
-        id: "openclaw-leftovers",
-        label: "OpenClaw leftovers",
-        detail: "OpenClaw's logs, temp folders and old config backups.",
-        what: "OpenClaw's logs, the temp folders it makes for images, downloads and browser tools, old backups of its \
-               config, and empty folders from when it was called Clawdbot or Moltbot.",
-        group: "agents",
+        id: "app-leftovers",
+        label: "Old app builds and installers",
+        detail: "Old builds, downloaded extension packages, crash reports and update installers editors keep.",
+        what: "VS Code and the editors built on it (Cursor, Windsurf, Kiro, Trae, Qoder, Antigravity) keep a copy of \
+               every build they've run, every extension package they downloaded, crash reports and logs. Apps that \
+               update themselves keep the last installer they downloaded. None of it is used again.",
+        group: "dev",
         action: "delete",
         safety: "safe",
-        owner: Some(AgentKind::OpenClaw),
+        owner: None,
     },
     Def {
-        id: "hermes-leftovers",
-        label: "Hermes leftovers",
-        detail: "Hermes Agent's logs, cached media, pastes and rollback checkpoints.",
-        what: "Hermes Agent's logs, the images, audio and documents it cached from chats, browser screenshots, \
-               pasted text and the checkpoints it keeps so file changes can be rolled back.",
+        id: "old-conversations",
+        label: "Old conversations",
+        detail: "Chats you haven't opened in a while, moved to another drive with a link left in their place.",
+        what: "Your agents' past conversations: Codex's and Claude Code's chats, images Codex made, and other agents' \
+               sessions. They add up to gigabytes. Moving the old ones to another drive frees this one, and a link in \
+               each one's place means the agents still find them where they were.",
         group: "agents",
-        action: "delete",
+        action: "move",
         safety: "safe",
-        owner: Some(AgentKind::Hermes),
-    },
-    Def {
-        id: "pi-leftovers",
-        label: "Pi leftovers",
-        detail: "Long command output Pi saved to Temp, trial extension installs and its debug log.",
-        what: "When a command prints too much, Pi saves the whole output to a file in Temp and never deletes it. \
-               Also extensions it installed to try out, and its debug log.",
-        group: "agents",
-        action: "delete",
-        safety: "safe",
-        owner: Some(AgentKind::Pi),
+        owner: None,
     },
     Def {
         id: "cursor-worktrees",
@@ -549,7 +542,7 @@ fn def(id: &str) -> Option<&'static Def> {
 /// Spots `mom trash clean all` (and anything else that cleans without asking) may take:
 /// safe, and decided by mom rather than a tool.
 pub fn cleans_without_asking(id: &str) -> bool {
-    def(id).map(|d| d.safety == "safe" && d.action != "tool").unwrap_or(false)
+    def(id).map(|d| d.safety == "safe" && !matches!(d.action, "tool" | "move")).unwrap_or(false)
 }
 
 // ------------------------------------------------------------------ finding things
@@ -571,6 +564,11 @@ struct Cand {
     optional: bool,
     /// What sort of thing it is, plural ("logs"), for spots that hold several sorts.
     kind: Option<&'static str>,
+    /// Which tool left it, for spots that cover several.
+    tool: Option<&'static str>,
+    /// Links inside it (or it is one). Agent folders hold links to shared skills; a folder with
+    /// one is never treated as empty or as a leftover.
+    links: u64,
     reason: String,
     complete: bool,
     /// A Claude transcript to read the session's title from, and the project name to put in
@@ -591,6 +589,8 @@ impl Cand {
             goes: false,
             optional: false,
             kind: None,
+            tool: None,
+            links: t.links,
             reason: String::new(),
             complete: t.complete,
             title_from: None,
@@ -733,55 +733,8 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
     let la = &ctx.paths.local_appdata;
     match id {
         "claude-temp" => claude::find(ctx, agent_age),
-        "claude-leftovers" | "opencode-leftovers" | "openclaw-leftovers" | "hermes-leftovers" | "pi-leftovers"
-        | "cursor-worktrees" => harness::find(id, ctx, agent_age),
-        "codex-temp" => {
-            let codex = ctx.paths.codex_dir();
-            let mut f = Found::at(codex.clone());
-            f.available = codex.is_dir();
-            let mut list: Vec<(PathBuf, String)> = Vec::new();
-            let mut min_ages: Vec<u64> = Vec::new();
-            let mut consider = |p: PathBuf, name: String, min_age: u64| {
-                list.push((p, name));
-                min_ages.push(min_age);
-            };
-            for p in entries(&ctx.paths.temp) {
-                let n = name_of(&p).to_ascii_lowercase();
-                if n.starts_with("codex-index-") {
-                    consider(p, "Codex search index".into(), agent_age);
-                } else if n.starts_with("codex-clipboard-") {
-                    consider(p, "Codex clipboard image".into(), agent_age);
-                }
-            }
-            for dir in [".tmp", "tmp"] {
-                for p in entries(&codex.join(dir)) {
-                    let n = format!("Codex temp: {}", name_of(&p));
-                    consider(p, n, agent_age);
-                }
-            }
-            for p in entries(&codex.join("log")) {
-                let n = format!("Codex log {}", name_of(&p));
-                consider(p, n, agent_age);
-            }
-            for p in entries(&codex) {
-                let n = name_of(&p);
-                if p.is_file() && n.contains(".tmp-") {
-                    let base = n.split(".tmp-").next().unwrap_or("").trim_start_matches('.');
-                    consider(p, format!("Half-written copy of {base}"), agent_age);
-                }
-            }
-            for p in entries(&codex.join(".sandbox")) {
-                let n = name_of(&p);
-                if n.starts_with("sandbox.") && n.ends_with(".log") {
-                    consider(p, format!("Sandbox log {n}"), agent_age);
-                }
-            }
-            for (c, min_age) in cands(list, ctx.now).into_iter().zip(min_ages) {
-                f.cands.push(judge(c, ctx, min_age));
-            }
-            f.available = f.available || !f.cands.is_empty();
-            f
-        }
+        "codex-temp" | "claude-leftovers" | "agent-leftovers" | "app-leftovers" | "cursor-worktrees" => harness::find(id, ctx, agent_age),
+        "old-conversations" => harness::conversations(ctx, ctx.cfg.conversations_after_days * 86_400),
         "render-temp" => {
             let mut f = Found::at(ctx.paths.temp.clone());
             let mut list = Vec::new();
@@ -798,6 +751,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
         "old-temp" => {
             let min = ctx.cfg.temp_min_age_days * 86_400;
             let mut f = Found::at(ctx.paths.temp.clone());
+            let owners = harness::temp_owners(ctx);
             let list: Vec<(PathBuf, String)> = entries(&ctx.paths.temp)
                 .into_iter()
                 .map(|p| {
@@ -805,9 +759,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                     (p, n)
                 })
                 // these are counted by their own spots
-                .filter(|(_, n)| {
-                    !n.eq_ignore_ascii_case("claude") && !is_codex_temp(n) && !is_render_leftover(n) && !harness::owns_temp(n)
-                })
+                .filter(|(_, n)| !n.eq_ignore_ascii_case("claude") && !is_codex_temp(n) && !is_render_leftover(n) && !owners.owns(n))
                 .collect();
             f.cands = cands(list, ctx.now).into_iter().map(|c| judge(c, ctx, min)).collect();
             f
@@ -1255,10 +1207,10 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
         ),
         "codex-temp" if n == 0 => nothing(&format!("everything Codex left is either in use or from the last {kept}.")),
         "codex-temp" => format!(
-            "Deletes {} that Codex left behind and nobody has touched in {kept}, {forever}: old search indexes, pasted \
-             clipboard images, temp folders, half-written state files and sandbox logs. Codex's threads, settings and \
-             memories aren't touched; anything newer stays.",
-            count_size(n, "temp file", "temp files and folders", bytes)
+            "Deletes {} that Codex left behind and nobody has touched in {kept}, {forever}: {}. Codex's threads, \
+             settings and memories aren't touched; anything newer stays.",
+            count_size(n, "temp file", "temp files and folders", bytes),
+            harness::kinds(goes)
         ),
         "render-temp" if n == 0 => nothing(&format!("no render folders older than {render_age}.")),
         "render-temp" => format!(
@@ -1266,6 +1218,21 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
              finished videos aren't touched. Anything used in the last {render_age} stays.",
             count_size(n, "render folder", "render folders", bytes)
         ),
+        "old-conversations" => {
+            let days = human_age_long(ctx.cfg.conversations_after_days * 86_400);
+            let place = ctx.cfg.archive_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_else(|| "a drive you choose".into());
+            if n == 0 {
+                nothing(&format!("every conversation was opened in the last {days}, or has been moved already."))
+            } else {
+                let tools = harness::tools(goes);
+                format!(
+                    "Moves {} of {tools} conversations nobody has opened in {days} to {place}, and leaves a link in each \
+                     one's place, so they still open from where they were. Nothing is deleted, and Bring back puts any of \
+                     them back here. While that drive is unplugged, those conversations can't be opened.",
+                    count_size(n, "folder", "folders", bytes)
+                )
+            }
+        }
         "cursor-worktrees" if n == 0 => nothing(&format!("every worktree is in use or was worked in during the last {kept}.")),
         "cursor-worktrees" => format!(
             "Moves {} that Cursor's agents made, and nobody has touched in {kept}, to the Recycle Bin. Changes in them \
@@ -1273,16 +1240,17 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
              projects aren't touched (Git keeps a note of each worktree until you run `git worktree prune`).",
             count_size(n, "worktree", "worktrees", bytes)
         ),
-        _ if harness::about(id).is_some() => {
-            let (tool, untouched) = harness::about(id).unwrap_or_default();
+        "claude-leftovers" | "agent-leftovers" | "app-leftovers" => {
             if n == 0 {
-                nothing(&format!("everything {tool} left is in use or from the last {kept}."))
+                nothing(&format!("everything they left is in use or from the last {kept}."))
             } else {
                 format!(
-                    "Deletes {} {tool} left behind and nobody has touched in {kept}, {forever}: {}. {untouched} \
+                    "Deletes {} that {} left behind and nobody has touched in {kept}, {forever}: {}. {} \
                      Anything newer, or in use, stays.",
                     count_size(n, "item", "items", bytes),
-                    harness::kinds(goes)
+                    harness::tools(goes),
+                    harness::kinds(goes),
+                    harness::untouched(id)
                 )
             }
         }
@@ -1484,6 +1452,9 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         let taken: HashSet<String> = chosen.iter().map(|c| norm_path(&c.path.to_string_lossy())).collect();
         r.skipped += p.ticked.iter().filter(|t| !taken.contains(&norm_path(t))).count() as u64;
     }
+    if def.action == "move" {
+        return move_chosen(&chosen, ctx, r);
+    }
     let gone: Vec<bool> = if def.action == "recycle" {
         chosen.iter().map(|c| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok())).collect()
     } else {
@@ -1540,6 +1511,41 @@ fn choose<'f>(f: &'f Found, pick: Option<&Pick>) -> Vec<&'f Cand> {
             }
         })
         .collect()
+}
+
+/// Moves each folder to the archive, leaving a link behind. One that can't move stays put.
+fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport) -> CleanReport {
+    let Some(root) = ctx.cfg.archive_dir.clone() else {
+        r.message = "Choose where to keep them first.".into();
+        return r;
+    };
+    let mut why = None;
+    for c in chosen {
+        match crate::archive::move_out(ctx.paths, &c.path, &root, &c.name) {
+            Ok(m) => {
+                r.freed += m.bytes;
+                r.deleted += 1;
+            }
+            Err(e) => {
+                r.skipped += 1;
+                why.get_or_insert(e);
+            }
+        }
+    }
+    r.message = if r.deleted == 0 {
+        why.clone().unwrap_or_else(|| "Nothing to move.".into())
+    } else {
+        format!(
+            "Moved {} ({}) to {}. They still open from where they were.",
+            plural(r.deleted, "folder"),
+            human_bytes(r.freed),
+            root.display()
+        )
+    };
+    if r.deleted > 0 && r.skipped > 0 {
+        r.message.push_str(&format!(" {} stayed: {}", plural(r.skipped, "folder"), why.unwrap_or_default()));
+    }
+    r
 }
 
 fn cleaned_message(def: &Def, r: &CleanReport) -> String {
@@ -1656,6 +1662,18 @@ mod tests {
             docker_running: false,
             now: now_secs(),
         }
+    }
+
+    /// A link to a folder, the way the skills CLI makes them in agent folders.
+    pub(super) fn link(link: &Path, target: &Path) {
+        #[cfg(windows)]
+        junction::create(target, link).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    pub(super) fn unlink(link: &Path) {
+        let _ = std::fs::remove_dir(link).or_else(|_| std::fs::remove_file(link));
     }
 
     pub(super) fn fixture(name: &str) -> PathBuf {

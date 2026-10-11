@@ -21,6 +21,7 @@ regex = "1"
 dirs = "7"
 walkdir = "2"
 trash = "5"
+junction = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }

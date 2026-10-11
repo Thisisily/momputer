@@ -195,6 +195,20 @@
       ],
     }),
     spot({
+      id: "old-conversations", label: "Old conversations", group: "agents", action: "move", safety: "safe", path: null,
+      what: "Your agents' past conversations: Codex's and Claude Code's chats, images Codex made, and other agents' sessions. They add up to gigabytes. Moving the old ones to another drive frees this one, and a link in each one's place means the agents still find them where they were.",
+      effect: "Moves 4 folders (3.1 GB) of Codex and Claude Code conversations nobody has opened in 67 days to a drive you choose, and leaves a link in each one's place, so they still open from where they were. Nothing is deleted, and Bring back puts any of them back here. While that drive is unplugged, those conversations can't be opened.",
+      totalBytes: 4.4 * GB, reclaimableBytes: 3.1 * GB, reclaimableItems: 4, keptItems: 2,
+      items: [
+        item("Codex · July 2026", "2,140 files, mostly logs", 2.1 * GB, true, "Not opened for 72 days", 72 * D2, 2140),
+        item("Codex · June 2026", "610 files, mostly logs", 700 * MB, true, "Not opened for 103 days", 103 * D2, 610),
+        item("Claude Code · storefront · Fix the checkout page on mobile", "48 files, mostly code", 200 * MB, true, "Not opened for 80 days", 80 * D2, 48),
+        item("Codex · 2 August 2026", "120 files, mostly logs", 100 * MB, true, "Not opened for 70 days", 70 * D2, 120),
+        recent(item("Codex · 20 September 2026", "300 files, mostly logs", 1.1 * GB, false, "Opened 21 days ago (kept here for 67 days)", 21 * D2, 300)),
+        item("Codex · 11 October 2026", "40 files, mostly logs", 200 * MB, false, "Opened 2 hours ago", 7200, 40),
+      ],
+    }),
+    spot({
       id: "old-temp", label: "Old temp files", group: "windows", action: "delete", safety: "safe", path: "C:\\Users\\me\\AppData\\Local\\Temp",
       what: "Files programs and installers left in your Temp folder and never cleaned up.",
       effect: "Deletes 4,634 items (all empty) from your Temp folder that nobody has touched in 7 days, permanently (they don't go to the Recycle Bin). Anything newer, or in use by a running program, stays. Programs make new temp files when they need them.",
@@ -242,6 +256,16 @@
       ],
     }),
   ];
+
+  // Where old conversations go (none chosen yet) and one that was moved before.
+  const archive = {
+    dir: null,
+    free: null,
+    reachable: false,
+    moved: [
+      { from: "C:\\Users\\me\\.codex\\sessions\\2026\\05", to: "F:\\momputer-archive\\C\\Users\\me\\.codex\\sessions\\2026\\05", archive: "F:\\momputer-archive", name: "Codex · May 2026", bytes: 900 * MB, files: 980, movedAt: now - 9 * D2, linked: true, reachable: true },
+    ],
+  };
 
   const health = {
     drives: [
@@ -308,7 +332,7 @@
       leftovers: { forgottenAfterHours: 12, includeUnknownOrphans: true, autoStop: false, autoStopAfterMinutes: 20, autoStopOrphans: false },
       hooks: { enabled: true, nagProcesses: true, nagClutter: true, shareRules: true, stopOnSessionEnd: false, minAgeSecs: 5 },
       tidy: { reportsFolder: "Documents", minFamily: 3, screenshotPile: 10 },
-      trash: { tempMinAgeDays: 7, agentScratchDays: 67 },
+      trash: { tempMinAgeDays: 7, agentScratchDays: 67, archiveDir: null, conversationsAfterDays: 67 },
       ui: { alwaysOnTop: false, notifications: true, notifyLeftovers: true, notifyMeltdown: true, notifyCleanups: true, notifyAfterMinutes: 10, notifyEveryMinutes: 30, scanIntervalSecs: 3, cpuAlertPercent: 25 },
       protect: [],
       kept: [],
@@ -389,8 +413,30 @@
       s.newBytes = sum(s.items.filter((i) => !i.goes && i.optional));
       emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
       const size = `${(freed / 1024 / MB).toFixed(1)} GB`;
-      const message = s.action === "recycle" ? `Moved ${goes.length} files (${size}) to the Recycle Bin. Changed your mind? It's all in there.` : `Took out ${size} of trash.`;
+      if (s.action === "move") {
+        for (const i of goes) archive.moved.push({ from: i.path, to: `${archive.dir}\${i.name}`, archive: archive.dir, name: i.name, bytes: i.bytes, files: i.files, movedAt: Date.now() / 1000, linked: true, reachable: true });
+      }
+      const message =
+        s.action === "recycle"
+          ? `Moved ${goes.length} files (${size}) to the Recycle Bin. Changed your mind? It's all in there.`
+          : s.action === "move"
+            ? `Moved ${goes.length} folders (${size}) to ${archive.dir}. They still open from where they were.`
+            : `Took out ${size} of trash.`;
       return { id, freed, deleted: goes.length, skipped: 0, message };
+    },
+    archive_info: async () => (await wait(80), JSON.parse(JSON.stringify(archive))),
+    choose_archive_dir: async () => {
+      await wait(200);
+      archive.dir = "F:\\momputer-archive";
+      archive.reachable = true;
+      archive.free = 398 * GB;
+      return JSON.parse(JSON.stringify(archive));
+    },
+    bring_back: async ({ from }) => {
+      await wait(900);
+      const m = archive.moved.find((x) => x.from === from);
+      archive.moved = archive.moved.filter((x) => x.from !== from);
+      return `${m.name} is back where it was.`;
     },
     get_health: async () => (await wait(150), JSON.parse(JSON.stringify(health))),
     room_paths: () => [room.path],

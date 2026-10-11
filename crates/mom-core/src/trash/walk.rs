@@ -72,13 +72,16 @@ pub(super) struct Tally {
     pub newest: u64,
     /// False when mom stopped counting (too many files to count quickly).
     pub complete: bool,
+    /// Links and junctions in it (or it is one). Never followed, so what they point at isn't
+    /// counted, and a folder holding one isn't really empty.
+    pub links: u64,
     /// Bytes per entry of KINDS.
     kinds: [u64; KINDS.len()],
 }
 
 impl Default for Tally {
     fn default() -> Self {
-        Tally { bytes: 0, files: 0, newest: 0, complete: true, kinds: [0; KINDS.len()] }
+        Tally { bytes: 0, files: 0, newest: 0, complete: true, links: 0, kinds: [0; KINDS.len()] }
     }
 }
 
@@ -101,6 +104,7 @@ impl Tally {
         self.files += other.files;
         self.newest = self.newest.max(other.newest);
         self.complete &= other.complete;
+        self.links += other.links;
         for (k, v) in self.kinds.iter_mut().zip(other.kinds) {
             *k += v;
         }
@@ -145,7 +149,11 @@ pub(super) fn tally_many(paths: &[PathBuf], cap: u64, budget: u64) -> Vec<Tally>
             match std::fs::symlink_metadata(dir) {
                 Ok(m) if m.is_file() => return mine.entry(i).or_default().add_file(dir, &m),
                 Ok(m) if m.is_dir() => own_mtime[i].store(mtime_secs(&m), Ordering::Relaxed),
-                _ => return, // gone, or a link (never followed)
+                Ok(m) if m.is_symlink() => {
+                    mine.entry(i).or_default().links += 1;
+                    return; // a link: never followed
+                }
+                _ => return, // gone
             }
         }
         let Ok(rd) = std::fs::read_dir(dir) else { return };
@@ -160,6 +168,8 @@ pub(super) fn tally_many(paths: &[PathBuf], cap: u64, budget: u64) -> Vec<Tally>
                 if let Ok(m) = e.metadata() {
                     t.add_file(Path::new(&e.file_name()), &m);
                 }
+            } else if ft.is_symlink() {
+                t.links += 1;
             }
         }
         // Counted per folder, not per file: two dozen threads bumping one counter slow each other down.

@@ -6,6 +6,7 @@
 //! grades messy folders, and teaches agents the house rules.
 
 pub mod agents;
+pub mod archive;
 pub mod classify;
 pub mod codex;
 pub mod config;

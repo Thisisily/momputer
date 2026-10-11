@@ -104,10 +104,14 @@ impl Default for TidyConfig {
 pub struct TrashConfig {
     /// Items in %TEMP% older than this many days are fair game.
     pub temp_min_age_days: u64,
-    /// What agents leave behind (scratch, logs, snapshots, worktrees from Claude Code, Codex,
-    /// OpenCode, OpenClaw, Hermes, Pi and Cursor) is kept this many days before mom suggests
-    /// clearing it. Anything in use is always kept.
+    /// What agents leave behind (scratch, logs, snapshots, worktrees) is kept this many days
+    /// before mom suggests clearing it. Anything in use is always kept.
     pub agent_scratch_days: u64,
+    /// Where old conversations are moved to (a folder on another drive). Unset until the user
+    /// picks one.
+    pub archive_dir: Option<PathBuf>,
+    /// Conversations nobody has opened in this many days are suggested for moving.
+    pub conversations_after_days: u64,
 }
 
 impl Default for TrashConfig {
@@ -115,6 +119,8 @@ impl Default for TrashConfig {
         TrashConfig {
             temp_min_age_days: 7,
             agent_scratch_days: 67,
+            archive_dir: None,
+            conversations_after_days: 67,
         }
     }
 }

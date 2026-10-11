@@ -484,18 +484,23 @@ async fn stop_wsl(name: Option<String>, s: State<'_, S>) -> Res<()> {
 struct TrashState {
     spots: Vec<trash::Spot>,
     busy: bool,
+    /// Every clean-up mom has is in `spots` (a saved measurement from an older version isn't).
+    complete: bool,
+}
+
+fn trash_state(s: &Shared) -> TrashState {
+    let spots = s.trash.lk().clone();
+    let complete = trash::spot_ids().iter().all(|id| spots.iter().any(|x| x.id == *id));
+    TrashState { spots, busy: s.trash_busy.load(Ordering::Relaxed), complete }
 }
 
 #[tauri::command(async)]
 fn get_trash(s: State<'_, S>) -> TrashState {
-    TrashState { spots: s.trash.lk().clone(), busy: s.trash_busy.load(Ordering::Relaxed) }
+    trash_state(&s)
 }
 
 fn emit_trash(app: &AppHandle, s: &Shared) {
-    let _ = app.emit(
-        "trash",
-        TrashState { spots: s.trash.lk().clone(), busy: s.trash_busy.load(Ordering::Relaxed) },
-    );
+    let _ = app.emit("trash", trash_state(s));
 }
 
 fn measure_trash_now(app: AppHandle, s: S, only: Option<String>) {
@@ -549,6 +554,67 @@ async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: S
     .map_err(err)?;
     measure_trash_now(app, s2, Some(report.id.clone()));
     Ok(report)
+}
+
+/// Where old conversations go, how much room is left there, and what's been moved.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArchiveInfo {
+    dir: Option<String>,
+    free: Option<u64>,
+    reachable: bool,
+    moved: Vec<mom_core::archive::MovedNow>,
+}
+
+fn archive_info_of(s: &Shared) -> ArchiveInfo {
+    let dir = s.cfg().trash.archive_dir;
+    ArchiveInfo {
+        free: dir.as_deref().and_then(mom_core::archive::free_space),
+        reachable: dir.as_deref().is_some_and(|d| d.is_dir()),
+        dir: dir.map(|d| d.to_string_lossy().to_string()),
+        moved: mom_core::archive::status(&s.paths),
+    }
+}
+
+#[tauri::command(async)]
+fn archive_info(s: State<'_, S>) -> ArchiveInfo {
+    archive_info_of(&s)
+}
+
+/// Picks the folder old conversations go to. A whole drive gets a momputer-archive folder.
+#[tauri::command]
+async fn choose_archive_dir(app: AppHandle, s: State<'_, S>) -> Res<Option<ArchiveInfo>> {
+    let Some(picked) = app.dialog().file().set_title("Where should mom keep old conversations?").blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let mut dir = picked.into_path().map_err(err)?;
+    if dir.parent().is_none() {
+        dir = dir.join("momputer-archive");
+    }
+    if mom_core::archive::same_drive(&dir, &s.paths.home) {
+        return Err("That's the drive your conversations are on already, so moving them there frees nothing. Pick another one, like an external drive.".into());
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't make {}: {e}", dir.display()))?;
+    {
+        let mut cfg = s.config.lk();
+        cfg.trash.archive_dir = Some(dir);
+        cfg.save(&s.paths).map_err(err)?;
+    }
+    measure_trash_now(app, s.inner().clone(), Some("old-conversations".into()));
+    Ok(Some(archive_info_of(&s)))
+}
+
+/// Puts a moved conversation folder back where it was.
+#[tauri::command]
+async fn bring_back(from: String, app: AppHandle, s: State<'_, S>) -> Res<String> {
+    let s = s.inner().clone();
+    let s2 = s.clone();
+    let m = tauri::async_runtime::spawn_blocking(move || mom_core::archive::bring_back(&s.paths, std::path::Path::new(&from)))
+        .await
+        .map_err(err)??;
+    s2.note(format!("Brought {} back from the archive.", m.name));
+    measure_trash_now(app, s2, Some("old-conversations".into()));
+    Ok(format!("{} is back where it was ({}).", m.name, human_bytes(m.bytes)))
 }
 
 /// Disks, memory, uptime, startup apps and the checkups built from them.
@@ -849,6 +915,9 @@ fn main() {
             get_trash,
             measure_trash,
             clean_trash,
+            archive_info,
+            choose_archive_dir,
+            bring_back,
             get_health,
             get_rooms,
             room_paths,

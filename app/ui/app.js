@@ -29,6 +29,8 @@
     picks: {}, // clean-up id -> what's ticked in its lists (see pickOf)
     cleanConfirm: null,
     cleaning: null,
+    archive: null, // where old conversations go, and what's been moved there
+    bringing: null, // the moved folder being brought back
     showAllStartup: false,
     roomPaths: [],
     rooms: {},
@@ -669,7 +671,20 @@
     recycle: "Goes to the Recycle Bin",
     tool: "Cleaned by its own tool",
     "empty-bin": "Emptied for good",
+    move: "Moved, with a link left behind",
   };
+
+  /** "F:" for "F:\momputer-archive". */
+  const driveOf = (dir) => (dir && /^[a-z]:/i.test(dir) ? dir.slice(0, 2).toUpperCase() : "the other drive");
+
+  async function loadArchive() {
+    try {
+      state.archive = await invoke("archive_info");
+    } catch {
+      state.archive = null;
+    }
+    renderSheet();
+  }
 
   // What's ticked in a clean-up's two lists. Goes starts all ticked and Stays all unticked, and
   // "Tick all" / "Untick all" flip a whole list, so they also cover the smaller items that
@@ -729,10 +744,12 @@
   }
 
   function cleanLabel(s, p, confirming) {
-    if (state.cleaning === s.id) return s.action === "recycle" ? "Moving to the Recycle Bin…" : "Cleaning…";
+    const drive = driveOf(state.archive && state.archive.dir);
+    if (state.cleaning === s.id) return s.action === "recycle" ? "Moving to the Recycle Bin…" : s.action === "move" ? `Moving to ${drive}…` : "Cleaning…";
     if (s.action !== "tool" && p.count === 0) return (s.items || []).some(tickable) ? "Nothing ticked" : "Nothing to clear";
     if (confirming) {
       if (s.action === "recycle") return `Sure? Press again to move ${plural(p.count, "file")}`;
+      if (s.action === "move") return `Sure? Press again to move ${plural(p.count, "folder")}`;
       return s.action === "tool" ? "Sure? Press again to run it" : "Sure? This can't be undone";
     }
     switch (s.action) {
@@ -742,6 +759,8 @@
         return s.exact && s.reclaimableBytes ? `Clean up ${bytes(s.reclaimableBytes)}` : "Clean up";
       case "empty-bin":
         return `Empty the Recycle Bin (${bytes(p.bytesChosen)})`;
+      case "move":
+        return `Move ${plural(p.count, "folder")} to ${drive}`;
       default:
         return p.bytesChosen ? `Delete ${bytes(p.bytesChosen)}` : `Delete ${plural(p.count, "empty item")}`;
     }
@@ -790,9 +809,10 @@
     // Empty folders are 0 bytes but still worth clearing, so this goes by count, not size.
     const disabled = cleaning || (s.action !== "tool" && p.count === 0);
     const danger = s.action === "delete" || s.action === "empty-bin";
+    const moves = s.action === "move";
     return `<div class="sheet-head">
         <div><h2 id="sheet-title">${esc(s.label)}</h2>
-          <div class="pills"><span class="pill"><span class="led ${s.safety === "review" ? "red" : "green"}"></span>${s.safety === "review" ? "Look before you clear" : "Safe to clear"}</span>
+          <div class="pills"><span class="pill"><span class="led ${s.safety === "review" ? "red" : "green"}"></span>${s.safety === "review" ? "Look before you clear" : s.action === "move" ? "Nothing is deleted" : "Safe to clear"}</span>
           <span class="pill">${ACTION_WORD[s.action] || "Deleted"}</span></div></div>
         <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button>
       </div>
@@ -800,14 +820,15 @@
       ${
         s.exact
           ? `<div class="split"><div class="split-bar"><span class="go" style="flex:${go || 0.0001}"></span><span class="stay" style="flex:${kept || 0.0001}"></span></div>
-        <div class="split-legend num"><span><span class="led red"></span><strong>${bytes(go)}</strong> can go</span><span><span class="led green"></span>${bytes(kept)} stays</span><span class="dim">${bytes(s.totalBytes)} in all</span></div></div>`
+        <div class="split-legend num"><span><span class="led red"></span><strong>${bytes(go)}</strong> ${moves ? "can move" : "can go"}</span><span><span class="led green"></span>${bytes(kept)} ${moves ? "stays here" : "stays"}</span><span class="dim">${bytes(s.totalBytes)} in all</span></div></div>`
           : `<div class="split-legend num"><span>${bytes(s.totalBytes)} in all. The tool works out what's safe to drop.</span></div>`
       }
       <div class="callout"><h3>What the button does</h3><p>${esc(effectNow(s, p))}</p></div>
+      ${s.action === "move" ? archiveBox() : ""}
       ${s.note ? `<p class="sheet-note"><span class="led red"></span>${esc(s.note)}</p>` : ""}
       ${
         p.goes.length
-          ? `<h3 class="list-head">Goes <span class="dim num">${plural(s.reclaimableItems || p.goes.length, "item")}</span>${allButton("goes", p.goes, pk.goes)}</h3>
+          ? `<h3 class="list-head">${moves ? "Moves" : "Goes"} <span class="dim num">${plural(s.reclaimableItems || p.goes.length, "item")}</span>${allButton("goes", p.goes, pk.goes)}</h3>
         <div class="items">${p.goes.map((i) => itemRow(s, i, picking)).join("")}${
           unlisted
             ? `<p class="more">…and ${plural(unlisted, p.goes[p.goes.length - 1].bytes ? "smaller item" : "more", p.goes[p.goes.length - 1].bytes ? "smaller items" : "more")}${
@@ -819,7 +840,7 @@
       }
       ${
         stays.length
-          ? `<h3 class="list-head">Stays <span class="dim num">${plural(s.keptItems || stays.length, "item")}</span>${allButton("new", p.fresh, pk.new)}</h3>
+          ? `<h3 class="list-head">${moves ? "Stays here" : "Stays"} <span class="dim num">${plural(s.keptItems || stays.length, "item")}</span>${allButton("new", p.fresh, pk.new)}</h3>
         ${picking && p.fresh.length ? `<p class="list-hint">${hint}</p>` : ""}
         <div class="items">${stays.map((i) => itemRow(s, i, picking)).join("")}${
           keptUnlisted
@@ -840,10 +861,41 @@
               ? `<button class="link-btn" data-act="reveal-path" data-path="${esc(s.path)}" title="Show in File Explorer">${ICON.folder}Show folder</button>`
               : "<span></span>"
         }
-        <button class="primary${cleaning ? " busy" : confirming ? (danger ? " danger" : " armed") : ""}" id="clean-btn" data-act="clean-spot" data-spot="${esc(s.id)}" ${disabled ? "disabled" : ""}>${
-          cleaning ? '<span class="led green blink"></span>' : confirming ? '<span class="led red blink"></span>' : danger ? '<span class="led red"></span>' : ""
-        }${esc(cleanLabel(s, p, confirming))}</button>
+        ${
+          s.action === "move" && !(state.archive && state.archive.dir)
+            ? `<button class="primary" data-act="choose-archive">Choose a drive</button>`
+            : `<button class="primary${cleaning ? " busy" : confirming ? (danger ? " danger" : " armed") : ""}" id="clean-btn" data-act="clean-spot" data-spot="${esc(s.id)}" ${disabled ? "disabled" : ""}>${
+                cleaning ? '<span class="led green blink"></span>' : confirming ? '<span class="led red blink"></span>' : danger ? '<span class="led red"></span>' : ""
+              }${esc(cleanLabel(s, p, confirming))}</button>`
+        }
       </div>`;
+  }
+
+  /** Where moved conversations go, and what's already there (with a way back for each). */
+  function archiveBox() {
+    const a = state.archive;
+    if (!a) return "";
+    const where = a.dir
+      ? `<div class="archive-where"><span class="led ${a.reachable ? "green" : "red"}"></span><span class="archive-path">${esc(a.dir)}</span>
+          <span class="dim num">${a.reachable ? (a.free != null ? `${bytes(a.free)} free` : "") : "not connected"}</span>
+          <button class="link-btn" data-act="choose-archive">Change</button></div>`
+      : `<p class="list-hint">Pick a folder on another drive (an external one is fine). Mom makes a momputer-archive folder there.</p>`;
+    const moved = a.moved || [];
+    if (!moved.length) return where;
+    const rows = moved
+      .slice()
+      .sort((x, y) => y.movedAt - x.movedAt)
+      .map((m) => {
+        const busy = state.bringing === m.from;
+        const why = !m.reachable ? `${driveOf(a.dir)} isn't connected, so this can't be opened right now` : !m.linked ? "Its link is gone (the app may have removed it)" : `moved ${ageLong(Math.max(0, Date.now() / 1000 - m.movedAt))} ago`;
+        return `<div class="item stays moved" id="mv-${hash(m.from)}"><span class="led ${m.reachable && m.linked ? "green" : "red"}"></span>
+          <span class="item-main"><span class="item-name">${esc(m.name)}</span><span class="item-sub">${esc(why)}</span></span>
+          <span class="item-size num">${bytes(m.bytes)}</span>
+          <button class="mini-btn wide" data-act="bring-back" data-from="${esc(m.from)}" ${busy || !m.reachable || state.bringing ? "disabled" : ""}>${busy ? "Bringing…" : "Bring back"}</button></div>`;
+      })
+      .join("");
+    const total = moved.reduce((t, m) => t + m.bytes, 0);
+    return `${where}<h3 class="list-head">Moved already <span class="dim num">${plural(moved.length, "folder")}, ${bytes(total)}</span></h3><div class="items">${rows}</div>`;
   }
 
   // ------------------------------------------------------------ rooms
@@ -1085,7 +1137,7 @@
           row(
             "keep",
             "How long things stay",
-            `What agents leave behind (scratch, logs, snapshots, worktrees) stays ${num("agentScratchDays", c.trash.agentScratchDays, 1, 365)} days before mom suggests clearing it, other temp files ${num("tempMinAgeDays", c.trash.tempMinAgeDays, 1, 90)} days.`
+            `What agents leave behind (scratch, logs, snapshots, worktrees) stays ${num("agentScratchDays", c.trash.agentScratchDays, 1, 365)} days before mom suggests clearing it, other temp files ${num("tempMinAgeDays", c.trash.tempMinAgeDays, 1, 90)} days. Conversations nobody has opened in ${num("conversationsAfterDays", c.trash.conversationsAfterDays, 1, 3650)} days can move to another drive.`
           )
       )}
       ${section(
@@ -1133,6 +1185,7 @@
 
   async function openSheet(sheet) {
     if (sheet.kind === "settings") state.settings = await invoke("get_settings");
+    if (sheet.kind === "spot" && sheet.id === "old-conversations") loadArchive();
     const wasOpen = !!state.sheet;
     state.sheet = sheet;
     state.cleanConfirm = null;
@@ -1257,7 +1310,7 @@
     if (tab === "upkeep") {
       // Show the last measurement straight away; look again only if there isn't one, or it's from
       // more than half a day ago (the old numbers stay up while she looks).
-      if (!state.trash.busy && (!state.trash.spots.length || measuredAgo() > 12 * 3600)) invoke("measure_trash");
+      if (!state.trash.busy && (!state.trash.spots.length || state.trash.complete === false || measuredAgo() > 12 * 3600)) invoke("measure_trash");
       loadHealth();
     }
     if (tab === "rooms") loadRooms();
@@ -1335,6 +1388,7 @@
     const r = await act(invoke("clean_trash", { id, pick }));
     state.cleaning = null;
     delete state.picks[id];
+    if (s.action === "move") loadArchive();
     if (r && r.deleted > 0) {
       react("cool");
       // All done: close the sheet so mom (and her note about it) can be seen.
@@ -1455,6 +1509,23 @@
       case "clean-spot":
         cleanSpot(el.dataset.spot);
         break;
+      case "choose-archive": {
+        const info = await act(invoke("choose_archive_dir"), () => null);
+        if (info && info.dir) {
+          state.archive = info;
+          toast(`Old conversations will go to ${info.dir}.`);
+          renderSheet();
+        }
+        break;
+      }
+      case "bring-back": {
+        state.bringing = el.dataset.from;
+        renderSheet();
+        await act(invoke("bring_back", { from: el.dataset.from }));
+        state.bringing = null;
+        loadArchive();
+        break;
+      }
       case "cancel-clean":
         clearTimeout(cleanTimer);
         state.cleanConfirm = null;
@@ -1626,9 +1697,10 @@
       if (key === "scanIntervalSecs") c.ui.scanIntervalSecs = Math.min(60, Math.max(1, Math.round(v)));
       if (key === "agentScratchDays") c.trash.agentScratchDays = Math.min(365, Math.max(1, Math.round(v)));
       if (key === "tempMinAgeDays") c.trash.tempMinAgeDays = Math.min(90, Math.max(1, Math.round(v)));
+      if (key === "conversationsAfterDays") c.trash.conversationsAfterDays = Math.min(3650, Math.max(1, Math.round(v)));
     }).then(() => {
       // What counts as old just changed, so the clean-ups need measuring again.
-      if (input.dataset.num === "agentScratchDays" || input.dataset.num === "tempMinAgeDays") invoke("measure_trash");
+      if (["agentScratchDays", "tempMinAgeDays", "conversationsAfterDays"].includes(input.dataset.num)) invoke("measure_trash");
     });
   });
 
