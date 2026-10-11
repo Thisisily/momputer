@@ -26,8 +26,7 @@
     health: null,
     healthAt: 0,
     sheet: null, // { kind: "spot", id } or { kind: "settings" }
-    skip: {}, // clean-up id -> paths the user unticked
-    add: {}, // clean-up id -> paths the user ticked under Stays
+    picks: {}, // clean-up id -> what's ticked in its lists (see pickOf)
     cleanConfirm: null,
     cleaning: null,
     showAllStartup: false,
@@ -54,7 +53,7 @@
   const $ = (sel) => document.querySelector(sel);
   const esc = (s) =>
     String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+  const plural = (n, one, many = `${one}s`) => `${n.toLocaleString("en-US")} ${n === 1 ? one : many}`;
   const hash = (s) => {
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
@@ -588,9 +587,11 @@
   }
 
   function spotRow(s) {
-    const gone = s.reclaimableBytes === 0;
+    // Empty folders free no space, but they're still clutter.
+    const empties = s.reclaimableBytes === 0 && s.reclaimableItems > 0;
+    const gone = s.reclaimableBytes === 0 && !empties;
     const led = gone ? "green" : s.reclaimableBytes >= 512 * 1024 ** 2 ? "red" : "off";
-    const size = s.exact ? (gone ? "Clean" : bytes(s.reclaimableBytes)) : "Tool decides";
+    const size = s.exact ? (gone ? "Clean" : empties ? `${s.reclaimableItems.toLocaleString("en-US")} empty` : bytes(s.reclaimableBytes)) : "Tool decides";
     const of = s.exact ? `of ${bytes(s.totalBytes)}` : bytes(s.totalBytes);
     return `<div class="row spot-row" id="spot-${s.id}" role="button" tabindex="0" data-act="open-spot" data-spot="${esc(s.id)}" data-led="${led}"
         aria-label="${esc(`${s.label}: ${size} can go. Show details`)}">
@@ -654,44 +655,66 @@
     "empty-bin": "Emptied for good",
   };
 
-  /** What the button takes: what goes, minus what's unticked, plus what's ticked under Stays. */
+  // What's ticked in a clean-up's two lists. Goes starts all ticked and Stays all unticked, and
+  // "Tick all" / "Untick all" flip a whole list, so they also cover the smaller items that
+  // aren't listed. `ticked` and `unticked` are the listed items changed from that.
+  const pickOf = (id) => state.picks[id] || (state.picks[id] = { goes: true, new: false, ticked: new Set(), unticked: new Set() });
+  const tickable = (i) => i.goes || i.optional;
+  const startsTicked = (pk, i) => (i.goes ? pk.goes : pk.new);
+  const isTicked = (pk, i) => (startsTicked(pk, i) ? !pk.unticked.has(i.path) : pk.ticked.has(i.path));
+  const allTicked = (pk, base, list) => base && list.every((i) => isTicked(pk, i));
+
+  /** What the button takes, counting items too small to be listed. */
   function picked(s) {
-    const skip = state.skip[s.id] || new Set();
-    const add = state.add[s.id] || new Set();
+    const pk = pickOf(s.id);
     const items = s.items || [];
     const goes = items.filter((i) => i.goes);
-    const unticked = goes.filter((i) => skip.has(i.path));
-    const added = items.filter((i) => !i.goes && i.optional && add.has(i.path));
+    const fresh = items.filter((i) => !i.goes && i.optional);
     const sum = (list) => list.reduce((a, i) => a + i.bytes, 0);
+    // A list that starts ticked takes everything in it (listed or not) but what's unticked;
+    // otherwise just what's ticked.
+    const share = (list, base, n, b) => {
+      const off = list.filter((i) => !isTicked(pk, i));
+      const on = list.filter((i) => isTicked(pk, i));
+      return base ? [Math.max(0, n - off.length), Math.max(0, b - sum(off))] : [on.length, sum(on)];
+    };
+    const [goN, goB] = share(goes, pk.goes, s.reclaimableItems || goes.length, s.reclaimableBytes || 0);
+    const [newN, newB] = share(fresh, pk.new, s.newItems || fresh.length, s.newBytes || 0);
     return {
+      pk,
       goes,
-      unticked,
-      added,
-      bytesChosen: Math.max(0, (s.reclaimableBytes || 0) - sum(unticked) + sum(added)),
-      count: Math.max(0, (s.reclaimableItems || goes.length) - unticked.length + added.length),
-      partial: unticked.length + added.length > 0,
+      fresh,
+      goN,
+      newN,
+      count: goN + newN,
+      bytesChosen: goB + newB,
+      partial: !pk.goes || pk.new || pk.ticked.size > 0 || pk.unticked.size > 0,
     };
   }
+
+  /** "12 items (3.4 GB)", or "(all empty)" when they're empty folders. */
+  const itemsSize = (n, b) => `${plural(n, "item")} (${b ? bytes(b) : n === 1 ? "empty" : "all empty"})`;
 
   /** The spot's own explanation, adjusted for what the user ticked and unticked. */
   function effectNow(s, p) {
     if (!p.partial) return s.effect;
-    const what = `${plural(p.count, "item")} (${bytes(p.bytesChosen)})`;
-    if (p.goes.length === 0) {
-      // Nothing would go by itself, so the spot's text says so; say what the ticks do instead.
+    if (p.count === 0) return "Nothing is ticked, so the button does nothing.";
+    const what = itemsSize(p.count, p.bytesChosen);
+    if (p.goN === 0) {
+      // Only things from Stays: the spot's own text doesn't cover them, so say it plainly.
       const one = p.count === 1;
-      const ticked = one ? `the item you ticked (${bytes(p.bytesChosen)})` : `the ${what} you ticked`;
       return s.action === "recycle"
-        ? `Moves ${ticked} to the Recycle Bin. Changed your mind? Restore ${one ? "it" : "them"} from there.`
-        : `Deletes ${ticked} permanently (${one ? "it doesn't" : "they don't"} go to the Recycle Bin).`;
+        ? `Moves the ${what} you ticked to the Recycle Bin. Changed your mind? Restore ${one ? "it" : "them"} from there.`
+        : `Deletes the ${what} you ticked, permanently (${one ? "it doesn't" : "they don't"} go to the Recycle Bin).`;
     }
-    const changed = [p.unticked.length && `unticked ${p.unticked.length}`, p.added.length && `added ${p.added.length} from Stays`].filter(Boolean).join(" and ");
+    const left = (s.reclaimableItems || p.goes.length) - p.goN;
+    const changed = [left > 0 && `unticked ${left.toLocaleString("en-US")}`, p.newN > 0 && `added ${p.newN.toLocaleString("en-US")} from Stays`].filter(Boolean).join(" and ");
     return `${s.effect} You ${changed}, so ${what} will go.`;
   }
 
   function cleanLabel(s, p, confirming) {
     if (state.cleaning === s.id) return s.action === "recycle" ? "Moving to the Recycle Bin…" : "Cleaning…";
-    if (s.action !== "tool" && p.count === 0) return (s.items || []).some((i) => i.optional) ? "Nothing ticked" : "Nothing to clear";
+    if (s.action !== "tool" && p.count === 0) return (s.items || []).some(tickable) ? "Nothing ticked" : "Nothing to clear";
     if (confirming) {
       if (s.action === "recycle") return `Sure? Press again to move ${plural(p.count, "file")}`;
       return s.action === "tool" ? "Sure? Press again to run it" : "Sure? This can't be undone";
@@ -704,47 +727,52 @@
       case "empty-bin":
         return `Empty the Recycle Bin (${bytes(p.bytesChosen)})`;
       default:
-        return `Delete ${bytes(p.bytesChosen)}`;
+        return p.bytesChosen ? `Delete ${bytes(p.bytesChosen)}` : `Delete ${plural(p.count, "empty item")}`;
     }
   }
 
   function itemRow(s, i, picking) {
-    const skip = state.skip[s.id] || new Set();
     const sub = [i.sub, i.reason || (i.ageSecs ? `changed ${ageLong(i.ageSecs)} ago` : "")].filter(Boolean).join(" · ");
+    const id = `it-${hash(i.path || i.name)}`;
+    const main = `<span class="item-main"><span class="item-name">${esc(i.name)}</span>${sub ? `<span class="item-sub">${esc(sub)}</span>` : ""}</span>`;
     // Tool clean-ups (Docker) list made-up paths; only real files get a folder button.
     const reveal = i.path && s.action !== "tool" ? `<button class="mini-btn" data-act="reveal-path" data-path="${esc(i.path)}" title="Show in File Explorer" aria-label="Show ${esc(i.name)} in File Explorer">${ICON.folder}</button>` : "";
-    if (!i.goes && picking && i.optional) {
-      // Kept only for being new: tick it to clear it anyway.
-      const on = (state.add[s.id] || new Set()).has(i.path);
-      return `<label class="item stays${on ? " added" : ""}" id="it-${hash(i.path || i.name)}">
-        <input type="checkbox" data-act="pick" data-kind="add" data-path="${esc(i.path)}" ${on ? "checked" : ""}>
-        <span class="item-main"><span class="item-name">${esc(i.name)}</span><span class="item-sub">${esc(sub)}</span></span>
-        <span class="item-size num">${bytes(i.bytes)}</span>${reveal}</label>`;
+    const size = `<span class="item-size num">${bytes(i.bytes)}</span>`;
+    if (picking && tickable(i)) {
+      const on = isTicked(pickOf(s.id), i);
+      return `<label class="item${i.goes ? "" : " stays"}${on && !i.goes ? " added" : ""}" id="${id}">
+        <input type="checkbox" data-act="pick" data-path="${esc(i.path)}" ${on ? "checked" : ""}>${main}${size}${reveal}</label>`;
     }
     if (!i.goes) {
-      return `<div class="item stays" id="it-${hash(i.path || i.name)}"><span class="led green" title="Can't be cleared: ${esc(i.reason)}"></span><span class="item-main"><span class="item-name">${esc(i.name)}</span>
-        <span class="item-sub">${esc(sub)}</span></span><span class="item-size num">${bytes(i.bytes)}</span>${reveal}</div>`;
+      // In use (or otherwise not allowed): no box to tick.
+      return `<div class="item stays" id="${id}"><span class="led green" title="Can't be cleared: ${esc(i.reason)}"></span>${main}${size}${reveal}</div>`;
     }
-    return `<label class="item" id="it-${hash(i.path || i.name)}">
-        ${picking ? `<input type="checkbox" data-act="pick" data-path="${esc(i.path)}" ${skip.has(i.path) ? "" : "checked"}>` : `<span class="led red"></span>`}
-        <span class="item-main"><span class="item-name">${esc(i.name)}</span>${sub ? `<span class="item-sub">${esc(sub)}</span>` : ""}</span>
-        <span class="item-size num">${bytes(i.bytes)}</span>${reveal}</label>`;
+    return `<div class="item" id="${id}"><span class="led red"></span>${main}${size}${reveal}</div>`;
   }
 
   function renderSpot(id) {
     const s = state.trash.spots.find((x) => x.id === id);
     if (!s) return `<div class="sheet-head"><h2 id="sheet-title">Gone</h2><button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button></div><p class="empty">That one isn't there any more.</p>`;
     const p = picked(s);
+    const pk = p.pk;
     const stays = (s.items || []).filter((i) => !i.goes);
-    const optional = stays.filter((i) => i.optional).length;
-    const picking = s.action !== "tool" && s.action !== "empty-bin" && (p.goes.length > 1 || optional > 0);
+    const picking = s.action !== "tool" && s.action !== "empty-bin" && (p.goes.length > 0 || p.fresh.length > 0);
     const unlisted = Math.max(0, (s.reclaimableItems || 0) - p.goes.length);
     const keptUnlisted = Math.max(0, (s.keptItems || 0) - stays.length);
+    const newUnlisted = Math.max(0, (s.newItems || 0) - p.fresh.length);
+    const allButton = (list, items, base) =>
+      picking && items.length ? `<button class="link-btn" data-act="pick-all" data-list="${list}">${allTicked(pk, base, items) ? "Untick all" : "Tick all"}</button>` : "";
+    const hint =
+      (p.fresh.length === stays.length ? "These are" : "The ones with a box are") +
+      (s.action === "recycle"
+        ? " kept only because they're new. Tick any you want gone too."
+        : " kept only because they're new, and something might still want them. Tick any you're sure about.");
     const go = s.reclaimableBytes || 0;
     const kept = s.keptBytes ?? Math.max(0, s.totalBytes - go);
     const cleaning = state.cleaning === s.id;
     const confirming = !cleaning && state.cleanConfirm === s.id;
-    const disabled = cleaning || (s.action !== "tool" && (p.bytesChosen === 0 || p.count === 0));
+    // Empty folders are 0 bytes but still worth clearing, so this goes by count, not size.
+    const disabled = cleaning || (s.action !== "tool" && p.count === 0);
     const danger = s.action === "delete" || s.action === "empty-bin";
     return `<div class="sheet-head">
         <div><h2 id="sheet-title">${esc(s.label)}</h2>
@@ -763,17 +791,29 @@
       ${s.note ? `<p class="sheet-note"><span class="led red"></span>${esc(s.note)}</p>` : ""}
       ${
         p.goes.length
-          ? `<h3 class="list-head">Goes <span class="dim num">${plural(s.reclaimableItems || p.goes.length, "item")}</span>${
-              picking && p.goes.length > 1 ? `<button class="link-btn" data-act="pick-all">${p.unticked.length ? "Tick all" : "Untick all"}</button>` : ""
-            }</h3>
-        <div class="items">${p.goes.map((i) => itemRow(s, i, picking)).join("")}${unlisted ? `<p class="more">…and ${plural(unlisted, "smaller item")}.</p>` : ""}</div>`
+          ? `<h3 class="list-head">Goes <span class="dim num">${plural(s.reclaimableItems || p.goes.length, "item")}</span>${allButton("goes", p.goes, pk.goes)}</h3>
+        <div class="items">${p.goes.map((i) => itemRow(s, i, picking)).join("")}${
+          unlisted
+            ? `<p class="more">…and ${plural(unlisted, p.goes[p.goes.length - 1].bytes ? "smaller item" : "more", p.goes[p.goes.length - 1].bytes ? "smaller items" : "more")}${
+                picking ? (pk.goes ? ", ticked too" : ", not ticked") : ""
+              }.</p>`
+            : ""
+        }</div>`
           : ""
       }
       ${
         stays.length
-          ? `<h3 class="list-head">Stays <span class="dim num">${plural(s.keptItems || stays.length, "item")}</span></h3>
-        ${picking && optional ? `<p class="list-hint">${optional === stays.length ? "These are kept only because they're new" : "The ones with a box are kept only because they're new"}. Tick any you want gone too.</p>` : ""}
-        <div class="items">${stays.map((i) => itemRow(s, i, picking)).join("")}${keptUnlisted ? `<p class="more">…and ${plural(keptUnlisted, "more")}.</p>` : ""}</div>`
+          ? `<h3 class="list-head">Stays <span class="dim num">${plural(s.keptItems || stays.length, "item")}</span>${allButton("new", p.fresh, pk.new)}</h3>
+        ${picking && p.fresh.length ? `<p class="list-hint">${hint}</p>` : ""}
+        <div class="items">${stays.map((i) => itemRow(s, i, picking)).join("")}${
+          keptUnlisted
+            ? `<p class="more">…and ${plural(keptUnlisted, "more", "more")}${
+                picking && newUnlisted
+                  ? `, ${newUnlisted === keptUnlisted ? "all" : `${newUnlisted.toLocaleString("en-US")} of them`} new (${pk.new ? "ticked too" : "Tick all takes them too"})`
+                  : ""
+              }.</p>`
+            : ""
+        }</div>`
           : ""
       }
       <div class="sheet-foot">
@@ -1266,11 +1306,11 @@
     state.cleanConfirm = null;
     state.cleaning = id;
     renderSheet();
-    const pick = p.partial ? { skip: p.unticked.map((i) => i.path), add: p.added.map((i) => i.path) } : null;
+    const pk = p.pk;
+    const pick = p.partial ? { goes: pk.goes, new: pk.new, ticked: [...pk.ticked], unticked: [...pk.unticked] } : null;
     const r = await act(invoke("clean_trash", { id, pick }));
     state.cleaning = null;
-    delete state.skip[id];
-    delete state.add[id];
+    delete state.picks[id];
     if (r && r.deleted > 0) {
       react("cool");
       // All done: close the sheet so mom (and her note about it) can be seen.
@@ -1359,12 +1399,13 @@
         break;
       case "pick": {
         const id = state.sheet && state.sheet.id;
-        if (!id) return;
-        // Under Goes a tick is the default, so unticking skips it; under Stays, ticking adds it.
-        const adding = el.dataset.kind === "add";
-        const bag = adding ? state.add : state.skip;
-        const set = bag[id] || (bag[id] = new Set());
-        el.checked === adding ? set.add(el.dataset.path) : set.delete(el.dataset.path);
+        const s = state.trash.spots.find((x) => x.id === id);
+        const i = s && s.items.find((x) => x.path === el.dataset.path);
+        if (!i) return;
+        const pk = pickOf(id);
+        // A change from how its list started: an untick if it started ticked, else a tick.
+        const changes = startsTicked(pk, i) ? pk.unticked : pk.ticked;
+        el.checked === startsTicked(pk, i) ? changes.delete(i.path) : changes.add(i.path);
         state.cleanConfirm = null;
         renderSheet();
         break;
@@ -1373,8 +1414,17 @@
         const id = state.sheet && state.sheet.id;
         const s = state.trash.spots.find((x) => x.id === id);
         if (!s) return;
-        const skip = state.skip[id] || new Set();
-        state.skip[id] = skip.size ? new Set() : new Set(s.items.filter((i) => i.goes).map((i) => i.path));
+        const pk = pickOf(id);
+        const goes = el.dataset.list === "goes";
+        const list = s.items.filter((i) => (goes ? i.goes : !i.goes && i.optional));
+        const on = !allTicked(pk, goes ? pk.goes : pk.new, list);
+        if (goes) pk.goes = on;
+        else pk.new = on;
+        for (const i of list) {
+          pk.ticked.delete(i.path);
+          pk.unticked.delete(i.path);
+        }
+        state.cleanConfirm = null;
         renderSheet();
         break;
       }

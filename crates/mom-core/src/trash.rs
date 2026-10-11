@@ -50,6 +50,10 @@ pub struct Spot {
     pub reclaimable_items: u64,
     pub kept_bytes: u64,
     pub kept_items: u64,
+    /// The part of what's kept that's kept only for being recent (`Item.optional`), which the
+    /// user can tick.
+    pub new_bytes: u64,
+    pub new_items: u64,
     /// The sizes are exact. False when a tool decides what to prune (reclaimable is then an
     /// upper bound) or a folder was too big to count in full.
     pub exact: bool,
@@ -593,7 +597,7 @@ fn judge(c: Cand, ctx: &TrashCtx, min_age: u64) -> Cand {
         c.verdict(false, IN_USE)
     } else if c.age < min_age {
         let r = too_fresh(c.age, min_age);
-        c.verdict(false, r)
+        c.kept_while_new(r)
     } else {
         let r = format!("Untouched for {}", ago(c.age));
         c.verdict(true, r)
@@ -1087,6 +1091,8 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
     let effect = effect_of(def.id, &goes, &stays, reclaimable, ctx);
     let exact = f.exact && goes.iter().chain(&stays).all(|c| c.complete);
     let (n_go, n_stay) = (goes.len() as u64, stays.len() as u64);
+    let new_bytes = stays.iter().filter(|c| c.optional).map(|c| c.bytes).sum();
+    let new_items = stays.iter().filter(|c| c.optional).count() as u64;
     let items = goes.into_iter().take(40).chain(stays.into_iter().take(20)).map(Cand::into_item).collect();
     Spot {
         id: def.id.into(),
@@ -1104,6 +1110,8 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
         reclaimable_items: n_go,
         kept_bytes: total.saturating_sub(reclaimable),
         kept_items: n_stay,
+        new_bytes,
+        new_items,
         exact,
         available: f.available,
         measured_at: ctx.now,
@@ -1115,6 +1123,9 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
 /// "212 scratch folders (1.2 GB)". `word` is the plural, `one` the singular.
 fn count_size(n: usize, one: &str, word: &str, bytes: u64) -> String {
     let what = if n == 1 { format!("1 {one}") } else { format!("{} {word}", crate::util::human_count(n as u64)) };
+    if bytes == 0 && n > 0 {
+        return format!("{what} ({})", if n == 1 { "empty" } else { "all empty" });
+    }
     format!("{what} ({})", human_bytes(bytes))
 }
 
@@ -1297,24 +1308,34 @@ fn and_list(names: &[&str]) -> String {
 
 // ------------------------------------------------------------------ cleaning
 
-/// What the user changed in a spot's list before cleaning it. Paths as given in `Spot.items`.
-#[derive(Clone, Debug, Default, Deserialize)]
+/// What the user ticked in a spot's two lists before cleaning it. Each list starts all ticked
+/// or all unticked (so "Tick all" also covers items too small to be listed), and `ticked` and
+/// `unticked` name the listed items changed from that. Paths as given in `Spot.items`.
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default)]
 pub struct Pick {
-    /// Unticked: these stay, though they'd go.
-    pub skip: Vec<String>,
-    /// Ticked: these go too, though they'd stay. Only honoured for `Item.optional` ones.
-    pub add: Vec<String>,
+    /// Whether what would go starts ticked. "Untick all" makes it false.
+    pub goes: bool,
+    /// Whether what's kept only for being new (`Item.optional`) starts ticked ("Tick all").
+    pub new: bool,
+    pub ticked: Vec<String>,
+    pub unticked: Vec<String>,
 }
 
-impl Pick {
-    fn is_empty(&self) -> bool {
-        self.skip.is_empty() && self.add.is_empty()
+impl Default for Pick {
+    fn default() -> Pick {
+        Pick { goes: true, new: false, ticked: vec![], unticked: vec![] }
     }
 }
 
-/// Cleans a spot: everything that qualifies right now, adjusted by `pick` (unticked items stay,
-/// ticked optional ones go too). Tool spots ignore `pick`. The Recycle Bin is emptied with
+impl Pick {
+    fn is_default(&self) -> bool {
+        self.goes && !self.new && self.ticked.is_empty() && self.unticked.is_empty()
+    }
+}
+
+/// Cleans a spot: what qualifies right now, as ticked in `pick` (by default, everything that
+/// goes). In-use things never go. Tool spots ignore `pick`. The Recycle Bin is emptied with
 /// Windows' own call unless `pick` changes the list, and then its items are deleted one by one.
 pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     let mut r = CleanReport { id: id.to_string(), ..Default::default() };
@@ -1322,7 +1343,7 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         r.message = format!("Mom doesn't know a spot called {id:?}.");
         return r;
     };
-    let pick = pick.filter(|p| !p.is_empty());
+    let pick = pick.filter(|p| !p.is_default());
     match def.action {
         "tool" => return run_tool(id, ctx, r),
         "empty-bin" if pick.is_none() => return bin::empty(ctx, r),
@@ -1332,8 +1353,8 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     let chosen = choose(&f, pick);
     if let Some(p) = pick {
         // Ticked, but can't go now (in use since the user looked, or already gone).
-        let added = chosen.iter().filter(|c| !c.goes).count();
-        r.skipped += (p.add.len() as u64).saturating_sub(added as u64);
+        let taken: HashSet<String> = chosen.iter().map(|c| norm_path(&c.path.to_string_lossy())).collect();
+        r.skipped += p.ticked.iter().filter(|t| !taken.contains(&norm_path(t))).count() as u64;
     }
     let gone: Vec<bool> = if def.action == "recycle" {
         chosen.iter().map(|c| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok())).collect()
@@ -1368,22 +1389,26 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     r
 }
 
-/// What a clean takes: what goes, minus what the user unticked, plus what they ticked that was
-/// only kept for being recent. Verdicts are fresh, so something that came into use since the
-/// user looked is left alone.
+/// What a clean takes: whatever is ticked, out of what goes and what's kept only for being new.
+/// Verdicts are fresh, so something that came into use since the user looked is left alone.
 fn choose<'f>(f: &'f Found, pick: Option<&Pick>) -> Vec<&'f Cand> {
-    let none = Pick::default();
-    let pick = pick.unwrap_or(&none);
+    let usual = Pick::default();
+    let pick = pick.unwrap_or(&usual);
     let paths = |v: &[String]| v.iter().map(|p| norm_path(p)).collect::<HashSet<String>>();
-    let (skip, add) = (paths(&pick.skip), paths(&pick.add));
+    let (on, off) = (paths(&pick.ticked), paths(&pick.unticked));
     f.cands
         .iter()
         .filter(|c| {
+            let starts_ticked = match (c.goes, c.optional) {
+                (true, _) => pick.goes,
+                (false, true) => pick.new,
+                (false, false) => return false,
+            };
             let p = norm_path(&c.path.to_string_lossy());
-            if c.goes {
-                !skip.contains(&p)
+            if starts_ticked {
+                !off.contains(&p)
             } else {
-                c.optional && add.contains(&p)
+                on.contains(&p)
             }
         })
         .collect()
@@ -1400,6 +1425,7 @@ fn cleaned_message(def: &Def, r: &CleanReport) -> String {
                 human_bytes(r.freed)
             ),
             "empty-bin" => format!("Deleted {} from the Recycle Bin: {} gone for good.", plural(r.deleted, "item"), human_bytes(r.freed)),
+            _ if r.freed == 0 => format!("Took out {}, all empty.", plural(r.deleted, "item")),
             _ => format!("Took out {} of trash ({}).", human_bytes(r.freed), plural(r.deleted, "item")),
         }
     };
@@ -1594,26 +1620,50 @@ mod tests {
     }
 
     #[test]
-    fn unticked_items_stay_and_fresh_temp_cant_be_ticked() {
+    fn ticking_and_unticking_with_things_in_use_locked() {
         let root = fixture("pick");
         let paths = Paths::under(&root);
         write(&paths.temp.join("old-a").join("a.log"), 100, 30);
         write(&paths.temp.join("old-b").join("b.log"), 200, 30);
         write(&paths.temp.join("new-c").join("c.log"), 300, 0);
+        write(&paths.temp.join("busy-d").join("d.log"), 400, 0);
+        let cfg = TrashConfig::default();
+        let mut ctx = ctx(&paths, &cfg);
+        ctx.in_use = norm_path(&paths.temp.join("busy-d").to_string_lossy());
+        let temp = measure("old-temp", &ctx).unwrap();
+        assert!(item(&temp, "new-c").optional, "new, but nothing uses it: can be ticked");
+        assert!(!item(&temp, "busy-d").optional, "in use: locked");
+        assert_eq!((temp.new_items, temp.new_bytes), (1, 300));
+        let path = |n: &str| paths.temp.join(n).to_string_lossy().to_string();
+        // Untick one that goes; tick the new one, and the busy one (which stays anyway).
+        let pick = Pick { unticked: vec![path("old-b")], ticked: vec![path("new-c"), path("busy-d")], ..Default::default() };
+        let r = clean("old-temp", &ctx, Some(&pick));
+        assert_eq!((r.deleted, r.skipped, r.freed), (2, 1, 400));
+        assert!(!paths.temp.join("old-a").exists());
+        assert!(paths.temp.join("old-b").exists());
+        assert!(!paths.temp.join("new-c").exists());
+        assert!(paths.temp.join("busy-d").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn tick_all_and_untick_all_cover_unlisted_items_and_empty_folders_count() {
+        let root = fixture("all");
+        let paths = Paths::under(&root);
+        write(&paths.temp.join("old-a").join("a.log"), 100, 30);
+        for i in 0..3 {
+            std::fs::create_dir_all(paths.temp.join(format!("empty-{i}"))).unwrap();
+        }
         let cfg = TrashConfig::default();
         let ctx = ctx(&paths, &cfg);
         let temp = measure("old-temp", &ctx).unwrap();
-        // Something may still be writing a fresh temp file, so it can't be ticked.
-        assert!(!item(&temp, "new-c").optional);
-        let pick = Pick {
-            skip: vec![paths.temp.join("old-b").to_string_lossy().to_string()],
-            add: vec![paths.temp.join("new-c").to_string_lossy().to_string()],
-        };
-        let r = clean("old-temp", &ctx, Some(&pick));
-        assert_eq!((r.deleted, r.skipped, r.freed), (1, 1, 100));
-        assert!(!paths.temp.join("old-a").exists());
-        assert!(paths.temp.join("old-b").exists());
-        assert!(paths.temp.join("new-c").exists());
+        assert_eq!((temp.new_items, temp.new_bytes), (3, 0), "new empty folders: kept, but can be ticked");
+        // Untick all that goes, tick all that's new, without naming any of them.
+        let r = clean("old-temp", &ctx, Some(&Pick { goes: false, new: true, ..Default::default() }));
+        assert_eq!((r.deleted, r.freed), (3, 0));
+        assert!(paths.temp.join("old-a").exists());
+        assert!(!paths.temp.join("empty-0").exists());
+        assert_eq!(count_size(4634, "item", "items", 0), "4,634 items (all empty)");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1648,7 +1698,7 @@ mod tests {
         };
         assert_eq!(names(choose(&f, None)), vec!["OldSetup.exe", "tool.msi"]);
         // Untick an old one, tick the new one.
-        let pick = Pick { skip: vec![item(&spot, "OldSetup.exe").path.clone()], add: vec![new.path.clone()] };
+        let pick = Pick { unticked: vec![item(&spot, "OldSetup.exe").path.clone()], ticked: vec![new.path.clone()], ..Default::default() };
         assert_eq!(names(choose(&f, Some(&pick))), vec!["NewSetup.exe", "tool.msi"]);
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -1664,7 +1714,7 @@ mod tests {
         let dump = item(&dumps, "app.exe");
         assert!(!dump.goes && dump.optional);
         assert_eq!(clean("crash-dumps", &ctx, None).deleted, 0);
-        let r = clean("crash-dumps", &ctx, Some(&Pick { add: vec![dump.path.clone()], ..Default::default() }));
+        let r = clean("crash-dumps", &ctx, Some(&Pick { ticked: vec![dump.path.clone()], ..Default::default() }));
         assert_eq!((r.deleted, r.freed), (1, 500));
         assert!(!paths.local_appdata.join("CrashDumps").join("app.exe.42.dmp").exists());
         std::fs::remove_dir_all(&root).unwrap();

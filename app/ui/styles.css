@@ -1272,8 +1272,13 @@ button.row-name:hover {
   cursor: pointer;
 }
 
-.item.stays:not(label) {
+.item:not(label) {
   cursor: default;
+}
+
+/* Unticked: it stays. */
+.item:has(> input:not(:checked)) :is(.item-main, .item-size) {
+  opacity: 0.55;
 }
 
 /* Ticked under Stays: it goes too. */

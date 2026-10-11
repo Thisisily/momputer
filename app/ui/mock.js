@@ -125,7 +125,11 @@
   const item = (name, sub, bytes, goes, reason, ageSecs, files = 1) => ({ name, sub, path: `C:\\Users\\me\\AppData\\Local\\Temp\\${name.replace(/\W+/g, "-")}`, bytes, files, ageSecs, goes, optional: false, reason });
   // Kept only for being new: the user can tick it.
   const recent = (i) => ({ ...i, optional: true });
-  const spot = (o) => ({ exact: true, available: true, measuredAt: now, owner: null, note: null, path: null, keptBytes: o.totalBytes - o.reclaimableBytes, ...o });
+  const spot = (o) => {
+    const fresh = (o.items || []).filter((i) => !i.goes && i.optional);
+    const newBytes = fresh.reduce((a, i) => a + i.bytes, 0);
+    return { exact: true, available: true, measuredAt: now, owner: null, note: null, path: null, keptBytes: o.totalBytes - o.reclaimableBytes, newItems: fresh.length, newBytes, ...o };
+  };
   const spots = [
     spot({
       id: "claude-temp", label: "Claude Code scratch", group: "agents", action: "delete", safety: "safe", owner: "claude-code",
@@ -188,6 +192,20 @@
         item("Chrome, Default profile", "Cache, Code Cache, GPUCache", 1.2 * GB, true, "Chrome is closed", 3600),
         item("Brave, Default profile", "Cache", 400 * MB, true, "Brave is closed", 7200),
         item("Edge, Default profile", "Cache, Code Cache", 1.3 * GB, false, "Edge is open", 60),
+      ],
+    }),
+    spot({
+      id: "old-temp", label: "Old temp files", group: "windows", action: "delete", safety: "safe", path: "C:\\Users\\me\\AppData\\Local\\Temp",
+      what: "Files programs and installers left in your Temp folder and never cleaned up.",
+      effect: "Deletes 4,634 items (all empty) from your Temp folder that nobody has touched in 7 days, permanently (they don't go to the Recycle Bin). Anything newer, or in use by a running program, stays. Programs make new temp files when they need them.",
+      totalBytes: 1.4 * GB, reclaimableBytes: 0, reclaimableItems: 4634, keptItems: 8231, newItems: 8230, newBytes: 1.2 * GB,
+      items: [
+        item("tmp3F2A", "Empty folder", 0, true, "Untouched for 41 days", 41 * D2, 0),
+        item("tmp9C11", "Empty folder", 0, true, "Untouched for 33 days", 33 * D2, 0),
+        item("_MEI48212", "Empty folder", 0, true, "Untouched for 12 days", 12 * D2, 0),
+        recent(item("vscode-typescript", "1,204 files, mostly code", 410 * MB, false, "Changed 3 hours ago (kept for 7 days)", 3 * 3600, 1204)),
+        item("Nimbus-updater", "88 files", 200 * MB, false, "In use by a running program", 60, 88),
+        recent(item("pip-build-x81k", "310 files", 120 * MB, false, "Changed 2 days ago (kept for 7 days)", 2 * D2, 310)),
       ],
     }),
     spot({
@@ -353,18 +371,22 @@
     clean_trash: async ({ id, pick }) => {
       await wait(800);
       const s = spots.find((x) => x.id === id);
-      const skip = (pick && pick.skip) || [];
-      const add = (pick && pick.add) || [];
-      const goes = s.items.filter((i) => (i.goes ? !skip.includes(i.path) : i.optional && add.includes(i.path)));
+      const pk = { goes: true, new: false, ticked: [], unticked: [], ...(pick || {}) };
+      // Like mom-core's choose(), for the listed items (the mock has nothing unlisted).
+      const goes = s.items.filter((i) => {
+        if (!i.goes && !i.optional) return false;
+        return (i.goes ? pk.goes : pk.new) ? !pk.unticked.includes(i.path) : pk.ticked.includes(i.path);
+      });
       const sum = (list) => list.reduce((a, i) => a + i.bytes, 0);
-      const added = sum(goes.filter((i) => !i.goes));
-      const freed = s.reclaimableBytes - sum(s.items.filter((i) => i.goes && skip.includes(i.path))) + added;
+      const freed = sum(goes);
       s.items = s.items.filter((i) => !goes.includes(i));
       s.totalBytes -= freed;
-      s.reclaimableBytes -= freed - added;
-      s.keptBytes -= added;
+      s.reclaimableBytes = sum(s.items.filter((i) => i.goes));
+      s.keptBytes = sum(s.items.filter((i) => !i.goes));
       s.reclaimableItems = s.items.filter((i) => i.goes).length;
       s.keptItems = s.items.filter((i) => !i.goes).length;
+      s.newItems = s.items.filter((i) => !i.goes && i.optional).length;
+      s.newBytes = sum(s.items.filter((i) => !i.goes && i.optional));
       emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
       const size = `${(freed / 1024 / MB).toFixed(1)} GB`;
       const message = s.action === "recycle" ? `Moved ${goes.length} files (${size}) to the Recycle Bin. Changed your mind? It's all in there.` : `Took out ${size} of trash.`;
