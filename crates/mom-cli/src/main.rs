@@ -723,7 +723,7 @@ fn print_trash(st: &Style, spots: &[trash::Spot]) {
                 line.push_str(&format!(" · {} item{}", s.reclaimable_items, if s.reclaimable_items == 1 { "" } else { "s" }));
             }
             let line = if s.reclaimable_bytes > 1024 * 1024 * 1024 { st.yellow(&line) } else { line };
-            let flag = match (s.safety, s.action) {
+            let flag = match (s.safety.as_str(), s.action.as_str()) {
                 ("review", _) => st.dim("  (look first)"),
                 (_, "tool") => st.dim("  (runs a tool)"),
                 _ => String::new(),

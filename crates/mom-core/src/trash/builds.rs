@@ -230,7 +230,7 @@ mod tests {
         assert_eq!(spot.items.iter().find(|i| i.name.starts_with("busy")).unwrap().reason, IN_USE);
         assert_eq!(spot.reclaimable_bytes, 10_500);
         assert!(spot.effect.contains("from 2 projects"), "{}", spot.effect);
-        assert_eq!((spot.group, spot.safety), ("dev", "review"));
+        assert_eq!((spot.group.as_str(), spot.safety.as_str()), ("dev", "review"));
 
         let r = clean("old-build-folders", &ctx, None);
         assert_eq!((r.deleted, r.freed), (3, 10_500));

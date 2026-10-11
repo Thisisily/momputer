@@ -55,7 +55,7 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
       <p>Everything that can go, and exactly what it is:</p>
       <ul>
         <li>Claude Code's scratch from finished sessions, named after what each session was doing</li>
-        <li>Codex's temp files</li>
+        <li>what Claude Code, Codex, OpenCode, OpenClaw, Hermes and Pi leave lying around: logs, temp files, undo snapshots, pasted text, caches, and old Cursor worktrees. All of it is kept for 67 days first, and nothing they need (chats, sessions, settings, memory) is ever touched</li>
         <li>old <code>node_modules</code> and <code>target</code> folders in projects you stopped working on</li>
         <li>npm, bun, pip, uv, cargo and other developer caches</li>
         <li>browser caches, crash dumps, old installers in Downloads, and the Recycle Bin</li>
@@ -187,6 +187,8 @@ Listing the machine costs a single `NtQuerySystemInformation` call. Only runtime
 `~/.momputer/config.toml`, or the gear in the widget. The ones worth knowing:
 
 ```toml
+protect = ["ollama serve"]    # never touch these (matched against the command line)
+
 [leftovers]
 autoStop = false              # turn off agents' leftovers on my own...
 autoStopAfterMinutes = 20     # ...once nobody has come back for them this long
@@ -205,7 +207,9 @@ notifyCleanups = true         # what mom turned off by herself
 enabled = true
 stopOnSessionEnd = false
 
-protect = ["ollama serve"]    # never touch these (matched against the command line)
+[trash]
+agentScratchDays = 67         # what agents leave behind stays this long before mom suggests clearing it
+tempMinAgeDays = 7            # other temp files
 ```
 
 ## Contributing

@@ -26,6 +26,9 @@ pub enum AgentKind {
     Amp,
     OpenCode,
     Aider,
+    Pi,
+    OpenClaw,
+    Hermes,
     Other,
 }
 
@@ -42,6 +45,9 @@ impl AgentKind {
             AgentKind::Amp => "Amp",
             AgentKind::OpenCode => "OpenCode",
             AgentKind::Aider => "Aider",
+            AgentKind::Pi => "Pi",
+            AgentKind::OpenClaw => "OpenClaw",
+            AgentKind::Hermes => "Hermes Agent",
             AgentKind::Other => "An agent",
         }
     }
@@ -59,6 +65,9 @@ impl AgentKind {
             AgentKind::Amp => "Amp",
             AgentKind::OpenCode => "OpenCode",
             AgentKind::Aider => "Aider",
+            AgentKind::Pi => "Pi",
+            AgentKind::OpenClaw => "OpenClaw",
+            AgentKind::Hermes => "Hermes",
             AgentKind::Other => "Some agent",
         }
     }
@@ -75,6 +84,9 @@ impl AgentKind {
             AgentKind::Amp => "amp",
             AgentKind::OpenCode => "opencode",
             AgentKind::Aider => "aider",
+            AgentKind::Pi => "pi",
+            AgentKind::OpenClaw => "openclaw",
+            AgentKind::Hermes => "hermes",
             AgentKind::Other => "other",
         }
     }
@@ -102,6 +114,12 @@ impl AgentKind {
             AgentKind::OpenCode
         } else if starts("aider") {
             AgentKind::Aider
+        } else if n == "pi" || starts("pi-") || starts("pi_") {
+            AgentKind::Pi
+        } else if starts("openclaw") || starts("clawdbot") || starts("moltbot") {
+            AgentKind::OpenClaw
+        } else if starts("hermes") {
+            AgentKind::Hermes
         } else {
             AgentKind::Other
         }
@@ -274,6 +292,8 @@ pub fn agent_process(p: &Proc) -> Option<(AgentKind, AgentProc)> {
         "opencode.exe" | "opencode" => Some((AgentKind::OpenCode, AgentProc::Session)),
         "goose.exe" | "goose" => Some((AgentKind::Goose, AgentProc::Session)),
         "aider.exe" | "aider" => Some((AgentKind::Aider, AgentProc::Session)),
+        // Hermes Agent's launcher in its Python environment.
+        "hermes.exe" | "hermes" => Some((AgentKind::Hermes, AgentProc::Session)),
         "droid.exe" => Some((AgentKind::Other, AgentProc::Session)),
         "node.exe" | "node" | "bun.exe" => {
             if cmd.contains("@anthropic-ai/claude-code") {
@@ -286,6 +306,10 @@ pub fn agent_process(p: &Proc) -> Option<(AgentKind, AgentProc)> {
                 Some((AgentKind::Amp, AgentProc::Session))
             } else if cmd.contains("@github/copilot") {
                 Some((AgentKind::Copilot, AgentProc::Session))
+            } else if cmd.contains("pi-coding-agent") {
+                Some((AgentKind::Pi, AgentProc::Session))
+            } else if ["/openclaw/", "/clawdbot/", "/moltbot/", "openclaw.mjs"].iter().any(|m| cmd.contains(m)) {
+                Some((AgentKind::OpenClaw, AgentProc::Session))
             } else if cmd.contains("@qwen-code/") {
                 Some((AgentKind::Other, AgentProc::Session))
             } else {
@@ -299,7 +323,13 @@ pub fn agent_process(p: &Proc) -> Option<(AgentKind, AgentProc)> {
                 .skip(1)
                 .take(3)
                 .any(|a| a == "aider" || a.ends_with("\\aider.exe") || a.ends_with("/aider"));
-            aider.then_some((AgentKind::Aider, AgentProc::Session))
+            if aider {
+                Some((AgentKind::Aider, AgentProc::Session))
+            } else if cmd.contains("hermes_cli") || cmd.contains("hermes-agent/") {
+                Some((AgentKind::Hermes, AgentProc::Session))
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -382,5 +412,16 @@ mod tests {
             Some((AgentKind::Codex, AgentProc::Sandbox))
         );
         assert_eq!(agent_process(&fake(7, 0, "node.exe", "node vite.js", 2)), None);
+
+        let pi = fake(8, 0, "node.exe", r"node C:\npm\node_modules\@mariozechner\pi-coding-agent\dist\cli.js", 2);
+        assert_eq!(agent_process(&pi), Some((AgentKind::Pi, AgentProc::Session)));
+        let claw = fake(9, 0, "node.exe", r"node C:\npm\node_modules\openclaw\openclaw.mjs gateway", 2);
+        assert_eq!(agent_process(&claw), Some((AgentKind::OpenClaw, AgentProc::Session)));
+        let hermes = fake(10, 0, "python.exe", r"python C:\Users\me\AppData\Local\hermes\hermes-agent\cli.py", 2);
+        assert_eq!(agent_process(&hermes), Some((AgentKind::Hermes, AgentProc::Session)));
+        assert_eq!(agent_process(&fake(11, 0, "hermes.exe", "hermes chat", 2)), Some((AgentKind::Hermes, AgentProc::Session)));
+        assert_eq!(agent_process(&fake(12, 0, "python.exe", "python manage.py runserver", 2)), None);
+        assert_eq!(AgentKind::from_name("pi"), AgentKind::Pi);
+        assert_eq!(AgentKind::from_name("pip"), AgentKind::Other);
     }
 }

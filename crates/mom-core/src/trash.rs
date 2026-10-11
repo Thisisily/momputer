@@ -10,6 +10,7 @@ mod bin;
 mod browsers;
 mod builds;
 mod claude;
+mod harness;
 mod walk;
 
 use crate::agents::AgentKind;
@@ -23,7 +24,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Spot {
     pub id: String,
@@ -31,17 +32,17 @@ pub struct Spot {
     /// One short line. `what` and `effect` say more.
     pub detail: String,
     /// "agents", "dev", "windows" or "personal".
-    pub group: &'static str,
+    pub group: String,
     /// What these files are, in plain English.
     pub what: String,
     /// Exactly what the clean button does, with the numbers.
     pub effect: String,
     /// "delete" (gone for good), "recycle" (to the Recycle Bin), "tool" (runs a program that
     /// decides) or "empty-bin" (empties the Recycle Bin).
-    pub action: &'static str,
+    pub action: String,
     /// "safe" (regenerates, or scratch of finished work) or "review" (look at the list first;
     /// items can be unticked).
-    pub safety: &'static str,
+    pub safety: String,
     pub path: Option<String>,
     pub owner: Option<AgentKind>,
     /// Everything in this spot. For exact spots, total = reclaimable + kept.
@@ -52,7 +53,9 @@ pub struct Spot {
     pub kept_items: u64,
     /// The part of what's kept that's kept only for being recent (`Item.optional`), which the
     /// user can tick.
+    #[serde(default)]
     pub new_bytes: u64,
+    #[serde(default)]
     pub new_items: u64,
     /// The sizes are exact. False when a tool decides what to prune (reclaimable is then an
     /// upper bound) or a folder was too big to count in full.
@@ -66,7 +69,7 @@ pub struct Spot {
 }
 
 /// One thing in a spot: a folder, a file, a browser profile's cache, a deleted file.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Item {
     pub name: String,
@@ -83,6 +86,7 @@ pub struct Item {
     pub goes: bool,
     /// Stays only because it's recent, and nothing is using it, so the user may tick it to clean
     /// it anyway (`Pick.add`). In-use things, and fresh temp files, are never optional.
+    #[serde(default)]
     pub optional: bool,
     /// Why it goes or stays ("Session ended 3 days ago", "Edge is open").
     pub reason: String,
@@ -173,6 +177,8 @@ const IDLE_PROJECT_DAYS: u64 = 30;
 const OLD_INSTALLER_DAYS: u64 = 30;
 /// Crash reports younger than this stay, in case someone wants to send one.
 const CRASH_MIN_AGE: u64 = 86_400;
+/// Render folders are only needed while the render runs; a day covers a long one.
+const RENDER_MIN_AGE: u64 = 86_400;
 /// Stop counting a single folder after this many entries (and say the size is a floor).
 const ENTRY_CAP: u64 = 2_000_000;
 
@@ -204,11 +210,78 @@ const DEFS: &[Def] = &[
         label: "Codex leftovers",
         detail: "Codex index and clipboard temp files, half-written state files and old sandbox logs.",
         what: "Temporary files Codex makes as it works: search indexes of your projects, pasted clipboard images, \
-               half-written copies of its state files and old sandbox logs.",
+               its temp folders, half-written copies of its state files and sandbox logs.",
         group: "agents",
         action: "delete",
         safety: "safe",
         owner: Some(AgentKind::Codex),
+    },
+    Def {
+        id: "claude-leftovers",
+        label: "Claude Code leftovers",
+        detail: "Debug logs, shell snapshots, rewind backups and pasted text from old sessions.",
+        what: "What Claude Code keeps in your home folder besides your chats: debug logs, snapshots of your shell, \
+               backups of files it edited (so a session can be rewound), pasted text, half-written copies of its \
+               settings file and its folders in Temp.",
+        group: "agents",
+        action: "delete",
+        safety: "safe",
+        owner: Some(AgentKind::ClaudeCode),
+    },
+    Def {
+        id: "opencode-leftovers",
+        label: "OpenCode leftovers",
+        detail: "OpenCode's logs and the undo snapshots it keeps of old projects.",
+        what: "OpenCode's logs, and the snapshots it takes of a project as it works so changes can be undone. \
+               Snapshots can grow to many gigabytes.",
+        group: "agents",
+        action: "delete",
+        safety: "safe",
+        owner: Some(AgentKind::OpenCode),
+    },
+    Def {
+        id: "openclaw-leftovers",
+        label: "OpenClaw leftovers",
+        detail: "OpenClaw's logs, temp folders and old config backups.",
+        what: "OpenClaw's logs, the temp folders it makes for images, downloads and browser tools, old backups of its \
+               config, and empty folders from when it was called Clawdbot or Moltbot.",
+        group: "agents",
+        action: "delete",
+        safety: "safe",
+        owner: Some(AgentKind::OpenClaw),
+    },
+    Def {
+        id: "hermes-leftovers",
+        label: "Hermes leftovers",
+        detail: "Hermes Agent's logs, cached media, pastes and rollback checkpoints.",
+        what: "Hermes Agent's logs, the images, audio and documents it cached from chats, browser screenshots, \
+               pasted text and the checkpoints it keeps so file changes can be rolled back.",
+        group: "agents",
+        action: "delete",
+        safety: "safe",
+        owner: Some(AgentKind::Hermes),
+    },
+    Def {
+        id: "pi-leftovers",
+        label: "Pi leftovers",
+        detail: "Long command output Pi saved to Temp, trial extension installs and its debug log.",
+        what: "When a command prints too much, Pi saves the whole output to a file in Temp and never deletes it. \
+               Also extensions it installed to try out, and its debug log.",
+        group: "agents",
+        action: "delete",
+        safety: "safe",
+        owner: Some(AgentKind::Pi),
+    },
+    Def {
+        id: "cursor-worktrees",
+        label: "Old Cursor worktrees",
+        detail: "Copies of your projects Cursor's agents worked in.",
+        what: "When Cursor runs agents side by side, each gets its own copy of the project (a Git worktree) in \
+               ~/.cursor/worktrees. Cursor doesn't always remove them when the work is done.",
+        group: "agents",
+        action: "recycle",
+        safety: "review",
+        owner: Some(AgentKind::Cursor),
     },
     Def {
         id: "render-temp",
@@ -444,6 +517,27 @@ const DEFS: &[Def] = &[
     },
 ];
 
+/// The last measurement, saved so a restart doesn't mean measuring everything again.
+fn saved_file(paths: &Paths) -> PathBuf {
+    paths.state_dir().join("trash.json")
+}
+
+pub fn save(paths: &Paths, spots: &[Spot]) {
+    if let Ok(json) = serde_json::to_string(spots) {
+        let _ = crate::util::write_atomic(&saved_file(paths), &json);
+    }
+}
+
+/// What was measured last time (each spot says when). Spots mom no longer has are dropped.
+pub fn load_saved(paths: &Paths) -> Vec<Spot> {
+    let ids = spot_ids();
+    std::fs::read_to_string(saved_file(paths))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<Spot>>(&s).ok())
+        .map(|v| v.into_iter().filter(|s| ids.contains(&s.id.as_str())).collect())
+        .unwrap_or_default()
+}
+
 pub fn spot_ids() -> Vec<&'static str> {
     DEFS.iter().map(|d| d.id).collect()
 }
@@ -475,6 +569,8 @@ struct Cand {
     goes: bool,
     /// Kept only for being recent: the user can tick it.
     optional: bool,
+    /// What sort of thing it is, plural ("logs"), for spots that hold several sorts.
+    kind: Option<&'static str>,
     reason: String,
     complete: bool,
     /// A Claude transcript to read the session's title from, and the project name to put in
@@ -494,6 +590,7 @@ impl Cand {
             age: now.saturating_sub(t.newest),
             goes: false,
             optional: false,
+            kind: None,
             reason: String::new(),
             complete: t.complete,
             title_from: None,
@@ -632,10 +729,12 @@ fn cache_item(root: PathBuf, name: &str, ctx: &TrashCtx) -> Option<Cand> {
 }
 
 fn find(id: &str, ctx: &TrashCtx) -> Found {
-    let agent_age = ctx.cfg.agent_temp_min_age_hours * 3600;
+    let agent_age = ctx.cfg.agent_scratch_days * 86_400;
     let la = &ctx.paths.local_appdata;
     match id {
         "claude-temp" => claude::find(ctx, agent_age),
+        "claude-leftovers" | "opencode-leftovers" | "openclaw-leftovers" | "hermes-leftovers" | "pi-leftovers"
+        | "cursor-worktrees" => harness::find(id, ctx, agent_age),
         "codex-temp" => {
             let codex = ctx.paths.codex_dir();
             let mut f = Found::at(codex.clone());
@@ -654,8 +753,14 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                     consider(p, "Codex clipboard image".into(), agent_age);
                 }
             }
-            for p in entries(&codex.join(".tmp")) {
-                let n = format!("Codex temp: {}", name_of(&p));
+            for dir in [".tmp", "tmp"] {
+                for p in entries(&codex.join(dir)) {
+                    let n = format!("Codex temp: {}", name_of(&p));
+                    consider(p, n, agent_age);
+                }
+            }
+            for p in entries(&codex.join("log")) {
+                let n = format!("Codex log {}", name_of(&p));
                 consider(p, n, agent_age);
             }
             for p in entries(&codex) {
@@ -668,7 +773,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
             for p in entries(&codex.join(".sandbox")) {
                 let n = name_of(&p);
                 if n.starts_with("sandbox.") && n.ends_with(".log") {
-                    consider(p, format!("Sandbox log {n}"), 14 * 86_400);
+                    consider(p, format!("Sandbox log {n}"), agent_age);
                 }
             }
             for (c, min_age) in cands(list, ctx.now).into_iter().zip(min_ages) {
@@ -687,7 +792,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                 }
                 list.push((p, render_name(&n)));
             }
-            f.cands = cands(list, ctx.now).into_iter().map(|c| judge(c, ctx, agent_age)).collect();
+            f.cands = cands(list, ctx.now).into_iter().map(|c| judge(c, ctx, RENDER_MIN_AGE)).collect();
             f
         }
         "old-temp" => {
@@ -700,7 +805,9 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                     (p, n)
                 })
                 // these are counted by their own spots
-                .filter(|(_, n)| !n.eq_ignore_ascii_case("claude") && !is_codex_temp(n) && !is_render_leftover(n))
+                .filter(|(_, n)| {
+                    !n.eq_ignore_ascii_case("claude") && !is_codex_temp(n) && !is_render_leftover(n) && !harness::owns_temp(n)
+                })
                 .collect();
             f.cands = cands(list, ctx.now).into_iter().map(|c| judge(c, ctx, min)).collect();
             f
@@ -1098,11 +1205,11 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
         id: def.id.into(),
         label: def.label.into(),
         detail: def.detail.into(),
-        group: def.group,
+        group: def.group.into(),
         what: def.what.split_whitespace().collect::<Vec<_>>().join(" "),
         effect,
-        action: def.action,
-        safety: def.safety,
+        action: def.action.into(),
+        safety: def.safety.into(),
         path: f.root.map(|r| r.to_string_lossy().to_string()),
         owner: def.owner,
         total_bytes: total,
@@ -1133,31 +1240,52 @@ fn count_size(n: usize, one: &str, word: &str, bytes: u64) -> String {
 fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &TrashCtx) -> String {
     let n = goes.len();
     let bytes = reclaimable;
-    let hours = human_age_long(ctx.cfg.agent_temp_min_age_hours * 3600);
+    let kept = human_age_long(ctx.cfg.agent_scratch_days * 86_400);
+    let render_age = human_age_long(RENDER_MIN_AGE);
     let forever = "permanently (they don't go to the Recycle Bin)";
     let nothing = |why: &str| format!("Nothing to clean right now: {why}");
     match id {
         "claude-temp" if n == 0 => nothing(&format!(
-            "every scratch folder belongs to a session that's still running or was used in the last {hours}."
+            "every scratch folder belongs to a session that's still running or was used in the last {kept}."
         )),
         "claude-temp" => format!(
             "Deletes {} from Claude Code sessions that have ended, {forever}. Folders of sessions that are still \
-             running, or changed in the last {hours}, are left alone. Your projects and Claude's chat history aren't touched.",
+             running, or changed in the last {kept}, are left alone. Your projects and Claude's chat history aren't touched.",
             count_size(n, "scratch folder", "scratch folders", bytes)
         ),
-        "codex-temp" if n == 0 => nothing(&format!("everything Codex left is either in use or from the last {hours}.")),
+        "codex-temp" if n == 0 => nothing(&format!("everything Codex left is either in use or from the last {kept}.")),
         "codex-temp" => format!(
-            "Deletes {} that Codex left behind, {forever}: old search indexes, pasted clipboard images, half-written \
-             state files and sandbox logs older than two weeks. Codex's threads, settings and memories aren't touched; \
-             anything changed in the last {hours} stays.",
+            "Deletes {} that Codex left behind and nobody has touched in {kept}, {forever}: old search indexes, pasted \
+             clipboard images, temp folders, half-written state files and sandbox logs. Codex's threads, settings and \
+             memories aren't touched; anything newer stays.",
             count_size(n, "temp file", "temp files and folders", bytes)
         ),
-        "render-temp" if n == 0 => nothing(&format!("no render folders older than {hours}.")),
+        "render-temp" if n == 0 => nothing(&format!("no render folders older than {render_age}.")),
         "render-temp" => format!(
             "Deletes {} from your Temp folder, {forever}. They're copies made while rendering; your projects and \
-             finished videos aren't touched. Anything used in the last {hours} stays.",
+             finished videos aren't touched. Anything used in the last {render_age} stays.",
             count_size(n, "render folder", "render folders", bytes)
         ),
+        "cursor-worktrees" if n == 0 => nothing(&format!("every worktree is in use or was worked in during the last {kept}.")),
+        "cursor-worktrees" => format!(
+            "Moves {} that Cursor's agents made, and nobody has touched in {kept}, to the Recycle Bin. Changes in them \
+             that were never committed go too, so look through the list first; restore any from the Recycle Bin. Your \
+             projects aren't touched (Git keeps a note of each worktree until you run `git worktree prune`).",
+            count_size(n, "worktree", "worktrees", bytes)
+        ),
+        _ if harness::about(id).is_some() => {
+            let (tool, untouched) = harness::about(id).unwrap_or_default();
+            if n == 0 {
+                nothing(&format!("everything {tool} left is in use or from the last {kept}."))
+            } else {
+                format!(
+                    "Deletes {} {tool} left behind and nobody has touched in {kept}, {forever}: {}. {untouched} \
+                     Anything newer, or in use, stays.",
+                    count_size(n, "item", "items", bytes),
+                    harness::kinds(goes)
+                )
+            }
+        }
         "old-temp" => {
             let days = human_age_long(ctx.cfg.temp_min_age_days * 86_400);
             if n == 0 {
@@ -1548,7 +1676,7 @@ mod tests {
         let dead = "0191f20b-ae85-40af-b308-93c34777b8cb";
         let live = "e9c3412f-ef20-4ba5-a0c7-2d71609fde82";
         let fresh = "11111111-2222-3333-4444-555555555555";
-        write(&claude.join(dead).join("scratchpad").join("shot.png"), 5000, 3);
+        write(&claude.join(dead).join("scratchpad").join("shot.png"), 5000, 70);
         write(&claude.join(live).join("scratchpad").join("notes.md"), 700, 3);
         write(&claude.join(fresh).join("tasks").join("out.txt"), 300, 0);
         // The dead session's transcript has a title.
@@ -1559,11 +1687,11 @@ mod tests {
             "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Fix the login bug\"}}\n",
         )
         .unwrap();
-        touch_old(&transcript, 3);
+        touch_old(&transcript, 70);
         // Codex: a stale half-written state file and an old index folder in Temp.
-        write(&paths.codex_dir().join("..codex-global-state.json.tmp-1790-abc"), 1000, 5);
-        write(&paths.codex_dir().join(".codex-global-state.json"), 1000, 5);
-        write(&paths.temp.join("codex-index-1234").join("idx.bin"), 2000, 5);
+        write(&paths.codex_dir().join("..codex-global-state.json.tmp-1790-abc"), 1000, 70);
+        write(&paths.codex_dir().join(".codex-global-state.json"), 1000, 70);
+        write(&paths.temp.join("codex-index-1234").join("idx.bin"), 2000, 70);
         // A week-old random temp folder and a fresh one.
         write(&paths.temp.join("someinstaller").join("a.log"), 100, 30);
         write(&paths.temp.join("busy").join("b.log"), 100, 0);
@@ -1576,7 +1704,7 @@ mod tests {
         assert_eq!(spot.reclaimable_bytes, 5000);
         assert_eq!(spot.reclaimable_items, 1);
         assert_eq!((spot.kept_bytes, spot.kept_items), (1000, 2));
-        assert_eq!((spot.group, spot.action, spot.safety), ("agents", "delete", "safe"));
+        assert_eq!((spot.group.as_str(), spot.action.as_str(), spot.safety.as_str()), ("agents", "delete", "safe"));
         assert!(spot.effect.starts_with("Deletes 1 scratch folder (5 KB) from Claude Code sessions that have ended, permanently"), "{}", spot.effect);
 
         // Every item says why it goes or stays.
@@ -1584,13 +1712,13 @@ mod tests {
         assert!(gone.goes);
         assert!(gone.name.starts_with("storefront · "), "{}", gone.name);
         assert_eq!(gone.sub.as_deref(), Some("1 file"));
-        assert!(gone.reason.starts_with("Session ended 3 days ago"), "{}", gone.reason);
+        assert!(gone.reason.starts_with("Session ended 70 days ago"), "{}", gone.reason);
         let running = item(&spot, "Session e9c3412f");
         assert!(!running.goes);
         assert_eq!(running.reason, "Session is still running");
         let new = item(&spot, "Session 11111111");
         assert!(!new.goes);
-        assert!(new.reason.contains("(kept for 24 hours)"), "{}", new.reason);
+        assert!(new.reason.contains("(kept for 67 days)"), "{}", new.reason);
         assert_eq!(spot.items[0].name, gone.name, "what goes is listed first");
 
         let codex = measure("codex-temp", &ctx).unwrap();
@@ -1647,6 +1775,23 @@ mod tests {
     }
 
     #[test]
+    fn a_measurement_survives_a_restart() {
+        let root = fixture("saved");
+        let paths = Paths::under(&root);
+        write(&paths.temp.join("old-a").join("a.log"), 100, 30);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        assert!(load_saved(&paths).is_empty());
+        let spots = vec![measure("old-temp", &ctx).unwrap()];
+        save(&paths, &spots);
+        let back = load_saved(&paths);
+        assert_eq!(back.len(), 1);
+        assert_eq!((back[0].id.as_str(), back[0].reclaimable_bytes, back[0].measured_at), ("old-temp", 100, spots[0].measured_at));
+        assert_eq!(back[0].items[0].name, "old-a");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn tick_all_and_untick_all_cover_unlisted_items_and_empty_folders_count() {
         let root = fixture("all");
         let paths = Paths::under(&root);
@@ -1678,7 +1823,7 @@ mod tests {
         let cfg = TrashConfig::default();
         let ctx = ctx(&paths, &cfg);
         let spot = measure("old-installers", &ctx).unwrap();
-        assert_eq!((spot.action, spot.safety, spot.group), ("recycle", "review", "personal"));
+        assert_eq!((spot.action.as_str(), spot.safety.as_str(), spot.group.as_str()), ("recycle", "review", "personal"));
         assert_eq!(spot.reclaimable_items, 2);
         assert_eq!(spot.reclaimable_bytes, 6000);
         assert_eq!(spot.kept_items, 1, "the photo isn't an installer at all");

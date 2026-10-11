@@ -520,6 +520,7 @@ fn measure_trash_now(app: AppHandle, s: S, only: Option<String>) {
             }
             emit_trash(&app, &s);
         }
+        trash::save(&s.paths, &s.trash.lk());
         s.trash_busy.store(false, Ordering::SeqCst);
         emit_trash(&app, &s);
     });
@@ -805,12 +806,14 @@ fn main() {
     let paths = Paths::detect();
     let config = Config::load(&paths);
     let start_hidden = std::env::args().any(|a| a == "--hidden");
+    // What was measured last time shows straight away; measuring again is up to the user.
+    let saved_trash = trash::load_saved(&paths);
     let shared: S = Arc::new(Shared {
         paths,
         config: Mutex::new(config),
         sampler: Mutex::new(Sampler::new()),
         snapshot: Mutex::new(None),
-        trash: Mutex::new(Vec::new()),
+        trash: Mutex::new(saved_trash),
         trash_busy: AtomicBool::new(false),
         machines: Mutex::new(Machines::default()),
         machines_busy: AtomicBool::new(false),

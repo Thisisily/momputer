@@ -132,6 +132,9 @@
     amp: "Amp",
     opencode: "OpenCode",
     aider: "Aider",
+    pi: "Pi",
+    openclaw: "OpenClaw",
+    hermes: "Hermes",
     other: "Some agent",
   };
 
@@ -628,10 +631,23 @@
     G.to(o, { v: target, duration: 0.6, ease: "power2.out", onUpdate: () => draw(o.v) });
   }
 
+  /** How long ago the oldest measurement was taken (they're saved between restarts). */
+  const measuredAgo = () => {
+    const at = spotsOf().map((x) => x.measuredAt).filter(Boolean);
+    return at.length ? Math.max(0, Math.floor(Date.now() / 1000) - Math.min(...at)) : 0;
+  };
+
   function renderUpkeep() {
     const t = state.trash;
     const spots = spotsOf();
-    const said = t.busy && !spots.length ? "Measuring…" : t.busy ? "found so far, still looking." : spots.length ? "mom can free up. Tap anything to see exactly what it is." : "Let me look under the bed.";
+    const said =
+      t.busy && !spots.length
+        ? "Measuring…"
+        : t.busy
+          ? "found so far, still looking."
+          : spots.length
+            ? `mom can free up, as of ${ageLong(measuredAgo())} ago. Tap anything to see exactly what it is.`
+            : "Let me look under the bed.";
     const shown = shownFree === null ? "" : sizeDots(shownFree);
     let html = `<div class="lead" id="upkeep-lead"><div class="lead-text">${spots.length ? `<div class="big" id="free-big">${shown}</div>` : ""}<p>${esc(said)}</p></div>
       <button class="secondary" data-act="measure" ${t.busy ? "disabled" : ""}>${t.busy ? `<span class="led green blink"></span>Measuring` : spots.length ? "Measure again" : "Measure"}</button></div>`;
@@ -1056,6 +1072,7 @@
         <small>${note}</small>
       </div>`;
     const num = (key, value, min, max) => `<input class="inline-num num" type="number" min="${min}" max="${max}" value="${value}" data-num="${key}">`;
+    const row = (key, label, note) => `<div class="switch-row" id="set-${key}"><span class="label">${label}</span><small>${note}</small></div>`;
     return `<div class="sheet-head"><h2 id="sheet-title" class="dot sheet-dot">settings</h2>
         <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button></div>
       ${section(
@@ -1064,7 +1081,12 @@
         "",
         sw("autoStop", c.leftovers.autoStop, "Clean up on my own", `Turn off what agents leave behind once nobody has come back for it in ${num("autoStopAfterMinutes", c.leftovers.autoStopAfterMinutes, 1, 1440)} minutes.`) +
           sw("autoStopOrphans", c.leftovers.autoStopOrphans, "Orphans too", "Also turn off runtimes nobody can be traced to.") +
-          sw("includeOrphans", c.leftovers.includeUnknownOrphans, "Count orphans as leftovers", "Runtimes whose parent is gone and carry no agent's fingerprints.")
+          sw("includeOrphans", c.leftovers.includeUnknownOrphans, "Count orphans as leftovers", "Runtimes whose parent is gone and carry no agent's fingerprints.") +
+          row(
+            "keep",
+            "How long things stay",
+            `What agents leave behind (scratch, logs, snapshots, worktrees) stays ${num("agentScratchDays", c.trash.agentScratchDays, 1, 365)} days before mom suggests clearing it, other temp files ${num("tempMinAgeDays", c.trash.tempMinAgeDays, 1, 90)} days.`
+          )
       )}
       ${section(
         "s-tell",
@@ -1233,7 +1255,9 @@
     render();
     if (moving()) G.fromTo(page, { opacity: 0, y: 8 }, { opacity: 1, y: 0, duration: 0.3, ease: "power2.out", clearProps: "opacity,transform" });
     if (tab === "upkeep") {
-      if (!state.trash.spots.length && !state.trash.busy) invoke("measure_trash");
+      // Show the last measurement straight away; look again only if there isn't one, or it's from
+      // more than half a day ago (the old numbers stay up while she looks).
+      if (!state.trash.busy && (!state.trash.spots.length || measuredAgo() > 12 * 3600)) invoke("measure_trash");
       loadHealth();
     }
     if (tab === "rooms") loadRooms();
@@ -1600,6 +1624,11 @@
       if (key === "notifyAfterMinutes") c.ui.notifyAfterMinutes = Math.min(1440, Math.max(1, Math.round(v)));
       if (key === "notifyEveryMinutes") c.ui.notifyEveryMinutes = Math.min(1440, Math.max(5, Math.round(v)));
       if (key === "scanIntervalSecs") c.ui.scanIntervalSecs = Math.min(60, Math.max(1, Math.round(v)));
+      if (key === "agentScratchDays") c.trash.agentScratchDays = Math.min(365, Math.max(1, Math.round(v)));
+      if (key === "tempMinAgeDays") c.trash.tempMinAgeDays = Math.min(90, Math.max(1, Math.round(v)));
+    }).then(() => {
+      // What counts as old just changed, so the clean-ups need measuring again.
+      if (input.dataset.num === "agentScratchDays" || input.dataset.num === "tempMinAgeDays") invoke("measure_trash");
     });
   });
 

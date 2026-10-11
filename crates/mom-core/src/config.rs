@@ -104,15 +104,17 @@ impl Default for TidyConfig {
 pub struct TrashConfig {
     /// Items in %TEMP% older than this many days are fair game.
     pub temp_min_age_days: u64,
-    /// Claude/Codex session temp untouched for this many hours (and not in use) is fair game.
-    pub agent_temp_min_age_hours: u64,
+    /// What agents leave behind (scratch, logs, snapshots, worktrees from Claude Code, Codex,
+    /// OpenCode, OpenClaw, Hermes, Pi and Cursor) is kept this many days before mom suggests
+    /// clearing it. Anything in use is always kept.
+    pub agent_scratch_days: u64,
 }
 
 impl Default for TrashConfig {
     fn default() -> Self {
         TrashConfig {
             temp_min_age_days: 7,
-            agent_temp_min_age_hours: 24,
+            agent_scratch_days: 67,
         }
     }
 }
