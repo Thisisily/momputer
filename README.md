@@ -60,7 +60,7 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
         <li>npm, bun, pip, uv, cargo and other developer caches</li>
         <li>browser caches, crash dumps, old installers in Downloads, and the Recycle Bin</li>
       </ul>
-      <p>Tap any of them and she lists every folder that goes, every one that stays and why, and tells you what the button does (deleted for good, Recycle Bin, or the tool's own prune) <b>before</b> you press it.</p>
+      <p>Tap any of them and she lists every folder that goes, every one that stays and why, and tells you what the button does (deleted for good, Recycle Bin, or the tool's own prune) <b>before</b> you press it. Untick anything you want to keep, or tick something she'd keep just because it's new.</p>
     </td>
   </tr>
   <tr>
@@ -173,7 +173,7 @@ Listing the machine costs a single `NtQuerySystemInformation` call. Only runtime
 
 - Stop Windows' own processes, an agent itself, or whoever asked her (the agent and shell running `mom`).
 - Stop a recycled PID: she re-checks every process's start time right before stopping it.
-- Delete anything without showing you first. Every clean-up lists what goes and what stays, and nothing happens until you press its button (twice, for anything permanent).
+- Delete anything without showing you first. Every clean-up lists what goes and what stays, and nothing happens until you press its button and then press again to confirm. Anything in use can't be ticked at all.
   - Tidying moves things, and undo is one click.
   - Your own files, like old installers, go to the Recycle Bin.
   - Temp folders, caches and build folders are deleted for real, because they come back.

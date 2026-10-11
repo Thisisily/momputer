@@ -122,7 +122,9 @@
 
   const GB = 1024 * MB;
   const D2 = 86400;
-  const item = (name, sub, bytes, goes, reason, ageSecs, files = 1) => ({ name, sub, path: `C:\\Users\\me\\AppData\\Local\\Temp\\${name.replace(/\W+/g, "-")}`, bytes, files, ageSecs, goes, reason });
+  const item = (name, sub, bytes, goes, reason, ageSecs, files = 1) => ({ name, sub, path: `C:\\Users\\me\\AppData\\Local\\Temp\\${name.replace(/\W+/g, "-")}`, bytes, files, ageSecs, goes, optional: false, reason });
+  // Kept only for being new: the user can tick it.
+  const recent = (i) => ({ ...i, optional: true });
   const spot = (o) => ({ exact: true, available: true, measuredAt: now, owner: null, note: null, path: null, keptBytes: o.totalBytes - o.reclaimableBytes, ...o });
   const spots = [
     spot({
@@ -160,8 +162,8 @@
         item("garden-v1 · target", "Rust build output", 3.9 * GB, true, "Last worked on 74 days ago", 74 * D2),
         item("old-landing · node_modules", "41,200 files", 1.4 * GB, true, "Last worked on 45 days ago", 45 * D2),
         item("nimbus-2024 · node_modules", "28,900 files", 800 * MB, true, "Last worked on 120 days ago", 120 * D2),
-        item("storefront · node_modules", "52,000 files", 2.6 * GB, false, "Worked on 2 hours ago", 7200),
-        item("momputer · target", "Rust build output", 1.1 * GB, false, "Worked on today", 600),
+        recent(item("storefront · node_modules", "52,000 files", 2.6 * GB, false, "Worked on 2 hours ago", 7200)),
+        item("momputer · target", "Rust build output", 1.1 * GB, false, "In use by a running program", 600),
       ],
     }),
     spot({
@@ -213,11 +215,12 @@
       id: "old-installers", label: "Old installers", group: "personal", action: "recycle", safety: "review", path: "C:\\Users\\me\\Downloads",
       what: "Setup files in Downloads you ran more than a month ago. The apps they installed don't need them.",
       effect: "Moves the ticked installers to the Recycle Bin, so you can still get them back. Installed apps aren't affected.",
-      totalBytes: 1.1 * GB, reclaimableBytes: 1.1 * GB, reclaimableItems: 3, keptItems: 0,
+      totalBytes: 1.1 * GB + 210 * MB, reclaimableBytes: 1.1 * GB, reclaimableItems: 3, keptItems: 1,
       items: [
         item("DockerDesktopInstaller.exe", "Downloads", 620 * MB, true, "Downloaded 64 days ago", 64 * D2),
         item("Blender-4.2-windows-x64.msi", "Downloads", 380 * MB, true, "Downloaded 90 days ago", 90 * D2),
         item("OBS-Studio-30.1-Installer.exe", "Downloads", 140 * MB, true, "Downloaded 41 days ago", 41 * D2),
+        recent(item("Figma-Setup.exe", "Downloads", 210 * MB, false, "Downloaded 6 days ago (kept for 30 days)", 6 * D2)),
       ],
     }),
   ];
@@ -347,15 +350,21 @@
       }
       emit("trash", { spots: JSON.parse(JSON.stringify(list)), busy: false });
     },
-    clean_trash: async ({ id, only }) => {
+    clean_trash: async ({ id, pick }) => {
       await wait(800);
       const s = spots.find((x) => x.id === id);
-      const goes = s.items.filter((i) => i.goes && (!only || only.includes(i.path)));
-      const freed = only ? goes.reduce((a, i) => a + i.bytes, 0) : s.reclaimableBytes;
+      const skip = (pick && pick.skip) || [];
+      const add = (pick && pick.add) || [];
+      const goes = s.items.filter((i) => (i.goes ? !skip.includes(i.path) : i.optional && add.includes(i.path)));
+      const sum = (list) => list.reduce((a, i) => a + i.bytes, 0);
+      const added = sum(goes.filter((i) => !i.goes));
+      const freed = s.reclaimableBytes - sum(s.items.filter((i) => i.goes && skip.includes(i.path))) + added;
       s.items = s.items.filter((i) => !goes.includes(i));
       s.totalBytes -= freed;
-      s.reclaimableBytes -= freed;
+      s.reclaimableBytes -= freed - added;
+      s.keptBytes -= added;
       s.reclaimableItems = s.items.filter((i) => i.goes).length;
+      s.keptItems = s.items.filter((i) => !i.goes).length;
       emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
       const size = `${(freed / 1024 / MB).toFixed(1)} GB`;
       const message = s.action === "recycle" ? `Moved ${goes.length} files (${size}) to the Recycle Bin. Changed your mind? It's all in there.` : `Took out ${size} of trash.`;

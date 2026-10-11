@@ -53,7 +53,7 @@ pub(super) fn find(ctx: &TrashCtx, min_age: u64) -> Found {
             } else {
                 too_fresh(c.age, min_age)
             };
-            c.verdict(false, r)
+            c.kept_while_new(r)
         } else {
             let r = format!("Session ended {} ago", ago(c.age));
             c.verdict(true, r)

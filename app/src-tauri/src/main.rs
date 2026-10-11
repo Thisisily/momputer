@@ -531,14 +531,14 @@ fn measure_trash(app: AppHandle, s: State<'_, S>) {
 }
 
 #[tauri::command]
-async fn clean_trash(id: String, only: Option<Vec<String>>, app: AppHandle, s: State<'_, S>) -> Res<trash::CleanReport> {
+async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: State<'_, S>) -> Res<trash::CleanReport> {
     let s = s.inner().clone();
     let s2 = s.clone();
     let report = tauri::async_runtime::spawn_blocking(move || {
         let cfg = s.cfg();
         let table = s.sampler.lk().sample();
         let ctx = trash::TrashCtx::new(&s.paths, &cfg, &table);
-        let r = trash::clean(&id, &ctx, only.as_deref());
+        let r = trash::clean(&id, &ctx, pick.as_ref());
         if r.freed > 0 {
             s.note(format!("Took out {} of trash ({id}).", human_bytes(r.freed)));
         }

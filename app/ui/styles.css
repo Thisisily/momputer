@@ -1272,8 +1272,20 @@ button.row-name:hover {
   cursor: pointer;
 }
 
-.item.stays {
+.item.stays:not(label) {
   cursor: default;
+}
+
+/* Ticked under Stays: it goes too. */
+.item.added .item-size {
+  color: var(--red);
+}
+
+.list-hint {
+  margin: -2px 4px 8px;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-wrap: pretty;
 }
 
 .item > .led {

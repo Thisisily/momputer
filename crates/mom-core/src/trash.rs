@@ -18,7 +18,7 @@ use crate::paths::Paths;
 use crate::procs::ProcTable;
 use crate::util::{human_age_long, human_bytes, mtime_secs, norm_path, now_secs, plural};
 use walk::{remove_all, tally, tally_many, Tally};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -68,7 +68,7 @@ pub struct Item {
     pub name: String,
     /// What's inside ("38 files, mostly images"), or where it came from.
     pub sub: Option<String>,
-    /// Where it lives. This is what `clean(.., only)` picks by. Tool spots use made-up paths
+    /// Where it lives. This is what a `Pick` names it by. Tool spots use made-up paths
     /// ("docker:build-cache") that are only good for picking.
     pub path: String,
     pub bytes: u64,
@@ -77,6 +77,9 @@ pub struct Item {
     pub age_secs: u64,
     /// Cleaning takes it (or, in a review spot, takes it unless the user unticks it).
     pub goes: bool,
+    /// Stays only because it's recent, and nothing is using it, so the user may tick it to clean
+    /// it anyway (`Pick.add`). In-use things, and fresh temp files, are never optional.
+    pub optional: bool,
     /// Why it goes or stays ("Session ended 3 days ago", "Edge is open").
     pub reason: String,
 }
@@ -455,7 +458,7 @@ pub fn cleans_without_asking(id: &str) -> bool {
 
 /// Something mom found in a spot, before the list is trimmed for the UI.
 struct Cand {
-    /// What the UI shows and `only` picks by.
+    /// What the UI shows and a `Pick` names it by.
     path: PathBuf,
     /// What actually gets removed. Usually just `path`; a browser profile lists its cache folders,
     /// a whole cache lists its contents (so the cache folder itself stays).
@@ -466,6 +469,8 @@ struct Cand {
     files: u64,
     age: u64,
     goes: bool,
+    /// Kept only for being recent: the user can tick it.
+    optional: bool,
     reason: String,
     complete: bool,
     /// A Claude transcript to read the session's title from, and the project name to put in
@@ -484,6 +489,7 @@ impl Cand {
             files: t.files,
             age: now.saturating_sub(t.newest),
             goes: false,
+            optional: false,
             reason: String::new(),
             complete: t.complete,
             title_from: None,
@@ -494,6 +500,12 @@ impl Cand {
         self.goes = goes;
         self.reason = reason.into();
         self
+    }
+
+    /// Stays for now because it's recent, but the user can tick it.
+    fn kept_while_new(mut self, reason: impl Into<String>) -> Cand {
+        self.optional = true;
+        self.verdict(false, reason)
     }
 
     fn into_item(self) -> Item {
@@ -511,6 +523,7 @@ impl Cand {
             files: self.files,
             age_secs: self.age,
             goes: self.goes,
+            optional: self.optional,
             reason: self.reason,
         }
     }
@@ -703,7 +716,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                     c.verdict(false, IN_USE)
                 } else if c.age < 7 * 86_400 {
                     let r = format!("Used {} ago (kept for a week)", ago(c.age));
-                    c.verdict(false, r)
+                    c.kept_while_new(r)
                 } else {
                     let r = format!("Not used for {}", ago(c.age));
                     c.verdict(true, r)
@@ -900,7 +913,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                 c.sub = Some(if c.files > 1 { format!("{kind}, {}", plural(c.files, "file")) } else { kind.to_string() });
                 let c = if c.age < CRASH_MIN_AGE {
                     let r = format!("Crashed {} ago (kept for a day)", ago(c.age));
-                    c.verdict(false, r)
+                    c.kept_while_new(r)
                 } else {
                     let r = format!("Crashed {} ago", ago(c.age));
                     c.verdict(true, r)
@@ -930,7 +943,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                     c.verdict(false, "Running right now")
                 } else if c.age < min {
                     let r = format!("Downloaded {} ago (kept for {OLD_INSTALLER_DAYS} days)", ago(c.age));
-                    c.verdict(false, r)
+                    c.kept_while_new(r)
                 } else {
                     let r = format!("Downloaded {} ago", ago(c.age));
                     c.verdict(true, r)
@@ -1284,28 +1297,43 @@ fn and_list(names: &[&str]) -> String {
 
 // ------------------------------------------------------------------ cleaning
 
-/// Cleans a spot. With `only`, takes just the items whose path is in the list (as given in
-/// `Spot.items`) and that still qualify right now; without it, takes everything that qualifies.
-/// Tool spots ignore `only`. The Recycle Bin is emptied with Windows' own call unless `only`
-/// picks items, which are then deleted one by one.
-pub fn clean(id: &str, ctx: &TrashCtx, only: Option<&[String]>) -> CleanReport {
+/// What the user changed in a spot's list before cleaning it. Paths as given in `Spot.items`.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct Pick {
+    /// Unticked: these stay, though they'd go.
+    pub skip: Vec<String>,
+    /// Ticked: these go too, though they'd stay. Only honoured for `Item.optional` ones.
+    pub add: Vec<String>,
+}
+
+impl Pick {
+    fn is_empty(&self) -> bool {
+        self.skip.is_empty() && self.add.is_empty()
+    }
+}
+
+/// Cleans a spot: everything that qualifies right now, adjusted by `pick` (unticked items stay,
+/// ticked optional ones go too). Tool spots ignore `pick`. The Recycle Bin is emptied with
+/// Windows' own call unless `pick` changes the list, and then its items are deleted one by one.
+pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     let mut r = CleanReport { id: id.to_string(), ..Default::default() };
     let Some(def) = def(id) else {
         r.message = format!("Mom doesn't know a spot called {id:?}.");
         return r;
     };
+    let pick = pick.filter(|p| !p.is_empty());
     match def.action {
         "tool" => return run_tool(id, ctx, r),
-        "empty-bin" if only.is_none() => return bin::empty(ctx, r),
+        "empty-bin" if pick.is_none() => return bin::empty(ctx, r),
         _ => {}
     }
     let f = find(id, ctx);
-    let wanted: Option<HashSet<String>> = only.map(|o| o.iter().map(|p| norm_path(p)).collect());
-    let picked = |c: &Cand| wanted.as_ref().is_none_or(|w| w.contains(&norm_path(&c.path.to_string_lossy())));
-    let chosen: Vec<&Cand> = f.cands.iter().filter(|c| c.goes && picked(c)).collect();
-    if let Some(o) = only {
-        // Asked for, but no longer qualifies (in use now, changed since, or already gone).
-        r.skipped += (o.len() as u64).saturating_sub(chosen.len() as u64);
+    let chosen = choose(&f, pick);
+    if let Some(p) = pick {
+        // Ticked, but can't go now (in use since the user looked, or already gone).
+        let added = chosen.iter().filter(|c| !c.goes).count();
+        r.skipped += (p.add.len() as u64).saturating_sub(added as u64);
     }
     let gone: Vec<bool> = if def.action == "recycle" {
         chosen.iter().map(|c| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok())).collect()
@@ -1338,6 +1366,27 @@ pub fn clean(id: &str, ctx: &TrashCtx, only: Option<&[String]>) -> CleanReport {
     }
     r.message = cleaned_message(def, &r);
     r
+}
+
+/// What a clean takes: what goes, minus what the user unticked, plus what they ticked that was
+/// only kept for being recent. Verdicts are fresh, so something that came into use since the
+/// user looked is left alone.
+fn choose<'f>(f: &'f Found, pick: Option<&Pick>) -> Vec<&'f Cand> {
+    let none = Pick::default();
+    let pick = pick.unwrap_or(&none);
+    let paths = |v: &[String]| v.iter().map(|p| norm_path(p)).collect::<HashSet<String>>();
+    let (skip, add) = (paths(&pick.skip), paths(&pick.add));
+    f.cands
+        .iter()
+        .filter(|c| {
+            let p = norm_path(&c.path.to_string_lossy());
+            if c.goes {
+                !skip.contains(&p)
+            } else {
+                c.optional && add.contains(&p)
+            }
+        })
+        .collect()
 }
 
 fn cleaned_message(def: &Def, r: &CleanReport) -> String {
@@ -1545,18 +1594,21 @@ mod tests {
     }
 
     #[test]
-    fn only_cleans_what_was_picked_and_still_qualifies() {
-        let root = fixture("only");
+    fn unticked_items_stay_and_fresh_temp_cant_be_ticked() {
+        let root = fixture("pick");
         let paths = Paths::under(&root);
         write(&paths.temp.join("old-a").join("a.log"), 100, 30);
         write(&paths.temp.join("old-b").join("b.log"), 200, 30);
         write(&paths.temp.join("new-c").join("c.log"), 300, 0);
         let cfg = TrashConfig::default();
         let ctx = ctx(&paths, &cfg);
-        let pick = vec![
-            paths.temp.join("old-a").to_string_lossy().to_string(),
-            paths.temp.join("new-c").to_string_lossy().to_string(), // too fresh: stays anyway
-        ];
+        let temp = measure("old-temp", &ctx).unwrap();
+        // Something may still be writing a fresh temp file, so it can't be ticked.
+        assert!(!item(&temp, "new-c").optional);
+        let pick = Pick {
+            skip: vec![paths.temp.join("old-b").to_string_lossy().to_string()],
+            add: vec![paths.temp.join("new-c").to_string_lossy().to_string()],
+        };
         let r = clean("old-temp", &ctx, Some(&pick));
         assert_eq!((r.deleted, r.skipped, r.freed), (1, 1, 100));
         assert!(!paths.temp.join("old-a").exists());
@@ -1584,13 +1636,37 @@ mod tests {
         assert!(item(&spot, "tool.msi").goes);
         let new = item(&spot, "NewSetup.exe");
         assert!(!new.goes);
+        assert!(new.optional, "only kept for being new, so it can be ticked");
         assert!(new.reason.contains("kept for 30 days"), "{}", new.reason);
         assert!(spot.effect.contains("Recycle Bin"), "{}", spot.effect);
         // What clean would hand to the Recycle Bin (not actually recycled in tests).
         let f = find("old-installers", &ctx);
-        let mut going: Vec<String> = f.cands.iter().filter(|c| c.goes).flat_map(|c| c.targets.iter().map(|t| name_of(t))).collect();
-        going.sort();
-        assert_eq!(going, vec!["OldSetup.exe", "tool.msi"]);
+        let names = |cs: Vec<&Cand>| {
+            let mut v: Vec<String> = cs.iter().flat_map(|c| c.targets.iter().map(|t| name_of(t))).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(names(choose(&f, None)), vec!["OldSetup.exe", "tool.msi"]);
+        // Untick an old one, tick the new one.
+        let pick = Pick { skip: vec![item(&spot, "OldSetup.exe").path.clone()], add: vec![new.path.clone()] };
+        assert_eq!(names(choose(&f, Some(&pick))), vec!["NewSetup.exe", "tool.msi"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn recent_things_stay_unless_ticked() {
+        let root = fixture("ticked");
+        let paths = Paths::under(&root);
+        write(&paths.local_appdata.join("CrashDumps").join("app.exe.42.dmp"), 500, 0);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let dumps = measure("crash-dumps", &ctx).unwrap();
+        let dump = item(&dumps, "app.exe");
+        assert!(!dump.goes && dump.optional);
+        assert_eq!(clean("crash-dumps", &ctx, None).deleted, 0);
+        let r = clean("crash-dumps", &ctx, Some(&Pick { add: vec![dump.path.clone()], ..Default::default() }));
+        assert_eq!((r.deleted, r.freed), (1, 500));
+        assert!(!paths.local_appdata.join("CrashDumps").join("app.exe.42.dmp").exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 
