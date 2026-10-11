@@ -4,6 +4,9 @@ name: release
 # a version tag (v0.2.0) or by hand. Signing takes two requests, each approved by hand in SignPath:
 # first momputer.exe and mom.exe, then the installers built from those signed files. Without the
 # SignPath secret and settings (see docs/signing.md) the release is built unsigned and says so.
+#
+# Every action is pinned to a commit, not a tag (Dependabot proposes updates): they run next to
+# the SignPath token and the files that get signed.
 
 on:
   push:
@@ -24,8 +27,8 @@ jobs:
     env:
       SIGN: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       # No build cache here: what gets signed is built from scratch.
       - name: Install the Tauri CLI
         run: cargo install tauri-cli --version "^2.12" --locked
@@ -51,7 +54,7 @@ jobs:
       - name: Upload them for signing
         id: upload-binaries
         if: env.SIGN == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: binaries-unsigned
           path: dist/unsigned/
@@ -59,7 +62,7 @@ jobs:
 
       - name: Sign momputer.exe and mom.exe (approve it in SignPath)
         if: env.SIGN == 'true'
-        uses: signpath/github-action-submit-signing-request@v3
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -95,7 +98,7 @@ jobs:
       - name: Upload the installers for signing
         id: upload-installers
         if: env.SIGN == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: installers-unsigned
           path: dist/installers/
@@ -103,7 +106,7 @@ jobs:
 
       - name: Sign the installers (approve it in SignPath)
         if: env.SIGN == 'true'
-        uses: signpath/github-action-submit-signing-request@v3
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
