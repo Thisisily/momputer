@@ -594,11 +594,21 @@ fn clean_as_admin(s: &Shared, id: &str, pick: Option<&trash::Pick>) -> trash::Cl
         }
     }
     if note.is_none() {
-        if let Err(why) = mom_core::elevate::run_as_admin(&mom, &args) {
+        // Only a mom.exe nothing running as you could have swapped, or your "yes" goes to it.
+        let app = std::env::current_exe().unwrap_or_default();
+        if let Err(why) = mom_core::elevate::safe_to_elevate(&mom, &app).and_then(|()| mom_core::elevate::run_as_admin(&mom, &args)) {
             note = Some(why);
         }
     }
     tally_gone(id, before, r, note)
+}
+
+/// Why mom can't clean as administrator from this copy of the app, if she can't: shown before
+/// anyone presses the button.
+#[tauri::command(async)]
+fn admin_check() -> Option<String> {
+    let app = std::env::current_exe().unwrap_or_default();
+    mom_core::elevate::safe_to_elevate(&app.with_file_name("mom.exe"), &app).err()
 }
 
 /// What a clean-up took, from what's gone of what it planned to take.
@@ -1004,6 +1014,7 @@ fn main() {
             bring_back,
             delete_moved,
             uninstall_app,
+            admin_check,
             get_health,
             get_rooms,
             room_paths,

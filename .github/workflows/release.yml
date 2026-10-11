@@ -1,0 +1,157 @@
+name: release
+
+# Builds momputer, has SignPath sign it, and drafts a GitHub release with the installers. Runs for
+# a version tag (v0.2.0) or by hand. Signing takes two requests, each approved by hand in SignPath:
+# first momputer.exe and mom.exe, then the installers built from those signed files. Without the
+# SignPath secret and settings (see docs/signing.md) the release is built unsigned and says so.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # to draft the release
+  actions: read # SignPath fetches the files this workflow uploads
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      SIGN: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      # No build cache here: what gets signed is built from scratch.
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version "^2.12" --locked
+
+      - name: Test
+        run: cargo test -p mom-core -p mom-cli
+
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $v = ((cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages | Where-Object name -eq 'momputer').version
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$v") { throw "The tag $env:GITHUB_REF_NAME doesn't match the version in Cargo.toml ($v)." }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build momputer.exe and mom.exe
+        shell: pwsh
+        run: |
+          ./scripts/build.ps1 -NoBundle
+          New-Item -ItemType Directory -Force dist/unsigned | Out-Null
+          Copy-Item target/release/momputer.exe, target/release/mom.exe dist/unsigned/
+
+      - name: Upload them for signing
+        id: upload-binaries
+        if: env.SIGN == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: binaries-unsigned
+          path: dist/unsigned/
+          if-no-files-found: error
+
+      - name: Sign momputer.exe and mom.exe (approve it in SignPath)
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: binaries
+          github-artifact-id: ${{ steps.upload-binaries.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: dist/signed
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+
+      - name: Put the signed files back
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          Copy-Item dist/signed/momputer.exe target/release/momputer.exe -Force
+          Copy-Item dist/signed/mom.exe target/release/mom.exe -Force
+          foreach ($f in 'target/release/momputer.exe', 'target/release/mom.exe') {
+            $s = Get-AuthenticodeSignature $f
+            if ($s.Status -ne 'Valid') { throw "$f isn't validly signed: $($s.StatusMessage)" }
+            Write-Host "$f is signed by $($s.SignerCertificate.Subject)"
+          }
+
+      - name: Build the installers
+        shell: pwsh
+        run: |
+          ./scripts/build.ps1 -BundleOnly
+          New-Item -ItemType Directory -Force dist/installers | Out-Null
+          Copy-Item target/release/bundle/nsis/*.exe, target/release/bundle/msi/*.msi dist/installers/
+
+      - name: Upload the installers for signing
+        id: upload-installers
+        if: env.SIGN == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: installers-unsigned
+          path: dist/installers/
+          if-no-files-found: error
+
+      - name: Sign the installers (approve it in SignPath)
+        if: env.SIGN == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          artifact-configuration-slug: installers
+          github-artifact-id: ${{ steps.upload-installers.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: dist/release
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+
+      - name: Check the installers' signatures
+        if: env.SIGN == 'true'
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist/release -File -Include *.exe, *.msi -Recurse
+          if ($files.Count -ne 2) { throw "Expected the setup program and the MSI, got: $($files.Name -join ', ')" }
+          foreach ($f in $files) {
+            $s = Get-AuthenticodeSignature $f.FullName
+            if ($s.Status -ne 'Valid') { throw "$($f.Name) isn't validly signed: $($s.StatusMessage)" }
+            Write-Host "$($f.Name) is signed by $($s.SignerCertificate.Subject)"
+          }
+
+      - name: Unsigned, then
+        if: env.SIGN != 'true'
+        shell: pwsh
+        run: |
+          Write-Host "::warning::SignPath isn't set up (see docs/signing.md), so this release is unsigned."
+          Copy-Item dist/installers dist/release -Recurse
+
+      - name: Draft the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $sums = Get-ChildItem dist/release -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }
+          $sums | Set-Content dist/release/SHA256SUMS.txt -Encoding ascii
+          $files = (Get-ChildItem dist/release -File).FullName
+          $tag = "v$env:VERSION"
+          $existing = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json | Where-Object tag_name -eq $tag
+          if ($null -eq $existing) {
+            gh release create $tag @files --draft --title "momputer $env:VERSION" --generate-notes --target $env:GITHUB_SHA
+          } elseif ($existing.draft) {
+            gh release upload $tag @files --clobber
+          } else {
+            throw "$tag is already published; bump the version for a new release."
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'drafting the release failed' }

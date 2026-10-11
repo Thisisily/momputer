@@ -30,6 +30,7 @@
     cleanConfirm: null,
     cleaning: null,
     archive: null, // where old conversations go, and what's been moved there
+    adminBlock: undefined, // why mom can't ask for an administrator from this copy (null: she can)
     bringing: null, // the moved folder being brought back
     deleteConfirm: null, // the moved folder whose Delete was pressed once
     uninstallConfirm: null, // the app whose Uninstall was pressed once
@@ -712,6 +713,16 @@
   /** "F:" for "F:\momputer-archive". */
   const driveOf = (dir) => (dir && /^[a-z]:/i.test(dir) ? dir.slice(0, 2).toUpperCase() : "the other drive");
 
+  async function loadAdminCheck() {
+    if (state.adminBlock !== undefined) return;
+    try {
+      state.adminBlock = (await invoke("admin_check")) || null;
+    } catch {
+      state.adminBlock = null;
+    }
+    renderSheet();
+  }
+
   async function loadArchive() {
     try {
       state.archive = await invoke("archive_info");
@@ -820,6 +831,13 @@
     return `<div class="item" id="${id}"><span class="led red"></span>${main}${size}${reveal}</div>`;
   }
 
+  // Admin clean-ups: Windows asks first, and only from a copy installed for all users.
+  function adminHint() {
+    if (state.adminBlock)
+      return `<p class="sheet-note"><span class="led red"></span>This copy of momputer can't ask Windows for an administrator, so the button cleans only what you can clean yourself. ${esc(state.adminBlock)}</p>`;
+    return `<p class="list-hint">Only an administrator can clean this, so when you press the button Windows asks whether mom may make changes. Mom itself never runs as administrator.</p>`;
+  }
+
   function renderSpot(id) {
     const s = state.trash.spots.find((x) => x.id === id);
     if (!s) return `<div class="sheet-head"><h2 id="sheet-title">Gone</h2><button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button></div><p class="empty">That one isn't there any more.</p>`;
@@ -848,7 +866,7 @@
     return `<div class="sheet-head">
         <div><h2 id="sheet-title">${esc(s.label)}</h2>
           <div class="pills"><span class="pill"><span class="led ${s.safety === "review" ? "red" : "green"}"></span>${s.safety === "review" ? "Look before you clear" : s.action === "move" ? "Nothing is deleted" : "Safe to clear"}</span>
-          ${s.admin ? `<span class="pill"><span class="led red"></span>Windows asks first</span>` : ""}
+          ${s.admin ? `<span class="pill"><span class="led red"></span>${state.adminBlock ? "Needs an all-users install" : "Windows asks first"}</span>` : ""}
           <span class="pill">${ACTION_WORD[s.action] || "Deleted"}</span></div></div>
         <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button>
       </div>
@@ -861,7 +879,7 @@
       }
       <div class="callout"><h3>What the button does</h3><p>${esc(effectNow(s, p))}</p></div>
       ${s.action === "move" ? archiveBox(s.id) : ""}
-      ${s.admin ? `<p class="list-hint">Only an administrator can clean this, so when you press the button Windows asks whether mom may make changes. Mom itself never runs as administrator.</p>` : ""}
+      ${s.admin ? adminHint() : ""}
       ${s.note ? `<p class="sheet-note"><span class="led red"></span>${esc(s.note)}</p>` : ""}
       ${
         p.goes.length
@@ -1224,7 +1242,9 @@
 
   async function openSheet(sheet) {
     if (sheet.kind === "settings") state.settings = await invoke("get_settings");
-    if (sheet.kind === "spot" && (state.trash.spots.find((x) => x.id === sheet.id) || {}).action === "move") loadArchive();
+    const opened = sheet.kind === "spot" ? state.trash.spots.find((x) => x.id === sheet.id) || {} : {};
+    if (opened.action === "move") loadArchive();
+    if (opened.admin) loadAdminCheck();
     const wasOpen = !!state.sheet;
     state.sheet = sheet;
     state.cleanConfirm = null;

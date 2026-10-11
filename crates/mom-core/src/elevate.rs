@@ -138,6 +138,111 @@ pub fn admin_may_delete(target: &Path) -> Result<(), String> {
     }
 }
 
+/// What to do when mom won't ask for an administrator from where she is.
+pub const INSTALL_FOR_EVERYONE: &str =
+    "Install momputer for all users (the installer puts it in Program Files), then mom can clean this as administrator.";
+
+/// May mom ask Windows to run `exe` as administrator? Only if nothing running as you could have
+/// swapped it for something else first: `exe` and its folder can be changed only by Windows and
+/// administrators (as when installed for all users, in Program Files), nothing above them is a
+/// link or could be renamed, and if `app` (momputer itself) is signed, `exe` is signed with the
+/// very same certificate. Otherwise any program running as you could replace mom.exe and ride
+/// along on your "yes".
+pub fn safe_to_elevate(exe: &Path, app: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        let refuse = |why: String| Err(format!("{why} {INSTALL_FOR_EVERYONE}"));
+        match std::fs::symlink_metadata(exe) {
+            Ok(m) if m.is_file() && m.file_attributes() & 0x400 == 0 => {}
+            _ => return refuse(format!("{} isn't an ordinary file.", exe.display())),
+        }
+        let Some(dir) = exe.parent() else { return refuse(format!("{} isn't in a folder.", exe.display())) };
+        // Write (on a folder: add a file or a folder), append, DELETE, WRITE_DAC, WRITE_OWNER,
+        // GENERIC_WRITE, GENERIC_ALL. In the folder, no one else may add a DLL mom would load or
+        // delete what's there (FILE_DELETE_CHILD).
+        const CHANGE: u32 = 0x2 | 0x4 | 0x0001_0000 | 0x0004_0000 | 0x0008_0000 | 0x4000_0000 | 0x1000_0000;
+        if !acl::only_trusted(exe, CHANGE) {
+            return refuse(format!("Anything running as you could swap {}.", exe.display()));
+        }
+        if !acl::only_trusted(dir, CHANGE | 0x40) {
+            return refuse(format!("Anything running as you could put files in {}.", dir.display()));
+        }
+        if admin_may_delete(exe).is_err() {
+            return refuse(format!("Anything running as you could swap a folder {} is in.", dir.display()));
+        }
+        match (signature(app)?, signature(exe)?) {
+            (None, _) => Ok(()), // a build you made yourself: where it is is what counts
+            (Some(a), Some(b)) if a == b => Ok(()),
+            (Some(_), Some(_)) => Err(format!("{} is signed by someone else than momputer, so mom won't run it as administrator.", exe.display())),
+            (Some(_), None) => Err(format!("{} isn't signed but momputer is, so mom won't run it as administrator.", exe.display())),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (exe, app);
+        Err("Only on Windows.".into())
+    }
+}
+
+/// The certificate `file` is signed with, if it's signed (checked by Windows, chain and all).
+/// A signature that doesn't check out is an error, not "unsigned".
+pub fn signature(file: &Path) -> Result<Option<Vec<u8>>, String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{TRUST_E_NOSIGNATURE, TRUST_E_PROVIDER_UNKNOWN, TRUST_E_SUBJECT_FORM_UNKNOWN};
+        use windows_sys::Win32::Security::WinTrust::{
+            WTHelperGetProvSignerFromChain, WTHelperProvDataFromStateData, WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA,
+            WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+        };
+        let path = wide(&file.to_string_lossy());
+        let mut info = WINTRUST_FILE_INFO { cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32, pcwszFilePath: path.as_ptr(), ..Default::default() };
+        let mut data = WINTRUST_DATA {
+            cbStruct: std::mem::size_of::<WINTRUST_DATA>() as u32,
+            dwUIChoice: WTD_UI_NONE,
+            // Who signed it is the question here, not whether the certificate was revoked since
+            // (which would mean asking the internet).
+            fdwRevocationChecks: WTD_REVOKE_NONE,
+            dwUnionChoice: WTD_CHOICE_FILE,
+            dwStateAction: WTD_STATEACTION_VERIFY,
+            ..Default::default()
+        };
+        data.Anonymous.pFile = &mut info;
+        let mut action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+        // SAFETY: `data` and `info` (and the path they point to) outlive both calls; the state
+        // WinVerifyTrust keeps is released by the second call.
+        let rc = unsafe { WinVerifyTrust(-1isize as _, &mut action, (&mut data as *mut WINTRUST_DATA).cast()) };
+        let cert = (rc == 0).then(|| {
+            // SAFETY: the state is valid until closed below; each pointer is checked before use.
+            unsafe {
+                let prov = WTHelperProvDataFromStateData(data.hWVTStateData);
+                let signer = if prov.is_null() { std::ptr::null_mut() } else { WTHelperGetProvSignerFromChain(prov, 0, 0, 0) };
+                if signer.is_null() || (*signer).csCertChain == 0 || (*signer).pasCertChain.is_null() {
+                    return None;
+                }
+                let leaf = (*(*signer).pasCertChain).pCert;
+                if leaf.is_null() || (*leaf).pbCertEncoded.is_null() {
+                    return None;
+                }
+                Some(std::slice::from_raw_parts((*leaf).pbCertEncoded, (*leaf).cbCertEncoded as usize).to_vec())
+            }
+        });
+        data.dwStateAction = WTD_STATEACTION_CLOSE;
+        // SAFETY: as above.
+        unsafe { WinVerifyTrust(-1isize as _, &mut action, (&mut data as *mut WINTRUST_DATA).cast()) };
+        match rc {
+            0 => cert.flatten().map(Some).ok_or_else(|| format!("Windows couldn't say who signed {}.", file.display())),
+            TRUST_E_NOSIGNATURE | TRUST_E_SUBJECT_FORM_UNKNOWN | TRUST_E_PROVIDER_UNKNOWN => Ok(None),
+            e => Err(format!("{}'s signature doesn't check out (error {:#x}).", file.display(), e as u32)),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = file;
+        Ok(None)
+    }
+}
+
 #[cfg(windows)]
 mod acl {
     use std::path::Path;
@@ -313,6 +418,43 @@ mod tests {
         // Inside Windows' own folders: yes.
         let windows = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
         admin_may_delete(&std::path::Path::new(&windows).join("System32").join("x")).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn asks_for_an_administrator_only_for_a_mom_nothing_else_could_have_swapped() {
+        // A copy in a folder you own: no.
+        let dir = std::env::temp_dir().join("mom-elevate-check");
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("mom.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        let err = safe_to_elevate(&exe, &exe).unwrap_err();
+        assert!(err.contains("could swap") && err.ends_with(INSTALL_FOR_EVERYONE), "{err}");
+        std::fs::remove_dir_all(&dir).unwrap();
+        // Not there at all: no.
+        assert!(safe_to_elevate(&exe, &exe).unwrap_err().contains("isn't an ordinary file"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn tells_signed_from_unsigned_from_tampered() {
+        // This test program isn't signed, and a text file can't be.
+        assert_eq!(signature(&std::env::current_exe().unwrap()), Ok(None));
+        let dir = std::env::temp_dir().join("mom-signature-check");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("note.txt"), "hello").unwrap();
+        assert_eq!(signature(&dir.join("note.txt")), Ok(None));
+        // Edge comes signed wherever it's installed. Change one byte and it no longer checks out.
+        let edge = std::path::PathBuf::from(std::env::var("ProgramFiles(x86)").unwrap_or_default()).join(r"Microsoft\Edge\Application\msedge.exe");
+        if let Ok(mut bytes) = std::fs::read(&edge) {
+            assert!(signature(&edge).unwrap().is_some_and(|c| !c.is_empty()));
+            let mid = bytes.len() / 2;
+            bytes[mid] ^= 0xff;
+            std::fs::write(dir.join("msedge.exe"), bytes).unwrap();
+            let err = signature(&dir.join("msedge.exe")).unwrap_err();
+            assert!(err.contains("doesn't check out"), "{err}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

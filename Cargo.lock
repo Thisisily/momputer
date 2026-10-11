@@ -2269,6 +2269,7 @@ dependencies = [
  "mom-core",
  "serde",
  "serde_json",
+ "tauri-winres",
  "windows-sys 0.61.2",
 ]
 

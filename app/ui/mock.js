@@ -455,6 +455,7 @@
             : `Took out ${size} of trash.`;
       return { id, freed, deleted: goes.length, skipped: 0, message };
     },
+    admin_check: async () => (await wait(60), null),
     archive_info: async () => (await wait(80), JSON.parse(JSON.stringify(archive))),
     choose_archive_dir: async () => {
       await wait(200);

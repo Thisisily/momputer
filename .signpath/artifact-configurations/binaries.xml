@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "binaries": momputer.exe and mom.exe, before they go into the
+     installers. The release workflow uploads them as one ZIP (see .github/workflows/release.yml).
+     Only files that say they are momputer get signed. The version is shown on the request. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file-set product-name="momputer">
+      <include path="momputer.exe" />
+      <include path="mom.exe" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>

@@ -373,7 +373,35 @@ fn main() {
     std::process::exit(code);
 }
 
+/// What mom will do as administrator: look, and clean the spots that need one (trash::clean
+/// refuses the rest). Everything else acts on files anything running as you can change (settings,
+/// the journal, agents' folders), and those mustn't get to steer an administrator.
+fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
+    match cmd {
+        None
+        | Some(Cmd::Ps { .. })
+        | Some(Cmd::Leftovers { .. })
+        | Some(Cmd::Mine { .. })
+        | Some(Cmd::Sessions { .. })
+        | Some(Cmd::Machines { .. })
+        | Some(Cmd::Trash { .. })
+        | Some(Cmd::Health { .. })
+        | Some(Cmd::Integrations { .. })
+        | Some(Cmd::Config) => true,
+        Some(Cmd::Stop { dry_run, .. }) => *dry_run,
+        Some(Cmd::Tidy { apply, .. }) => !*apply,
+        Some(Cmd::Rules { action }) => matches!(action, None | Some(RulesCmd::Show)),
+        Some(Cmd::Undo) | Some(Cmd::Install { .. }) | Some(Cmd::Uninstall { .. }) | Some(Cmd::Hook { .. }) => false,
+    }
+}
+
 fn run(cli: Cli) -> Result<i32> {
+    if mom_core::elevate::is_elevated() && !allowed_elevated(&cli.cmd) {
+        if matches!(cli.cmd, Some(Cmd::Hook { .. })) {
+            return Ok(0); // an agent running as administrator: stay out of the way
+        }
+        bail!("mom only looks when run as administrator (and cleans what needs one). Run this from an ordinary terminal.");
+    }
     let st = Style::detect();
     let paths = paths();
     let cfg = Config::load(&paths);
@@ -972,4 +1000,26 @@ fn install(st: &Style, paths: &Paths, what: Vec<String>, on: bool) -> Result<i32
         println!("{} {msg}", st.green("✓"));
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn as_administrator_mom_only_looks_and_cleans_what_needs_one() {
+        let ok = |args: &[&str]| allowed_elevated(&Cli::try_parse_from(std::iter::once("mom").chain(args.iter().copied())).unwrap().cmd);
+        assert!(ok(&[]));
+        assert!(ok(&["ps", "--all"]));
+        assert!(ok(&["trash", "clean", "windows-junk", "--yes", "--elevated"]));
+        assert!(ok(&["stop", "leftovers", "--dry-run"]));
+        assert!(ok(&["rules", "show"]));
+        assert!(ok(&["tidy", "--json"]));
+        assert!(!ok(&["stop", "leftovers", "--yes"]));
+        assert!(!ok(&["tidy", "--apply"]));
+        assert!(!ok(&["undo"]));
+        assert!(!ok(&["install", "all"]));
+        assert!(!ok(&["rules", "install", "claude"]));
+        assert!(!ok(&["hook", "claude", "stop"]));
+    }
 }

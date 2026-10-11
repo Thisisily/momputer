@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration "installers": the setup program and the MSI, built from the
+     already signed momputer.exe and mom.exe. The release workflow uploads them as one ZIP. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="momputer_${version}_x64-setup.exe" product-name="momputer">
+      <authenticode-sign />
+    </pe-file>
+    <msi-file path="momputer_${version}_x64_en-US.msi">
+      <!-- Signed in the first request; checked, not signed again. -->
+      <pe-file path="**/momputer.exe" product-name="momputer">
+        <authenticode-verify />
+      </pe-file>
+      <pe-file path="**/mom.exe" product-name="momputer">
+        <authenticode-verify />
+      </pe-file>
+      <authenticode-sign />
+    </msi-file>
+  </zip-file>
+</artifact-configuration>

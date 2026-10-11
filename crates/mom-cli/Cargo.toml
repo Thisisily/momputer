@@ -21,3 +21,7 @@ mom-core.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
+
+[target.'cfg(windows)'.build-dependencies]
+# Gives mom.exe a name, version and icon (what Windows and code signing show).
+tauri-winres = "0.3"

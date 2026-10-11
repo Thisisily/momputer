@@ -61,7 +61,7 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
         <li>old <code>node_modules</code> and <code>target</code> folders in projects you stopped working on</li>
         <li>npm, bun, pip, uv, cargo and other developer caches</li>
         <li>browser caches (and the same caches inside Cursor, VS Code, Slack and other apps built like browsers), crash dumps, old installers in Downloads, and the Recycle Bin</li>
-        <li>things only an administrator can delete: Windows Update's leftover downloads, old error reports, installer folders at the root of C:, older driver installers, old app backups and crash dumps in ProgramData. Mom itself never runs as administrator: when you press the button, Windows asks first, and an elevated copy of the <code>mom</code> command cleans exactly what it finds under the same rules</li>
+        <li>things only an administrator can delete: Windows Update's leftover downloads, old error reports, installer folders at the root of C:, older driver installers, old app backups and crash dumps in ProgramData. Mom itself never runs as administrator: when you press the button, Windows asks first, and an elevated copy of the <code>mom</code> command cleans exactly what it finds under the same rules. This only works when momputer is installed for all users, so that nothing running as you could have swapped that copy</li>
         <li><b>forgotten app data</b>: big folders of apps you uninstalled, an app's older versions, and models and games you haven't opened in ages. Mom guesses which app a folder belongs to, so these move to your archive drive instead of being deleted, and keys, passwords, wallets, browser profiles and messages are never offered</li>
       </ul>
       <p>Tap any of them and she lists every folder that goes, every one that stays and why, and tells you what the button does (deleted for good, Recycle Bin, or the tool's own prune) <b>before</b> you press it. Untick anything you want to keep, or tick something she'd keep just because it's new.</p>
@@ -95,7 +95,9 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
 
 ## Install
 
-From source, for now (signed releases are coming):
+Run the installer from [Releases](https://github.com/Thisisily/momputer/releases). It installs for all users, in Program Files, so Windows asks for an administrator once, and the clean-ups that need an administrator only work from a copy installed this way. Releases are built by GitHub Actions; signing through [SignPath Foundation](#code-signing-policy) is being set up, and until it is, Windows will warn that the installer is from an unknown publisher.
+
+Or build it from source:
 
 ```powershell
 git clone https://github.com/thisisily/momputer
@@ -109,6 +111,8 @@ You need Rust 1.90+, the MSVC build tools and WebView2 (already on Windows 11). 
 cargo build --release -p mom-cli -p momputer
 .\target\release\momputer.exe
 ```
+
+Run from a folder of your own like this, it all works except the clean-ups that need an administrator: mom won't ask for one from a folder anything running as you could change.
 
 Mom lives in the tray. Left-click her to show or hide the widget, and right-click for "Clean up leftovers". Closing the widget just tucks it away. Drag it by mom or any empty spot.
 
@@ -187,6 +191,7 @@ Listing the machine costs a single `NtQuerySystemInformation` call. Only runtime
 - Touch anything you marked "keep", anything matching `protect` in the config, or anything started with `MOMPUTER_KEEP=1`.
 - Edit an agent's settings file without backing it up first (`~/.momputer/backups`), or at all if she can't parse it.
 - Send anything anywhere. momputer has no network code.
+- Hand your "yes" to the wrong program. Before Windows asks you to let `mom` run as administrator, she checks that nothing running as you could have swapped it: it has to be installed for all users (in Program Files), and when momputer is signed, `mom.exe` has to carry the very same signature. Run as administrator, `mom` only looks, and cleans the spots that need one.
 
 ## Settings
 
@@ -231,9 +236,20 @@ tempMinAgeDays = 7            # other temp files
 
 `cargo test` runs the core tests, including one that rebuilds a real cluttered folder and checks mom grades it F, tidies it, and puts everything back.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+- Committers and reviewers: [Thisisily](https://github.com/Thisisily)
+- Approvers: [Thisisily](https://github.com/Thisisily)
+
+Every release is built from this repository by GitHub Actions ([`release.yml`](.github/workflows/release.yml)) and signed only after an approver approves it in SignPath. What gets signed is `momputer.exe`, `mom.exe` and the two installers, all built from the source here ([artifact configurations](.signpath/artifact-configurations)). How it's set up: [docs/signing.md](docs/signing.md).
+
+Privacy policy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+
 ## Roadmap
 
-- Signed releases and winget.
+- winget.
 - macOS and Linux (the core is mostly portable already).
 - An MCP server, so agents can ask mom directly.
 - More mom: bedtime (a nightly tidy-up), screen time for agents, a nudge when a disk is nearly full.
