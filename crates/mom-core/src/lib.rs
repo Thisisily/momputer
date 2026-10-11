@@ -10,6 +10,7 @@ pub mod archive;
 pub mod classify;
 pub mod codex;
 pub mod config;
+pub mod elevate;
 pub mod containers;
 pub mod health;
 pub mod hooks;

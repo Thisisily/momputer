@@ -242,7 +242,7 @@ mod tests {
         write(&r.join("Nimbus Studio").join("data.bin"), 900, 400); // uninstalled: ticked
         write(&r.join("Figma").join("cache.bin"), 800, 400); // installed, a year untouched: offered
         write(&r.join("Figma Recent").join("x.bin"), 800, 30); // used lately: nothing to say
-        write(&r.join("Coinomi").join("wallet.dat"), 700, 900); // a wallet: never
+        write(&r.join("Coinpocket").join("wallet.dat"), 700, 900); // a wallet: never
         write(&low.join("Pixel Forge").join("Swordship").join("save.dat"), 600, 400); // saves: only offered
         write(&l.join("Slack").join("Update.exe"), 10, 400); // a Squirrel install, not data
         write(&l.join("Slack").join("app-4.40.0").join("slack.exe"), 600, 400);
@@ -261,7 +261,7 @@ mod tests {
         assert_eq!(state("Swordship"), (false, true));
         assert_eq!(state("AndroidStudio2021.2"), (true, false));
         assert_eq!(state("tiny-7b"), (false, true));
-        for never in ["Coinomi", "Figma Recent", "Slack", "AndroidStudio2024.2"] {
+        for never in ["Coinpocket", "Figma Recent", "Slack", "AndroidStudio2024.2"] {
             assert!(!f.cands.iter().any(|c| c.name.contains(never)), "{never} shouldn't be offered");
         }
         std::fs::remove_dir_all(&root).unwrap();
@@ -271,6 +271,6 @@ mod tests {
     fn versions_compare_as_numbers() {
         assert!(version_of("PyCharm2024.2") > version_of("PyCharm2023.10"));
         assert!(version_of("AndroidStudio2022.3") > version_of("AndroidStudio4.2"));
-        assert!(precious("Ledger Live") && precious("atomic") && precious(".ssh") && precious("Coinomi") && !precious("Genymobile"));
+        assert!(precious("Ledger Live") && precious("atomic") && precious(".ssh") && precious("Coinpocket") && !precious("Genymobile"));
     }
 }

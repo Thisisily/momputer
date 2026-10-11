@@ -32,6 +32,9 @@
     archive: null, // where old conversations go, and what's been moved there
     bringing: null, // the moved folder being brought back
     deleteConfirm: null, // the moved folder whose Delete was pressed once
+    uninstallConfirm: null, // the app whose Uninstall was pressed once
+    uninstalled: new Set(), // apps whose uninstaller was opened
+    showAllUnused: false,
     showAllStartup: false,
     roomPaths: [],
     rooms: {},
@@ -80,6 +83,14 @@
     if (s < 3600) return `${Math.floor(s / 60)}m`;
     if (s < 172800) return `${Math.floor(s / 3600)}h`;
     return `${Math.floor(s / 86400)}d`;
+  }
+
+  /** "2 years", "a year", or days under that. */
+  function yearsAgo(s) {
+    const days = Math.max(0, s) / 86400;
+    if (days >= 730) return `${Math.floor(days / 365)} years`;
+    if (days >= 365) return "a year";
+    return ageLong(Math.max(0, s));
   }
 
   function ageLong(s) {
@@ -577,10 +588,33 @@
       )
       .join("");
     const more = h.startup.length > 6 ? `<button class="quiet-toggle" data-act="toggle-startup">${state.showAllStartup ? "Show fewer" : `Show all ${h.startup.length}`}</button>` : "";
+    const unusedApps = h.unusedApps || [];
+    const now = Date.now() / 1000;
+    const appList = (state.showAllUnused ? unusedApps : unusedApps.slice(0, 8))
+      .map((a) => {
+        const sure = state.uninstallConfirm === a.key;
+        const opened = state.uninstalled.has(a.key);
+        return `<div class="item stays moved" id="un-${hash(a.key)}"><span class="led"></span>
+          <span class="item-main"><span class="item-name" title="${esc(a.name)}">${esc(a.name)}</span>
+          <span class="item-sub">${esc([a.size ? bytes(a.size) : "", `not opened in ${yearsAgo(now - a.lastUsed)}`, a.publisher].filter(Boolean).join(" · "))}</span></span>
+          <span class="moved-acts"><button class="mini-btn wide${sure ? " sure" : ""}" data-act="uninstall-app" data-key="${esc(a.key)}" ${opened ? "disabled" : ""}>${opened ? "Opened" : sure ? "Sure? Uninstall" : "Uninstall"}</button></span></div>`;
+      })
+      .join("");
+    const moreApps = unusedApps.length > 8 ? `<button class="quiet-toggle" data-act="toggle-unused">${state.showAllUnused ? "Show fewer" : `Show all ${unusedApps.length}`}</button>` : "";
     return (
       section("pc", "Your PC", `up ${ageLong(h.uptimeSecs)}`, drives + memory) +
       (checks ? section("checks", "Checkups", "", checks) : "") +
       (top ? section("top", "Using the most memory", "", top) : "") +
+      (unusedApps.length
+        ? section(
+            "unused",
+            "Apps you haven't opened in a year",
+            "",
+            appList +
+              moreApps +
+              `<p class="group-note">Uninstall opens the app's own uninstaller, which may ask what to keep. Apps you use from a terminal or a right-click menu, runtimes, drivers, wallets and messengers are never listed.</p>`
+          )
+        : "") +
       (h.startup.length
         ? section(
             "startup",
@@ -601,7 +635,7 @@
     const of = s.exact ? `of ${bytes(s.totalBytes)}` : bytes(s.totalBytes);
     return `<div class="row spot-row" id="spot-${s.id}" role="button" tabindex="0" data-act="open-spot" data-spot="${esc(s.id)}" data-led="${led}"
         aria-label="${esc(`${s.label}: ${size} can go. Show details`)}">
-      <span class="row-name">${esc(s.label)}${s.safety === "review" ? ` <span class="badge look">look first</span>` : ""}</span>
+      <span class="row-name">${esc(s.label)}${s.safety === "review" ? ` <span class="badge look">look first</span>` : ""}${s.admin ? ` <span class="badge look">admin</span>` : ""}</span>
       <div class="row-meta"><span class="why">${esc(s.note || s.what)}</span></div>
       <div class="row-nums num"><strong>${size}</strong></div>
       <div class="row-nums2 num">${of}</div>
@@ -814,6 +848,7 @@
     return `<div class="sheet-head">
         <div><h2 id="sheet-title">${esc(s.label)}</h2>
           <div class="pills"><span class="pill"><span class="led ${s.safety === "review" ? "red" : "green"}"></span>${s.safety === "review" ? "Look before you clear" : s.action === "move" ? "Nothing is deleted" : "Safe to clear"}</span>
+          ${s.admin ? `<span class="pill"><span class="led red"></span>Windows asks first</span>` : ""}
           <span class="pill">${ACTION_WORD[s.action] || "Deleted"}</span></div></div>
         <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button>
       </div>
@@ -826,6 +861,7 @@
       }
       <div class="callout"><h3>What the button does</h3><p>${esc(effectNow(s, p))}</p></div>
       ${s.action === "move" ? archiveBox(s.id) : ""}
+      ${s.admin ? `<p class="list-hint">Only an administrator can clean this, so when you press the button Windows asks whether mom may make changes. Mom itself never runs as administrator.</p>` : ""}
       ${s.note ? `<p class="sheet-note"><span class="led red"></span>${esc(s.note)}</p>` : ""}
       ${
         p.goes.length
@@ -1452,6 +1488,28 @@
         state.showHelpers = !state.showHelpers;
         render();
         break;
+      case "toggle-unused":
+        state.showAllUnused = !state.showAllUnused;
+        render();
+        break;
+      case "uninstall-app": {
+        const key = el.dataset.key;
+        clearTimeout(cleanTimer);
+        if (state.uninstallConfirm !== key) {
+          state.uninstallConfirm = key;
+          render();
+          cleanTimer = setTimeout(() => {
+            state.uninstallConfirm = null;
+            render();
+          }, 6000);
+          break;
+        }
+        state.uninstallConfirm = null;
+        if (await act(invoke("uninstall_app", { key }))) state.uninstalled.add(key);
+        render();
+        setTimeout(() => loadHealth(true), 60000);
+        break;
+      }
       case "toggle-startup":
         state.showAllStartup = !state.showAllStartup;
         render();

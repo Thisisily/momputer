@@ -61,6 +61,7 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
         <li>old <code>node_modules</code> and <code>target</code> folders in projects you stopped working on</li>
         <li>npm, bun, pip, uv, cargo and other developer caches</li>
         <li>browser caches (and the same caches inside Cursor, VS Code, Slack and other apps built like browsers), crash dumps, old installers in Downloads, and the Recycle Bin</li>
+        <li>things only an administrator can delete: Windows Update's leftover downloads, old error reports, installer folders at the root of C:, older driver installers, old app backups and crash dumps in ProgramData. Mom itself never runs as administrator: when you press the button, Windows asks first, and an elevated copy of the <code>mom</code> command cleans exactly what it finds under the same rules</li>
         <li><b>forgotten app data</b>: big folders of apps you uninstalled, an app's older versions, and models and games you haven't opened in ages. Mom guesses which app a folder belongs to, so these move to your archive drive instead of being deleted, and keys, passwords, wallets, browser profiles and messages are never offered</li>
       </ul>
       <p>Tap any of them and she lists every folder that goes, every one that stays and why, and tells you what the button does (deleted for good, Recycle Bin, or the tool's own prune) <b>before</b> you press it. Untick anything you want to keep, or tick something she'd keep just because it's new.</p>
@@ -72,7 +73,7 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
     <td>
       <h3>A checkup for your PC</h3>
       <p>Free space on every drive as a dot meter that turns red when it's nearly full, how much memory is in use and by whom, how long since you restarted, whether Windows is waiting to finish an update, whether Storage Sense is on, and every app that starts with Windows.</p>
-      <p>Each tip has a button straight to the right Windows Settings page.</p>
+      <p>Each tip has a button straight to the right Windows Settings page. Apps you haven't opened in a year (judged by when Windows saw you start them and when their data last changed) are listed with an Uninstall button that opens their own uninstaller. Runtimes, drivers, terminal tools, wallets and messengers are never listed.</p>
     </td>
   </tr>
   <tr>

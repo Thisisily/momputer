@@ -23,6 +23,8 @@ enum Spot {
     Shaders,
     Games,
     Dev,
+    Windows,
+    AdminApps,
 }
 
 impl Spot {
@@ -36,6 +38,8 @@ impl Spot {
             "shader-cache" => Spot::Shaders,
             "game-junk" => Spot::Games,
             "dev-leftovers" => Spot::Dev,
+            "windows-junk" => Spot::Windows,
+            "admin-leftovers" => Spot::AdminApps,
             _ => return None,
         })
     }
@@ -625,6 +629,57 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
         src(home.join(".gradle").join("wrapper").join("dists"), ("Gradle version", "Gradle versions projects downloaded"), any).named(|_, rel| format!("Gradle · {}", rel[0])),
     ]));
 
+    // ---- Things only an administrator can delete (mom asks Windows for permission to clean them).
+    let (win, data, root) = (&p.windows, &p.program_data, &p.system_drive);
+    let wer = data.join("Microsoft").join("Windows").join("WER");
+    list.push(agent("Windows Update", Spot::Windows, vec![win.join("SoftwareDistribution").join("Download")]).junk(vec![src(
+        win.join("SoftwareDistribution").join("Download"),
+        ("Downloaded update", "downloaded updates that are installed already"),
+        any,
+    )
+    .named(|_, rel| format!("update files {}", rel[0].chars().take(12).collect::<String>()))]));
+    list.push(agent("Windows", Spot::Windows, vec![wer.clone()]).junk(vec![
+        src(wer.join("ReportArchive"), ("Error report", "error reports"), any),
+        src(wer.join("ReportQueue"), ("Error report", "error reports"), any),
+    ]));
+    list.push(agent("Installers", Spot::Windows, vec![root.join("Windows10Upgrade"), root.join("AMD"), root.join("adobeTemp")]).junk(vec![src(
+        root.clone(),
+        ("Installer leftovers", "folders installers left at the root of the drive"),
+        |n| n == "Windows10Upgrade" || n == "AMD" || n == "adobeTemp" || n.ends_with("-install-tmp"),
+    )
+    .named(|_, rel| format!("C:\\{}", rel[0]))]));
+    let nvidia = data.join("NVIDIA Corporation");
+    list.push(agent("NVIDIA", Spot::AdminApps, vec![nvidia.clone()]).junk(vec![
+        src(nvidia.join("NVIDIA app").join("UpdateFramework").join("ota-artifacts").join("grd"), ("Driver installer", "older driver installers"), any)
+            .keep_newest(1)
+            .named(|_, rel| format!("driver installer {}", rel[0])),
+        src(nvidia.join("Downloader"), ("Downloaded installer", "older downloaded installers"), any).keep_newest(1),
+    ]));
+    let epic = p.program_files_x86.join("Epic Games").join("Launcher").join("VaultCache");
+    list.push(agent("Epic Games", Spot::AdminApps, vec![epic.clone()]).junk(vec![src(epic, ("Downloaded sample", "downloaded samples (the Launcher gets them again if asked)"), any)]));
+    let glass = data.join("GlassWire");
+    list.push(agent("GlassWire", Spot::AdminApps, vec![glass.clone()]).junk(vec![
+        src(glass.clone(), ("Old backup", "old backups"), |n| n.contains(".backup_")),
+        src(glass.join("service-full").join("log"), ("Log", "logs"), any),
+    ]));
+    let razer = data.join("Razer");
+    list.push(agent("Razer", Spot::AdminApps, vec![razer.clone()]).junk(vec![
+        src(razer.join("RazerCortex").join("Log"), ("Crash dump", "crash dumps"), |n| n.to_ascii_lowercase().ends_with(".dmp")).files(),
+        src(razer.join("Razer Central").join("Logs"), ("Log", "logs"), any),
+    ]));
+    list.push(agent("Driver Booster", Spot::AdminApps, vec![data.join("IObit")]).junk(vec![src(
+        data.join("IObit").join("Driver Booster").join("Download"),
+        ("Downloaded driver", "downloaded drivers"),
+        any,
+    )]));
+    list.push(agent("Debuggers", Spot::AdminApps, vec![data.join("Dbg")]).junk(vec![src(data.join("Dbg"), ("Symbol cache", "symbol caches"), any)]));
+    list.push(agent("Logitech G HUB", Spot::AdminApps, vec![data.join("LGHUB")]).junk(vec![src(
+        data.join("LGHUB").join("depots"),
+        ("Older version", "older versions"),
+        any,
+    )
+    .keep_newest(1)]));
+
     // Downloaded updates (apps built with electron-builder keep the last installer in <app>-updater).
     let updaters: Vec<PathBuf> = subdirs(local, &[]).into_iter().filter(|d| name_of(d).ends_with("-updater")).collect();
     list.push(
@@ -660,7 +715,7 @@ fn claude_chat(ctx: &TrashCtx, _root: &Path, rel: &[String]) -> String {
 pub(super) fn homes(ctx: &TrashCtx) -> Vec<PathBuf> {
     agents(ctx)
         .into_iter()
-        .filter(|a| !matches!(a.spot, Spot::Shaders | Spot::Games | Spot::Dev))
+        .filter(|a| !matches!(a.spot, Spot::Shaders | Spot::Games | Spot::Dev | Spot::Windows | Spot::AdminApps))
         .flat_map(|a| a.homes.into_iter().chain(a.chats.into_iter().map(|c| c.root)))
         .filter(|h| h.exists())
         .collect()
@@ -837,6 +892,8 @@ pub(super) fn untouched(id: &str) -> &'static str {
         "shader-cache" => "Games and apps keep working: a shader one needs is made again the first time it's used.",
         "game-junk" => "Saves and settings aren't touched.",
         "dev-leftovers" => "Your projects and tools aren't touched; anything needed is downloaded or built again.",
+        "windows-junk" => "Windows and your programs keep working; nothing they still need is in here.",
+        "admin-leftovers" => "The apps keep working: the driver, version and installer they use now stay.",
         _ => "Their chats, sessions, settings, sign-ins, skills and memory aren't touched.",
     }
 }

@@ -1348,6 +1348,15 @@ button.row-name:hover {
   color: var(--ink);
 }
 
+/* A note under a list, inside its card */
+.group-note {
+  margin: 0;
+  padding: 9px 0 11px;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-wrap: pretty;
+}
+
 /* "Bring back" on a moved conversation */
 .item.moved {
   grid-template-columns: 18px minmax(0, 1fr) auto;

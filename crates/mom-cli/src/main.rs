@@ -122,6 +122,13 @@ enum TrashCmd {
         ids: Vec<String>,
         #[arg(short, long)]
         yes: bool,
+        /// What was ticked, as JSON (a file written by the widget).
+        #[arg(long, hide = true)]
+        pick: Option<PathBuf>,
+        /// Write what happened, as JSON, here instead of printing it (for the widget, which runs
+        /// mom as an administrator for the clean-ups that need it).
+        #[arg(long, hide = true)]
+        report: Option<PathBuf>,
     },
 }
 
@@ -523,7 +530,18 @@ fn run(cli: Cli) -> Result<i32> {
                         print_spot(&st, &spot);
                     }
                 }
-                (Some(TrashCmd::Clean { ids, yes }), _) => {
+                (Some(TrashCmd::Clean { ids, yes, pick, report }), _) => {
+                    if let Some(out) = report {
+                        // The widget asked: one spot, what was ticked, no questions.
+                        let [id] = ids.as_slice() else { bail!("--report takes one spot") };
+                        let pick: Option<trash::Pick> = match pick {
+                            Some(f) => Some(serde_json::from_str(&std::fs::read_to_string(&f)?)?),
+                            None => None,
+                        };
+                        let r = trash::clean(id, &ctx, pick.as_ref());
+                        std::fs::write(&out, serde_json::to_string(&r)?)?;
+                        return Ok(0);
+                    }
                     let ids: Vec<String> = if ids.iter().any(|i| i == "all") {
                         trash::spot_ids().into_iter().filter(|i| trash::cleans_without_asking(i)).map(String::from).collect()
                     } else {
@@ -552,6 +570,11 @@ fn run(cli: Cli) -> Result<i32> {
                         println!("{}", wrap(&s.effect, 96, "  "));
                         if let Some(n) = &s.note {
                             println!("{}", st.yellow(&wrap(n, 96, "  ")));
+                        }
+                    }
+                    if let Some(s) = spots.iter().find(|s| s.admin) {
+                        if !mom_core::elevate::is_elevated() {
+                            bail!("{} needs an administrator: run this from a terminal opened with \"Run as administrator\".", s.id);
                         }
                     }
                     if !yes && !confirm("Go ahead?") {

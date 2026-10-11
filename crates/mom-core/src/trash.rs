@@ -58,6 +58,9 @@ pub struct Spot {
     pub new_bytes: u64,
     #[serde(default)]
     pub new_items: u64,
+    /// Only an administrator can clean it; Windows asks first.
+    #[serde(default)]
+    pub admin: bool,
     /// The sizes are exact. False when a tool decides what to prune (reclaimable is then an
     /// upper bound) or a folder was too big to count in full.
     pub exact: bool,
@@ -93,7 +96,7 @@ pub struct Item {
     pub reason: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanReport {
     pub id: String,
@@ -535,6 +538,30 @@ const DEFS: &[Def] = &[
         owner: None,
     },
     Def {
+        id: "windows-junk",
+        label: "Windows leftovers",
+        detail: "Update files Windows already installed, old error reports, and folders installers left on C:.",
+        what: "Windows Update keeps the files it downloaded after installing them, Windows keeps error reports \
+               about crashes, and some installers (Windows 10 Upgrade, AMD, Adobe) leave a folder at the root of C:. \
+               Cleaning these needs an administrator, so Windows asks you first.",
+        group: "windows",
+        action: "delete",
+        safety: "safe",
+        owner: None,
+    },
+    Def {
+        id: "admin-leftovers",
+        label: "Apps' leftovers that need admin",
+        detail: "Old driver installers, a launcher's sample downloads, old backups, crash dumps and logs in ProgramData.",
+        what: "Some apps keep their leftovers where only an administrator can delete them: NVIDIA's older driver \
+               installers, Epic's sample downloads, GlassWire's old backup, Razer's crash dumps, Driver Booster's \
+               downloads, the debuggers' symbol cache and G HUB's older versions. Windows asks you first.",
+        group: "windows",
+        action: "delete",
+        safety: "safe",
+        owner: None,
+    },
+    Def {
         id: "forgotten-apps",
         label: "Forgotten app data",
         detail: "Big folders of apps you uninstalled, older versions, and things untouched for a long time.",
@@ -592,7 +619,14 @@ fn def(id: &str) -> Option<&'static Def> {
 /// Spots `mom trash clean all` (and anything else that cleans without asking) may take:
 /// safe, and decided by mom rather than a tool.
 pub fn cleans_without_asking(id: &str) -> bool {
-    def(id).map(|d| d.safety == "safe" && !matches!(d.action, "tool" | "move")).unwrap_or(false)
+    def(id).map(|d| d.safety == "safe" && !matches!(d.action, "tool" | "move") && !needs_admin(d.id)).unwrap_or(false)
+}
+
+/// Spots only an administrator can clean: the app asks Windows to run `mom` elevated for them.
+const ADMIN: &[&str] = &["windows-junk", "admin-leftovers"];
+
+pub fn needs_admin(id: &str) -> bool {
+    ADMIN.contains(&id)
 }
 
 // ------------------------------------------------------------------ finding things
@@ -784,7 +818,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
     match id {
         "claude-temp" => claude::find(ctx, agent_age),
         "codex-temp" | "claude-leftovers" | "agent-leftovers" | "app-leftovers" | "cursor-worktrees" | "shader-cache" | "game-junk"
-        | "dev-leftovers" => harness::find(id, ctx, agent_age),
+        | "dev-leftovers" | "windows-junk" | "admin-leftovers" => harness::find(id, ctx, agent_age),
         "old-conversations" => harness::conversations(ctx, ctx.cfg.conversations_after_days * 86_400),
         "forgotten-apps" => forgotten::find(ctx, &harness::homes(ctx)),
         "render-temp" => {
@@ -1223,6 +1257,7 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
         kept_items: n_stay,
         new_bytes,
         new_items,
+        admin: needs_admin(def.id),
         exact,
         available: f.available,
         measured_at: ctx.now,
@@ -1306,7 +1341,8 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
              projects aren't touched (Git keeps a note of each worktree until you run `git worktree prune`).",
             count_size(n, "worktree", "worktrees", bytes)
         ),
-        "claude-leftovers" | "agent-leftovers" | "app-leftovers" | "shader-cache" | "game-junk" | "dev-leftovers" => {
+        "claude-leftovers" | "agent-leftovers" | "app-leftovers" | "shader-cache" | "game-junk" | "dev-leftovers" | "windows-junk"
+        | "admin-leftovers" => {
             if n == 0 {
                 nothing(&format!("everything they left is in use or from the last {kept}."))
             } else {
@@ -1473,7 +1509,7 @@ fn and_list(names: &[&str]) -> String {
 /// What the user ticked in a spot's two lists before cleaning it. Each list starts all ticked
 /// or all unticked (so "Tick all" also covers items too small to be listed), and `ticked` and
 /// `unticked` name the listed items changed from that. Paths as given in `Spot.items`.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Pick {
     /// Whether what would go starts ticked. "Untick all" makes it false.
@@ -1856,6 +1892,19 @@ mod tests {
         assert!(!paths.temp.join("new-c").exists());
         assert!(paths.temp.join("busy-d").exists());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn what_was_ticked_and_what_happened_travel_to_the_elevated_mom_and_back() {
+        // The app writes the pick for the administrator `mom`, which writes its report back.
+        let pick = Pick { goes: false, new: true, ticked: vec![r"C:\x".into()], unticked: vec![] };
+        let back: Pick = serde_json::from_str(&serde_json::to_string(&pick).unwrap()).unwrap();
+        assert_eq!((back.goes, back.new, back.ticked), (false, true, vec![r"C:\x".to_string()]));
+        let r = CleanReport { id: "windows-junk".into(), freed: 5, deleted: 1, skipped: 0, message: "Took out 5 B.".into() };
+        let back: CleanReport = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!((back.id.as_str(), back.freed, back.deleted, back.message.as_str()), ("windows-junk", 5, 1, "Took out 5 B."));
+        assert!(needs_admin("windows-junk") && needs_admin("admin-leftovers") && !needs_admin("old-temp"));
+        assert!(!cleans_without_asking("windows-junk"), "never cleaned without asking");
     }
 
     #[test]

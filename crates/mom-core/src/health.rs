@@ -22,6 +22,8 @@ pub struct Health {
     pub startup: Vec<StartupApp>,
     /// The six programs using the most memory, all their processes added up.
     pub top_memory: Vec<ProcMem>,
+    /// Programs nobody has opened in a year, biggest first.
+    pub unused_apps: Vec<crate::installed::App>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -111,8 +113,25 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Health {
         startup_enabled: startup.iter().filter(|s| s.enabled).count(),
         top: top_memory.first(),
     };
-    let checks = checks(&facts);
-    Health { drives, memory, uptime_secs, checks, startup, top_memory }
+    let mut checks = checks(&facts);
+    let unused_apps = crate::installed::unused(paths, table, crate::util::now_secs());
+    if !unused_apps.is_empty() {
+        let size: u64 = unused_apps.iter().map(|a| a.size).sum();
+        let names: Vec<&str> = unused_apps.iter().take(3).map(|a| a.name.as_str()).collect();
+        checks.push(Check {
+            id: "unused-apps".into(),
+            level: "tip",
+            title: format!("{} you haven't opened in a year", crate::util::plural(unused_apps.len() as u64, "app")),
+            detail: format!(
+                "{}{}. Uninstalling the ones you don't need {}; they're listed below.",
+                names.join(", "),
+                if unused_apps.len() > 3 { " and more" } else { "" },
+                if size > 0 { format!("frees about {}", crate::util::human_bytes(size)) } else { "tidies up".to_string() }
+            ),
+            action: None,
+        });
+    }
+    Health { drives, memory, uptime_secs, checks, startup, top_memory, unused_apps }
 }
 
 /// The numbers the checks are made from, so they can be tested without a real machine.
@@ -389,7 +408,7 @@ pub fn startup_apps(paths: &Paths) -> Vec<StartupApp> {
 /// Reading the registry, for other parts of mom (installed programs, say).
 #[cfg(windows)]
 pub(crate) mod reg {
-    pub(crate) use super::os::{string_values, subkeys, Hive};
+    pub(crate) use super::os::{binary_values, dword_value, string_values, subkeys, Hive};
 }
 
 #[cfg(windows)]
@@ -493,6 +512,11 @@ mod os {
     fn utf16_string(data: &[u8]) -> String {
         let units: Vec<u16> = data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
         String::from_utf16_lossy(&units)
+    }
+
+    /// A number value of a key.
+    pub fn dword_value(hive: Hive, path: &str, value: &str) -> Option<u32> {
+        Key::open(hive, path)?.dword(value)
     }
 
     /// Names of the keys inside a key.

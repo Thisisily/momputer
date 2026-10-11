@@ -17,6 +17,12 @@ pub struct Paths {
     pub appdata: PathBuf,
     /// The Downloads folder (wherever the user moved it).
     pub downloads: PathBuf,
+    /// System folders, for clean-ups that need an administrator: C:\Windows, C:\ProgramData,
+    /// C:\Program Files (x86) and the root of the system drive. Inside the test folder in tests.
+    pub windows: PathBuf,
+    pub program_data: PathBuf,
+    pub program_files_x86: PathBuf,
+    pub system_drive: PathBuf,
     /// Folders agents were told to use instead of their usual one (HERMES_HOME and the like),
     /// read from the environment once. Empty in tests, so they never reach the real ones.
     pub agent_env: Vec<(&'static str, PathBuf)>,
@@ -35,7 +41,13 @@ impl Paths {
         let local_appdata = dirs::data_local_dir().unwrap_or_else(|| home.join("AppData").join("Local"));
         let appdata = dirs::data_dir().unwrap_or_else(|| home.join("AppData").join("Roaming"));
         let downloads = dirs::download_dir().unwrap_or_else(|| home.join("Downloads"));
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        let system_drive = PathBuf::from(format!("{}\\", drive.trim_end_matches('\\')));
         Paths {
+            windows: env_path("SystemRoot").unwrap_or_else(|| system_drive.join("Windows")),
+            program_data: env_path("ProgramData").unwrap_or_else(|| system_drive.join("ProgramData")),
+            program_files_x86: env_path("ProgramFiles(x86)").unwrap_or_else(|| system_drive.join("Program Files (x86)")),
+            system_drive,
             home,
             mom,
             temp: std::env::temp_dir(),
@@ -55,6 +67,10 @@ impl Paths {
             local_appdata: root.join("local"),
             appdata: root.join("roaming"),
             downloads: root.join("home").join("Downloads"),
+            windows: root.join("windows"),
+            program_data: root.join("programdata"),
+            program_files_x86: root.join("program files (x86)"),
+            system_drive: root.join("c"),
             agent_env: vec![],
         }
     }

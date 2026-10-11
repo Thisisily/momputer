@@ -209,6 +209,17 @@
       ],
     }),
     spot({
+      id: "windows-junk", label: "Windows leftovers", group: "windows", action: "delete", safety: "safe", admin: true,
+      what: "Windows Update keeps the files it downloaded after installing them, Windows keeps error reports about crashes, and some installers leave a folder at the root of C:. Cleaning these needs an administrator, so Windows asks you first.",
+      effect: "Deletes 3 items (1.9 GB) that Windows Update, Windows and Installers left behind and nobody has touched in 67 days, permanently (they don't go to the Recycle Bin): downloaded updates that are installed already, error reports and folders installers left at the root of the drive. Windows and your programs keep working; nothing they still need is in here. Anything newer, or in use, stays.",
+      totalBytes: 1.9 * GB, reclaimableBytes: 1.9 * GB, reclaimableItems: 3, keptItems: 0,
+      items: [
+        item("Windows Update · update files 8d2a1c0f9e7b", "Downloaded update, 412 files", 1.2 * GB, true, "Untouched for 88 days", 88 * D2, 412),
+        item("Installers · C:\\Windows10Upgrade", "Installer leftovers, 28 files", 600 * MB, true, "Untouched for 1200 days", 1200 * D2, 28),
+        item("Windows · AppCrash_atlas.exe_1f2e", "Error report", 100 * MB, true, "Untouched for 90 days", 90 * D2, 3),
+      ],
+    }),
+    spot({
       id: "forgotten-apps", label: "Forgotten app data", group: "personal", action: "move", safety: "review",
       what: "Big folders apps keep in AppData and your home folder: the data of apps you've since uninstalled, folders of an app's older versions, and things nobody has touched in a long time. Mom guesses which app each belongs to, so nothing here is deleted: it moves to your archive drive with a link left behind. Keys, passwords, wallets and browser profiles are never offered.",
       effect: "Moves 4 folders (6.2 GB) to a drive you choose, with a link left in each one's place: data of apps you've uninstalled. Nothing is deleted. Bring back puts any of them back, and once you're sure you don't need one, Delete for good removes it from there. Mom guesses which app a folder belongs to, so look through the list first.",
@@ -290,6 +301,7 @@
     uptimeSecs: 9 * D2 + 4 * 3600,
     checks: [
       { id: "restart", level: "tip", title: "Up 9 days", detail: "A restart clears out memory leaks and finishes updates.", action: null },
+      { id: "unused-apps", level: "tip", title: "3 apps you haven't opened in a year", detail: "Nimbus Notes 10.3, Atlas Recorder, Retro Racer. Uninstalling the ones you don't need frees about 1.3 GB; they're listed below.", action: null },
       { id: "storage-sense", level: "tip", title: "Storage Sense is off", detail: "Windows can empty old temp files and the Recycle Bin by itself.", action: { label: "Turn it on", url: "ms-settings:storagepolicies" } },
       { id: "startup", level: "tip", title: "11 apps start with Windows", detail: "Each one slows down logging in.", action: { label: "Startup apps", url: "ms-settings:startupapps" } },
       { id: "drive-C", level: "ok", title: "Drive C: has room", detail: "41 GB free of 476 GB.", action: null },
@@ -303,6 +315,11 @@
       { name: "Spotify", command: "Spotify.exe --autostart", location: "Run (you)", enabled: true },
       { name: "Logi Options+", command: "logioptionsplus_agent.exe", location: "Run (all users)", enabled: true },
       { name: "Notion", command: "Notion.lnk", location: "Startup folder", enabled: true },
+    ],
+    unusedApps: [
+      { key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\nimbus-notes", name: "Nimbus Notes 10.3", publisher: "Nimbus Labs", version: "10.3", size: 915 * MB, lastUsed: now - 1703 * D2 },
+      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{AtlasRecorder}", name: "Atlas Recorder", publisher: "Atlas", version: "2.1", size: 400 * MB, lastUsed: now - 1067 * D2 },
+      { key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\retro-racer", name: "Retro Racer", publisher: "Pixel Forge", version: "1.0", size: 0, lastUsed: now - 2081 * D2 },
     ],
     topMemory: [
       { name: "chrome.exe", mem: 5.1 * GB, count: 38 },
@@ -458,6 +475,7 @@
       archive.moved = archive.moved.filter((x) => x.from !== from);
       return `Deleted ${m.name} for good.`;
     },
+    uninstall_app: async () => (await wait(200), "Atlas Recorder's uninstaller is open. Follow it to the end."),
     get_health: async () => (await wait(150), JSON.parse(JSON.stringify(health))),
     room_paths: () => [room.path],
     get_rooms: () => [room],

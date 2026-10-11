@@ -541,6 +541,9 @@ async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: S
     let s = s.inner().clone();
     let s2 = s.clone();
     let report = tauri::async_runtime::spawn_blocking(move || {
+        if trash::needs_admin(&id) && !mom_core::elevate::is_elevated() {
+            return clean_as_admin(&s, &id, pick.as_ref());
+        }
         let cfg = s.cfg();
         let table = s.sampler.lk().sample();
         let ctx = trash::TrashCtx::new(&s.paths, &cfg, &table);
@@ -554,6 +557,36 @@ async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: S
     .map_err(err)?;
     measure_trash_now(app, s2, Some(report.id.clone()));
     Ok(report)
+}
+
+/// Cleans a spot only an administrator can: Windows asks the person, then `mom` (next to the
+/// app) runs elevated, cleans exactly what it finds itself under the usual rules, and writes
+/// what happened to a file this reads back.
+fn clean_as_admin(s: &Shared, id: &str, pick: Option<&trash::Pick>) -> trash::CleanReport {
+    let failed = |message: String| trash::CleanReport { id: id.to_string(), message, ..Default::default() };
+    let Some(mom) = std::env::current_exe().ok().map(|e| e.with_file_name("mom.exe")).filter(|m| m.is_file()) else {
+        return failed("mom.exe isn't next to the app, so it can't clean this as an administrator.".into());
+    };
+    let dir = s.paths.state_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let report = dir.join(format!("admin-clean-{nonce}.json"));
+    let picked = dir.join(format!("admin-pick-{nonce}.json"));
+    let mut args = format!("trash clean {id} --yes --report \"{}\"", report.display());
+    if let Some(p) = pick {
+        if std::fs::write(&picked, serde_json::to_string(p).unwrap_or_default()).is_ok() {
+            args.push_str(&format!(" --pick \"{}\"", picked.display()));
+        }
+    }
+    let ran = mom_core::elevate::run_as_admin(&mom, &args);
+    let r = std::fs::read_to_string(&report).ok().and_then(|t| serde_json::from_str::<trash::CleanReport>(&t).ok());
+    let _ = std::fs::remove_file(&report);
+    let _ = std::fs::remove_file(&picked);
+    match (ran, r) {
+        (_, Some(r)) => r,
+        (Err(why), None) => failed(why),
+        (Ok(code), None) => failed(format!("The administrator clean-up stopped without saying how it went (code {code}).")),
+    }
 }
 
 /// Where old conversations go, how much room is left there, and what's been moved.
@@ -628,6 +661,14 @@ async fn delete_moved(from: String, app: AppHandle, s: State<'_, S>) -> Res<Stri
     s2.note(format!("Deleted {} from the archive.", m.name));
     measure_trash_now(app, s2, None);
     Ok(format!("Deleted {} ({}) for good.", m.name, human_bytes(m.bytes)))
+}
+
+/// Opens a program's own uninstaller, named by its uninstall entry.
+#[tauri::command(async)]
+fn uninstall_app(key: String) -> Res<String> {
+    let r = mom_core::installed::uninstall(&key);
+    mom_core::installed::forget_unused();
+    r
 }
 
 /// Disks, memory, uptime, startup apps and the checkups built from them.
@@ -932,6 +973,7 @@ fn main() {
             choose_archive_dir,
             bring_back,
             delete_moved,
+            uninstall_app,
             get_health,
             get_rooms,
             room_paths,
