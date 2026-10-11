@@ -28,6 +28,20 @@ pub struct Paths {
     pub agent_env: Vec<(&'static str, PathBuf)>,
 }
 
+/// Where Windows is, as Windows says (C:\Windows).
+fn windows_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        let mut buf = [0u16; 260];
+        // SAFETY: the buffer and its length are ours.
+        let n = unsafe { windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+        if n > 0 && n < buf.len() {
+            return PathBuf::from(String::from_utf16_lossy(&buf[..n]));
+        }
+    }
+    PathBuf::from(r"C:\Windows")
+}
+
 /// Environment variables that move an agent's folder.
 const AGENT_ENV: &[&str] = &["HERMES_HOME", "OPENCLAW_STATE_DIR", "PI_CODING_AGENT_DIR", "XDG_DATA_HOME"];
 
@@ -41,12 +55,13 @@ impl Paths {
         let local_appdata = dirs::data_local_dir().unwrap_or_else(|| home.join("AppData").join("Local"));
         let appdata = dirs::data_dir().unwrap_or_else(|| home.join("AppData").join("Roaming"));
         let downloads = dirs::download_dir().unwrap_or_else(|| home.join("Downloads"));
-        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
-        let system_drive = PathBuf::from(format!("{}\\", drive.trim_end_matches('\\')));
+        // System folders from Windows itself, not from environment variables anyone can set.
+        let windows = windows_dir();
+        let system_drive = windows.ancestors().last().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("C:\\"));
         Paths {
-            windows: env_path("SystemRoot").unwrap_or_else(|| system_drive.join("Windows")),
-            program_data: env_path("ProgramData").unwrap_or_else(|| system_drive.join("ProgramData")),
-            program_files_x86: env_path("ProgramFiles(x86)").unwrap_or_else(|| system_drive.join("Program Files (x86)")),
+            program_data: system_drive.join("ProgramData"),
+            program_files_x86: system_drive.join("Program Files (x86)"),
+            windows,
             system_drive,
             home,
             mom,

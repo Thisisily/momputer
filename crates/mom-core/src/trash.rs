@@ -19,7 +19,7 @@ use crate::config::{Config, TrashConfig};
 use crate::paths::Paths;
 use crate::procs::ProcTable;
 use crate::util::{human_age_long, human_bytes, mtime_secs, norm_path, now_secs, plural};
-use walk::{remove_all, tally, tally_many, Tally};
+use walk::{remove_all, remove_without_following, tally, tally_many, Tally};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -1542,6 +1542,12 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         return r;
     };
     let pick = pick.filter(|p| !p.is_default());
+    // As administrator, mom only cleans what needs one. Your own files are cleaned as you.
+    let elevated = crate::elevate::is_elevated();
+    if elevated && !needs_admin(id) {
+        r.message = "Run this as yourself, not as administrator: it cleans your own files.".into();
+        return r;
+    }
     match def.action {
         "tool" => return run_tool(id, ctx, r),
         "empty-bin" if pick.is_none() => return bin::empty(ctx, r),
@@ -1559,6 +1565,14 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     }
     let gone: Vec<bool> = if def.action == "recycle" {
         chosen.iter().map(|c| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok())).collect()
+    } else if elevated {
+        // As administrator: only where nobody else could have swapped a folder for a link, and
+        // one at a time, never following one.
+        chosen.iter().map(|c| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_ok() && remove_without_following(t))).collect()
+    } else if needs_admin(id) {
+        // As you: what's in folders anyone can change is yours to clean anyway. The rest waits
+        // for the administrator run.
+        chosen.iter().map(|c| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_err() && remove_without_following(t))).collect()
     } else {
         // Everything at once (much faster than one by one), then sorted back out per item.
         let targets: Vec<PathBuf> = chosen.iter().flat_map(|c| c.targets.iter().cloned()).collect();
@@ -1650,6 +1664,23 @@ fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport) -> CleanRep
     r
 }
 
+/// What cleaning a spot would take right now: each item's paths and size. The app checks these
+/// afterwards to tell what an administrator clean-up did, so the elevated `mom` never has to
+/// write anything back.
+pub fn plan(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> Vec<(Vec<PathBuf>, u64)> {
+    let Some(def) = def(id) else { return vec![] };
+    if def.action == "tool" {
+        return vec![];
+    }
+    let f = find(id, ctx);
+    choose(&f, pick.filter(|p| !p.is_default())).into_iter().map(|c| (c.targets.clone(), c.bytes)).collect()
+}
+
+/// The sentence for a clean-up's result.
+pub fn result_message(id: &str, r: &CleanReport) -> String {
+    def(id).map(|d| cleaned_message(d, r)).unwrap_or_default()
+}
+
 fn cleaned_message(def: &Def, r: &CleanReport) -> String {
     let mut msg = if r.deleted == 0 {
         "Already spotless.".to_string()
@@ -1666,7 +1697,12 @@ fn cleaned_message(def: &Def, r: &CleanReport) -> String {
         }
     };
     if r.skipped > 0 {
-        msg.push_str(&format!(" {} stayed: in use, or changed since mom looked.", plural(r.skipped, "item")));
+        let why = if needs_admin(def.id) {
+            "in use, changed since mom looked, or in a folder other users can change"
+        } else {
+            "in use, or changed since mom looked"
+        };
+        msg.push_str(&format!(" {} stayed: {why}.", plural(r.skipped, "item")));
     }
     msg
 }
@@ -1895,16 +1931,16 @@ mod tests {
     }
 
     #[test]
-    fn what_was_ticked_and_what_happened_travel_to_the_elevated_mom_and_back() {
-        // The app writes the pick for the administrator `mom`, which writes its report back.
+    fn what_was_ticked_travels_to_the_elevated_mom_which_only_cleans_admin_spots() {
+        // The app hands the administrator `mom` what was ticked, as hex on its command line.
         let pick = Pick { goes: false, new: true, ticked: vec![r"C:\x".into()], unticked: vec![] };
-        let back: Pick = serde_json::from_str(&serde_json::to_string(&pick).unwrap()).unwrap();
+        let hex = crate::elevate::to_hex(&serde_json::to_string(&pick).unwrap());
+        let back: Pick = serde_json::from_str(&crate::elevate::from_hex(&hex).unwrap()).unwrap();
         assert_eq!((back.goes, back.new, back.ticked), (false, true, vec![r"C:\x".to_string()]));
-        let r = CleanReport { id: "windows-junk".into(), freed: 5, deleted: 1, skipped: 0, message: "Took out 5 B.".into() };
-        let back: CleanReport = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
-        assert_eq!((back.id.as_str(), back.freed, back.deleted, back.message.as_str()), ("windows-junk", 5, 1, "Took out 5 B."));
         assert!(needs_admin("windows-junk") && needs_admin("admin-leftovers") && !needs_admin("old-temp"));
         assert!(!cleans_without_asking("windows-junk"), "never cleaned without asking");
+        let r = CleanReport { id: "windows-junk".into(), freed: 5, deleted: 1, skipped: 2, message: String::new() };
+        assert!(result_message("windows-junk", &r).contains("a folder other users can change"), "{}", result_message("windows-junk", &r));
     }
 
     #[test]

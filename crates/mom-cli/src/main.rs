@@ -122,13 +122,13 @@ enum TrashCmd {
         ids: Vec<String>,
         #[arg(short, long)]
         yes: bool,
-        /// What was ticked, as JSON (a file written by the widget).
+        /// Run by the widget as administrator for the clean-ups that need one: no questions, no
+        /// output, nothing written but the deleting. The widget sees what's gone by itself.
         #[arg(long, hide = true)]
-        pick: Option<PathBuf>,
-        /// Write what happened, as JSON, here instead of printing it (for the widget, which runs
-        /// mom as an administrator for the clean-ups that need it).
+        elevated: bool,
+        /// What was ticked, as hex-encoded JSON.
         #[arg(long, hide = true)]
-        report: Option<PathBuf>,
+        pick_hex: Option<String>,
     },
 }
 
@@ -530,16 +530,18 @@ fn run(cli: Cli) -> Result<i32> {
                         print_spot(&st, &spot);
                     }
                 }
-                (Some(TrashCmd::Clean { ids, yes, pick, report }), _) => {
-                    if let Some(out) = report {
-                        // The widget asked: one spot, what was ticked, no questions.
-                        let [id] = ids.as_slice() else { bail!("--report takes one spot") };
-                        let pick: Option<trash::Pick> = match pick {
-                            Some(f) => Some(serde_json::from_str(&std::fs::read_to_string(&f)?)?),
+                (Some(TrashCmd::Clean { ids, yes, elevated, pick_hex }), _) => {
+                    if elevated {
+                        // The widget asked, as administrator: one spot that needs one, what was ticked.
+                        let [id] = ids.as_slice() else { bail!("--elevated takes one spot") };
+                        if !trash::needs_admin(id) {
+                            bail!("{id} doesn't need an administrator");
+                        }
+                        let pick: Option<trash::Pick> = match pick_hex {
+                            Some(h) => Some(serde_json::from_str(&mom_core::elevate::from_hex(&h).context("bad --pick-hex")?)?),
                             None => None,
                         };
-                        let r = trash::clean(id, &ctx, pick.as_ref());
-                        std::fs::write(&out, serde_json::to_string(&r)?)?;
+                        trash::clean(id, &ctx, pick.as_ref());
                         return Ok(0);
                     }
                     let ids: Vec<String> = if ids.iter().any(|i| i == "all") {

@@ -763,8 +763,15 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
     let mixed = !matches!(spot, Spot::Codex | Spot::Worktrees);
     let mut list = Vec::new();
     let mut from: Vec<(&Agent, &Source)> = Vec::new();
+    // What only an administrator may clean is never looked for through a link: one there could
+    // point the clean-up anywhere (and the elevated clean checks again before deleting).
+    let careful = matches!(spot, Spot::Windows | Spot::AdminApps);
+    let linked = |d: &Path| d.ancestors().any(|a| std::fs::symlink_metadata(a).map(|m| m.is_symlink()).unwrap_or(false));
     for a in &all {
         for s in &a.junk {
+            if careful && linked(&s.dir) {
+                continue;
+            }
             for (path, rel) in walk(&s.dir, s.depth, s.files_only) {
                 if !(s.pick)(rel.last().map(String::as_str).unwrap_or("")) {
                     continue;

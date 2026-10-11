@@ -236,6 +236,22 @@ pub(super) fn remove_all(paths: &[PathBuf]) -> Vec<bool> {
     paths.iter().map(|p| std::fs::symlink_metadata(p).is_err()).collect()
 }
 
+/// Deletes one file or folder the careful way, for when mom runs as administrator: one at a
+/// time with the standard library's remove_dir_all, which opens everything relative to the
+/// folder it's in and never follows a link, even one swapped in while it works. (remove_all
+/// above goes by path, which is fine as you but not as an administrator.)
+pub(super) fn remove_without_following(p: &Path) -> bool {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.is_symlink() => remove_link(p),
+        Ok(m) if m.is_dir() => {
+            let _ = std::fs::remove_dir_all(p);
+        }
+        Ok(_) => remove_file(p),
+        Err(_) => {}
+    }
+    std::fs::symlink_metadata(p).is_err()
+}
+
 fn remove_file(p: &Path) {
     if std::fs::remove_file(p).is_ok() {
         return;

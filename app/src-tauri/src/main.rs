@@ -560,33 +560,63 @@ async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: S
 }
 
 /// Cleans a spot only an administrator can: Windows asks the person, then `mom` (next to the
-/// app) runs elevated, cleans exactly what it finds itself under the usual rules, and writes
-/// what happened to a file this reads back.
+/// app) runs elevated and cleans exactly what it finds itself, under the usual rules and only
+/// where no one else could have swapped a folder for a link. It writes nothing back: this
+/// notes what would go beforehand and looks at what's gone afterwards.
 fn clean_as_admin(s: &Shared, id: &str, pick: Option<&trash::Pick>) -> trash::CleanReport {
-    let failed = |message: String| trash::CleanReport { id: id.to_string(), message, ..Default::default() };
+    let mut r = trash::CleanReport { id: id.to_string(), ..Default::default() };
     let Some(mom) = std::env::current_exe().ok().map(|e| e.with_file_name("mom.exe")).filter(|m| m.is_file()) else {
-        return failed("mom.exe isn't next to the app, so it can't clean this as an administrator.".into());
+        r.message = "mom.exe isn't next to the app, so it can't clean this as an administrator.".into();
+        return r;
     };
-    let dir = s.paths.state_dir();
-    let _ = std::fs::create_dir_all(&dir);
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let report = dir.join(format!("admin-clean-{nonce}.json"));
-    let picked = dir.join(format!("admin-pick-{nonce}.json"));
-    let mut args = format!("trash clean {id} --yes --report \"{}\"", report.display());
+    let before = {
+        let cfg = s.cfg();
+        let table = s.sampler.lk().sample();
+        let ctx = trash::TrashCtx::new(&s.paths, &cfg, &table);
+        let before = trash::plan(id, &ctx, pick);
+        // First, as you, what's in folders anyone can change: no administrator needed for those.
+        trash::clean(id, &ctx, pick);
+        before
+    };
+    let gone = |targets: &[std::path::PathBuf]| targets.iter().all(|t| std::fs::symlink_metadata(t).is_err());
+    let mut note = None;
+    if before.iter().all(|(t, _)| gone(t)) {
+        return tally_gone(id, before, r, None);
+    }
+    // Then the rest as administrator.
+    let mut args = format!("trash clean {id} --yes --elevated");
     if let Some(p) = pick {
-        if std::fs::write(&picked, serde_json::to_string(p).unwrap_or_default()).is_ok() {
-            args.push_str(&format!(" --pick \"{}\"", picked.display()));
+        let hex = mom_core::elevate::to_hex(&serde_json::to_string(p).unwrap_or_default());
+        if hex.len() > 30_000 {
+            note = Some("That's too many ticked and unticked items to hand an administrator at once; tick all or untick all, then change a few.".to_string());
+        } else {
+            args.push_str(&format!(" --pick-hex {hex}"));
         }
     }
-    let ran = mom_core::elevate::run_as_admin(&mom, &args);
-    let r = std::fs::read_to_string(&report).ok().and_then(|t| serde_json::from_str::<trash::CleanReport>(&t).ok());
-    let _ = std::fs::remove_file(&report);
-    let _ = std::fs::remove_file(&picked);
-    match (ran, r) {
-        (_, Some(r)) => r,
-        (Err(why), None) => failed(why),
-        (Ok(code), None) => failed(format!("The administrator clean-up stopped without saying how it went (code {code}).")),
+    if note.is_none() {
+        if let Err(why) = mom_core::elevate::run_as_admin(&mom, &args) {
+            note = Some(why);
+        }
     }
+    tally_gone(id, before, r, note)
+}
+
+/// What a clean-up took, from what's gone of what it planned to take.
+fn tally_gone(id: &str, before: Vec<(Vec<std::path::PathBuf>, u64)>, mut r: trash::CleanReport, note: Option<String>) -> trash::CleanReport {
+    for (targets, bytes) in before {
+        if targets.iter().all(|t| std::fs::symlink_metadata(t).is_err()) {
+            r.deleted += 1;
+            r.freed += bytes;
+        } else {
+            r.skipped += 1;
+        }
+    }
+    r.message = match (r.deleted, note) {
+        (0, Some(why)) => why,
+        (_, Some(why)) => format!("{} {why}", trash::result_message(id, &r)),
+        (_, None) => trash::result_message(id, &r),
+    };
+    r
 }
 
 /// Where old conversations go, how much room is left there, and what's been moved.
