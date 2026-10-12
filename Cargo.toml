@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["momputer contributors"]
-repository = "https://github.com/momputer/momputer"
+repository = "https://github.com/Thisisily/momputer"
 rust-version = "1.90"
 
 [workspace.dependencies]
