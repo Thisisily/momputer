@@ -62,6 +62,9 @@
     roomSel: {},
     roomBusy: false,
     roomErrors: {}, // rooms mom can't tidy, and why (a drive, Windows, gone)
+    knocked: false, // knocked on mom's door
+    game: null, // Lights out, in mom's room
+    version: "",
     rules: null,
     rulesDraft: null,
     rulesEditing: false,
@@ -1424,7 +1427,7 @@
         const r = state.rooms[p];
         const name = r ? r.name : p.split(/[\\/]/).filter(Boolean).pop() || p;
         const why = state.roomErrors[p];
-        const meta = why ? why : r ? `${plural(r.entries, "thing")} at the top level, ${r.findings.length} to sort out` : "Looking…";
+        const meta = why ? why : r && r.moms ? "Mom's room. Knock first." : r ? `${plural(r.entries, "thing")} at the top level, ${r.findings.length} to sort out` : "Looking…";
         return `<div class="row room-row" id="room-${hash(p)}" data-room="${esc(p)}" data-act="open-room" tabindex="0" role="button">
           <span class="row-name">${esc(name)}</span>
           <div class="row-meta"><span class="why">${esc(meta)}</span></div>
@@ -1458,6 +1461,7 @@
         `<div class="button-row"><button class="link-btn" data-act="remove-room">Stop watching this folder</button></div>`
       );
     if (!r) return html + section("room", "Looking", "", `<p class="empty">Looking…</p>`);
+    if (r.moms) return html + momsRoom();
     const sel = state.roomSel[path] || new Set();
     html += `<div class="room-title"><h2>${esc(r.name)}</h2>${grade(r.grade, 4)}<p class="said">${esc(r.line)}</p></div>`;
     const careful = [];
@@ -1492,6 +1496,146 @@
     return html;
   }
 
+  // ------------------------------------------------------------ mom's room (an easter egg)
+  //
+  // Point mom at her own folder and she won't have it tidied. Knock, though, and she lets you in,
+  // as long as you help with the lights your agents left on.
+
+  const GAME_SECS = 30;
+  const LIGHTS = 12;
+  const LEFTOVERS = ["vite", "bun dev", "next dev", "tail -f", "node", "headless", "jest --watch", "ngrok", "http.server", "tsc -w", "uvicorn", "storybook", "watch", "cargo run"];
+  const BEST_KEY = "mom.lightsOutBest";
+  function bestScore() {
+    try {
+      return Number(localStorage.getItem(BEST_KEY)) || 0;
+    } catch {
+      return 0;
+    }
+  }
+  const GAME_LINES = {
+    A: "Spotless. Who are you and what have you done with my kid?",
+    B: "Not bad at all. Only a couple left on.",
+    C: "I can see the floor. Barely.",
+    D: "Bit of a mess. We'll practise before dinner c:",
+    F: "Let's do this one together c:",
+  };
+  let gameTimer = null;
+
+  function momsRoom() {
+    const g = state.game;
+    let body;
+    if (!state.knocked) {
+      body = `<div class="door"><div class="door-sign dot">knock<br>first</div>
+          <p>This is mom's room: her settings, her journal and the house rules. Nobody tidies mom's room.</p>
+          <button class="primary" data-act="knock">Knock</button></div>`;
+    } else if (!g) {
+      const best = bestScore();
+      body = `<div class="game-intro"><h3 class="dot game-title">lights out</h3>
+          <p>Your agents left the lights on again. Tap each one off before it stays on. You've got ${GAME_SECS} seconds, and they get quicker.</p>
+          ${best ? `<p class="dim num">Your best: ${best}</p>` : ""}
+          <button class="primary" data-act="game-start">Start</button></div>`;
+    } else if (g.phase === "over") {
+      const total = g.hits + g.missed;
+      const ratio = total ? g.hits / total : 0;
+      const letter = ratio >= 0.95 ? "A" : ratio >= 0.85 ? "B" : ratio >= 0.7 ? "C" : ratio >= 0.5 ? "D" : "F";
+      body = `<div class="game-over">${grade(letter, 4)}<p class="said">${esc(GAME_LINES[letter])}</p>
+          <p class="num">${plural(g.hits, "light")} turned off, ${g.missed} left on.${g.best ? " A new best!" : ` Your best: ${bestScore()}.`}</p>
+          <div class="button-row"><button class="primary" data-act="game-start">Again</button><button class="secondary" data-act="close-room">Leave mom's room</button></div></div>`;
+    } else {
+      const left = Math.max(0, Math.ceil((g.ends - Date.now()) / 1000));
+      const cells = g.cells
+        .map(
+          (c, i) => `<button class="light${c.on ? " on" : ""}${c.hit ? " hit" : ""}" data-act="light" data-i="${i}" aria-label="${c.on ? `Turn off ${esc(c.label)}` : "Dark"}">
+            <span class="led${c.on ? " red" : ""}"></span><span class="light-label">${c.on ? esc(c.label) : ""}</span></button>`
+        )
+        .join("");
+      body = `<div class="game-head num"><span><strong>${g.hits}</strong> off</span><span class="game-clock">${left}s</span><span><strong>${g.missed}</strong> left on</span></div>
+        <div class="lights">${cells}</div>`;
+    }
+    const playing = g && g.phase === "on";
+    return `<div class="room-title"><h2>Mom's room</h2>${grade("A", 4)}${playing ? "" : `<p class="said">My room? Of course it's spotless. I'm your mother. c:</p>`}</div>
+      <div class="moms-room" id="moms-room">${body}</div>`;
+  }
+
+  function drawGame() {
+    if (state.tab === "rooms" && state.roomOpen && (state.rooms[state.roomOpen] || {}).moms) render();
+  }
+
+  function startGame() {
+    clearInterval(gameTimer);
+    const now = Date.now();
+    state.game = { phase: "on", ends: now + GAME_SECS * 1000, hits: 0, missed: 0, streak: 0, next: now + 500, cells: Array.from({ length: LIGHTS }, () => ({ on: false, label: "", until: 0, hit: 0 })) };
+    gameTimer = setInterval(tickGame, 100);
+    drawGame();
+    const board = $("#moms-room");
+    if (board) board.scrollIntoView({ block: "nearest", behavior: calm() ? "auto" : "smooth" });
+  }
+
+  function tickGame() {
+    const g = state.game;
+    if (!g || g.phase !== "on") return clearInterval(gameTimer);
+    // Wandered off (another tab, out of the room, window hidden): the game waits at the door.
+    if (document.hidden || state.tab !== "rooms" || !state.roomOpen) {
+      clearInterval(gameTimer);
+      state.game = null;
+      return;
+    }
+    const now = Date.now();
+    const t = 1 - Math.max(0, g.ends - now) / (GAME_SECS * 1000); // 0 at the start, 1 at the end
+    for (const c of g.cells) {
+      if (c.on && now > c.until) {
+        c.on = false;
+        g.missed++;
+        g.streak = 0;
+        if (g.missed % 3 === 0) react("shocked", 900);
+      }
+      if (c.hit && now > c.hit) c.hit = 0;
+    }
+    if (now >= g.next && now < g.ends) {
+      const dark = g.cells.map((c, i) => (c.on || c.hit ? -1 : i)).filter((i) => i >= 0);
+      if (dark.length) {
+        const c = g.cells[dark[Math.floor(Math.random() * dark.length)]];
+        c.on = true;
+        c.label = LEFTOVERS[Math.floor(Math.random() * LEFTOVERS.length)];
+        c.until = now + 1800 - 900 * t;
+      }
+      g.next = now + 760 - 440 * t;
+    }
+    if (now >= g.ends) return endGame();
+    drawGame();
+  }
+
+  function hitLight(i) {
+    const g = state.game;
+    const c = g && g.phase === "on" ? g.cells[i] : null;
+    if (!c || !c.on) return;
+    c.on = false;
+    c.hit = Date.now() + 260;
+    g.hits++;
+    g.streak++;
+    if (g.streak % 8 === 0) react("delighted", 1100);
+    drawGame();
+  }
+
+  function endGame() {
+    const g = state.game;
+    clearInterval(gameTimer);
+    for (const c of g.cells) {
+      if (c.on) g.missed++;
+      c.on = false;
+    }
+    g.phase = "over";
+    g.best = g.hits > bestScore();
+    if (g.best) {
+      try {
+        localStorage.setItem(BEST_KEY, String(g.hits));
+      } catch {}
+    }
+    const total = g.hits + g.missed;
+    react(total && g.hits / total >= 0.85 ? "kiss" : total && g.hits / total >= 0.5 ? "wink" : "dizzy", 3000);
+    drawGame();
+  }
+
   async function loadRooms() {
     state.roomPaths = await invoke("room_paths");
     const cached = await invoke("get_rooms");
@@ -1505,6 +1649,10 @@
   async function inspectRoom(p) {
     try {
       const r = await invoke("inspect_room", { path: p });
+      if (r.moms && !(state.rooms[p] && state.rooms[p].moms)) {
+        react("shocked", 1200);
+        setTimeout(() => react("kiss", 2400), 1250);
+      }
       state.rooms[p] = r;
       delete state.roomErrors[p];
       state.roomSel[p] = new Set(r.actions.filter((a) => a.selected).map((a) => a.id));
@@ -1649,6 +1797,47 @@
 
   // ------------------------------------------------------------ settings
 
+  // ------------------------------------------------------------ about
+
+  const TIPS = [
+    ["Solana", "5qT8edyi62wwLz9UBTiRVoN3S9UXLjbV2YVEu4GJH3zH"],
+    ["Zcash", "t1cYbXWEXXc6kZYR1JjkE2qRCEmzCpMA371"],
+    ["Ethereum", "0xfFa448F43896Cf8227aAceF3A72b80450e1fF86E"],
+    ["Bitcoin", "bc1qmnw03rsastc08g6zutgx2sdarzapz82q5nn2kd"],
+  ];
+  const LINKS = [
+    ["Marsell", "getmarsell.com", "https://getmarsell.com"],
+    ["Ilisium", "ilisium.xyz", "https://ilisium.xyz"],
+    ["momputer on GitHub", "Thisisily/momputer", "https://github.com/Thisisily/momputer"],
+  ];
+  /** "5qT8ed…GJH3zH": enough to recognise an address at a glance. */
+  const shortAddr = (a) => (a.length > 18 ? `${a.slice(0, 7)}…${a.slice(-6)}` : a);
+
+  function renderAbout() {
+    const links = LINKS.map(
+      ([name, shown, url]) => `<button class="about-row" data-act="open-uri" data-url="${esc(url)}" id="ab-${hash(url)}">
+        <span class="about-name">${esc(name)}</span><span class="about-sub">${esc(shown)}</span>${ICON.out}</button>`
+    ).join("");
+    const tips = TIPS.map(
+      ([coin, addr]) => `<div class="about-row tip" id="tip-${hash(coin)}">
+        <span class="about-name">${esc(coin)}</span><span class="about-sub num" title="${esc(addr)}">${esc(shortAddr(addr))}</span>
+        <button class="mini-btn wide" data-act="copy-text" data-text="${esc(addr)}" data-what="${esc(coin)}">Copy</button></div>`
+    ).join("");
+    return `<div class="sheet-head"><h2 id="sheet-title" class="dot sheet-dot">about</h2>
+        <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button></div>
+      <div class="about-hello">
+        <p class="about-lead">Hi, I'm Ilya Arbabi.</p>
+        <p>My desktop was a mess, and every AI agent I worked with made it worse: dev servers left running, screenshots everywhere, folders called thing-v2-final. I needed something to keep it all in order, so I built my computer a mom.</p>
+      </div>
+      <h3 class="list-head">Also by me</h3>
+      <div class="items about-list">${links}</div>
+      <h3 class="list-head">Buy mom a coffee</h3>
+      <p class="list-hint">momputer is free and stays free. If she saved you an afternoon, a tip keeps her going.</p>
+      <div class="items about-list">${tips}</div>
+      <p class="about-foot">momputer${state.version ? ` ${esc(state.version)}` : ""} · MIT license · The links open in your browser; momputer itself never goes online.<br>
+        <span class="about-hint">There's one room in this house nobody tidies.</span></p>`;
+  }
+
   function renderSettings() {
     const st = state.settings;
     if (!st) return "";
@@ -1714,12 +1903,13 @@
 
   function renderSheet() {
     if (!state.sheet) return;
-    const html = state.sheet.kind === "spot" ? renderSpot(state.sheet.id) : renderSettings();
+    const html = state.sheet.kind === "spot" ? renderSpot(state.sheet.id) : state.sheet.kind === "about" ? renderAbout() : renderSettings();
     morph($("#sheet-body"), html);
   }
 
   async function openSheet(sheet) {
     if (sheet.kind === "settings") state.settings = await invoke("get_settings");
+    if (sheet.kind === "about" && !state.version) state.version = await invoke("app_version").catch(() => "");
     const opened = sheet.kind === "spot" ? state.trash.spots.find((x) => x.id === sheet.id) || {} : {};
     if (opened.action === "move") loadArchive();
     if (opened.admin) loadAdminCheck();
@@ -1728,6 +1918,7 @@
     state.cleanConfirm = null;
     renderSheet();
     $("#btn-settings").setAttribute("aria-pressed", String(sheet.kind === "settings"));
+    $("#btn-about").setAttribute("aria-pressed", String(sheet.kind === "about"));
     const wrap = $("#sheet");
     wrap.hidden = false;
     $("#sheet-body").scrollTop = 0;
@@ -1744,6 +1935,7 @@
     state.sheet = null;
     state.cleanConfirm = null;
     $("#btn-settings").setAttribute("aria-pressed", "false");
+    $("#btn-about").setAttribute("aria-pressed", "false");
     const wrap = $("#sheet");
     const done = () => {
       if (!state.sheet) wrap.hidden = true;
@@ -1978,6 +2170,16 @@
       case "open":
         act(invoke("open_url", { url: `http://localhost:${el.dataset.port}` }), () => null);
         break;
+      case "copy-text": {
+        try {
+          await navigator.clipboard.writeText(el.dataset.text);
+          toast(`Copied the ${el.dataset.what} address. Thank you, sweetie c:`);
+          react("kiss");
+        } catch {
+          toast("Couldn't reach the clipboard.", true);
+        }
+        break;
+      }
       case "open-uri":
         act(invoke("open_url", { url: el.dataset.url }), () => null);
         break;
@@ -2287,12 +2489,32 @@
         }
         break;
       }
+      case "knock":
+        state.knocked = true;
+        state.game = null;
+        react("shocked", 1100);
+        setTimeout(() => {
+          react("wink", 2600);
+          say("Oh, it's you. Come in, but you're helping with the lights.", 3800);
+        }, 1150);
+        render();
+        break;
+      case "game-start":
+        startGame();
+        break;
+      case "light":
+        if (e.detail === 0) hitLight(Number(el.dataset.i)); // the keyboard; a tap is caught on pointerdown
+        break;
       case "open-room":
+        state.knocked = false;
+        state.game = null;
         state.roomOpen = el.dataset.room;
         render();
         if (!state.rooms[state.roomOpen]) inspectRoom(state.roomOpen);
         break;
       case "close-room":
+        clearInterval(gameTimer);
+        state.game = null;
         state.roomOpen = null;
         render();
         break;
@@ -2406,6 +2628,15 @@
         loadRules();
         break;
       }
+    }
+  });
+
+  // Lights go off the moment they're touched, not when the click lands (they move fast).
+  document.addEventListener("pointerdown", (e) => {
+    const light = e.target.closest("[data-act=light]");
+    if (light) {
+      e.preventDefault();
+      hitLight(Number(light.dataset.i));
     }
   });
 
@@ -2531,6 +2762,7 @@
     if (moving()) G.fromTo("#btn-refresh svg", { rotation: 0 }, { rotation: 360, duration: 0.6, ease: "power2.inOut", transformOrigin: "50% 50%" });
   });
   $("#btn-settings").addEventListener("click", () => (state.sheet && state.sheet.kind === "settings" ? closeSheet() : openSheet({ kind: "settings" })));
+  $("#btn-about").addEventListener("click", () => (state.sheet && state.sheet.kind === "about" ? closeSheet() : openSheet({ kind: "about" })));
   $("#btn-hide").addEventListener("click", () => invoke("hide_window"));
   $("#btn-pin").addEventListener("click", async () => {
     if (!state.settings) state.settings = await invoke("get_settings");

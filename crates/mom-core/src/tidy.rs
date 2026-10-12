@@ -86,6 +86,9 @@ pub struct RoomReport {
     /// ticks nothing she'd move or remove there.
     #[serde(default)]
     pub personal: bool,
+    /// Mom's own folder. Nobody tidies mom's room.
+    #[serde(default)]
+    pub moms: bool,
     pub findings: Vec<Finding>,
     pub actions: Vec<Action>,
     pub scanned_at: u64,
@@ -354,7 +357,7 @@ pub fn check_room(dir: &Path, paths: &Paths) -> Result<PathBuf, String> {
     };
     let programs = paths.system_drive.join("Program Files");
     let app_data = paths.home.join("AppData");
-    let off_limits: [(&Path, &str); 8] = [
+    let off_limits: [(&Path, &str); 7] = [
         (&paths.windows, "Windows' own folder"),
         (&programs, "where programs are installed"),
         (&paths.program_files_x86, "where programs are installed"),
@@ -362,8 +365,10 @@ pub fn check_room(dir: &Path, paths: &Paths) -> Result<PathBuf, String> {
         (&app_data, "where apps keep their data"),
         (&paths.local_appdata, "where apps keep their data"),
         (&paths.appdata, "where apps keep their data"),
-        (&paths.mom, "mom's own folder"),
     ];
+    if inside(&paths.mom) {
+        return Err("That's mom's room. You don't tidy your mother's room, sweetie.".into());
+    }
     for (base, what) in off_limits {
         if inside(base) {
             return Err(format!("{real_s} is {what}. Moving or deleting things there can break programs, so mom won't tidy it."));
@@ -411,6 +416,34 @@ fn personal_folder(room: &Path) -> bool {
         let c = norm_path(&c.to_string_lossy());
         !c.is_empty() && (r == c || r.starts_with(&format!("{c}\\")))
     })
+}
+
+/// Is `dir` mom's own folder (or something in it)?
+pub fn is_moms_room(dir: &Path, paths: &Paths) -> bool {
+    let r = norm_path(&real_path(dir).to_string_lossy());
+    let m = norm_path(&real_path(&paths.mom).to_string_lossy());
+    r == m || r.starts_with(&format!("{m}\\"))
+}
+
+/// What mom says about her own room when someone points her at it. Always an A, and nothing in
+/// it is anyone else's to tidy, so there's no plan.
+pub fn moms_room(paths: &Paths) -> RoomReport {
+    RoomReport {
+        path: real_path(&paths.mom).to_string_lossy().to_string(),
+        name: paths.mom.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| ".momputer".into()),
+        grade: 'A',
+        score: 0,
+        line: "My room? Of course it's spotless. I'm your mother. c:".into(),
+        entries: std::fs::read_dir(&paths.mom).map(|rd| rd.count()).unwrap_or(0),
+        code_project: false,
+        projects: 0,
+        partial: false,
+        personal: false,
+        moms: true,
+        findings: vec![],
+        actions: vec![],
+        scanned_at: now_secs(),
+    }
 }
 
 /// A path as it really is (links followed, long names), or as given if it doesn't exist.
@@ -851,6 +884,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
         projects: projects.len(),
         partial,
         personal,
+        moms: false,
         findings,
         actions,
         scanned_at: now,
@@ -1435,7 +1469,10 @@ mod tests {
         no(&paths.windows.join("inside"), "Windows' own folder");
         no(&paths.program_data, "where programs keep their data");
         no(&paths.local_appdata.join("inside"), "where apps keep their data");
-        no(&paths.mom, "mom's own folder");
+        no(&paths.mom, "mom's room");
+        assert!(is_moms_room(&paths.mom, &paths) && !is_moms_room(&paths.home.join("Desktop"), &paths));
+        let hers = moms_room(&paths);
+        assert!(hers.moms && hers.grade == 'A' && hers.actions.is_empty());
         no(&paths.home, "your whole user folder");
         no(&root, "your whole user folder"); // above the profile
         no(&paths.home.join(".claude").join("projects"), "an app's own folder");

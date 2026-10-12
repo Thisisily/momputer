@@ -537,6 +537,7 @@
       return { id, freed, deleted: goes.length, skipped: 0, message };
     },
     admin_check: async () => (await wait(60), null),
+    app_version: () => "0.1.0",
     measure_spot: async ({ id }) => {
       await wait(700);
       emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });

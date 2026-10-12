@@ -736,6 +736,11 @@ fn open_program(name: String) -> Res<()> {
     mom_core::elevate::open(&windows.join("System32").join(&name), "")
 }
 
+#[tauri::command]
+fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 /// Why mom can't clean as administrator from this copy of the app, if she can't: shown before
 /// anyone presses the button.
 #[tauri::command(async)]
@@ -876,6 +881,9 @@ async fn inspect_room(path: String, s: State<'_, S>) -> Res<tidy::RoomReport> {
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let cfg = s.cfg();
+        if tidy::is_moms_room(&PathBuf::from(&path), &s.paths) {
+            return Ok(tidy::moms_room(&s.paths));
+        }
         let dir = tidy::check_room(&PathBuf::from(&path), &s.paths)?;
         let report = tidy::inspect(&dir, &cfg.tidy).map_err(err)?;
         s.rooms.lk().insert(path, report.clone());
@@ -891,8 +899,9 @@ async fn add_room(app: AppHandle, s: State<'_, S>) -> Res<Option<String>> {
         return Ok(None);
     };
     let path = picked.into_path().map_err(err)?;
-    // Not a drive, Windows, programs or apps' own data: say why, and don't add it.
-    let path = tidy::check_room(&path, &s.paths)?;
+    // Not a drive, Windows, programs or apps' own data: say why, and don't add it. Mom's own
+    // folder may be added; she has something to say about it.
+    let path = if tidy::is_moms_room(&path, &s.paths) { s.paths.mom.clone() } else { tidy::check_room(&path, &s.paths)? };
     let mut cfg = s.config.lk();
     if !cfg.rooms.contains(&path) {
         cfg.rooms.push(path.clone());
@@ -1073,8 +1082,10 @@ fn open_url(url: String, app: AppHandle) -> Res<()> {
         .strip_prefix("ms-settings:")
         .map(|page| !page.is_empty() && page.len() <= 48 && page.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
         .unwrap_or(false);
-    if !(local || codex_thread || settings_page || url.starts_with("https://github.com/")) {
-        return Err("mom only opens local servers, Codex threads, Windows Settings pages and the project page".into());
+    // The author's other projects, from the About sheet.
+    let author = ["https://getmarsell.com", "https://ilisium.xyz"].iter().any(|site| url == *site || url.starts_with(&format!("{site}/")));
+    if !(local || codex_thread || settings_page || author || url.starts_with("https://github.com/")) {
+        return Err("mom only opens local servers, Codex threads, Windows Settings pages and the project's own pages".into());
     }
     app.opener().open_url(url, None::<&str>).map_err(err)
 }
@@ -1156,6 +1167,7 @@ fn main() {
             uninstall_app,
             admin_check,
             measure_spot,
+            app_version,
             clean_progress,
             stop_clean,
             files_state,

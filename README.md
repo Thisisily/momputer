@@ -267,6 +267,19 @@ Privacy policy: This program will not transfer any information to other networke
 - [Geist](https://vercel.com/font) and [Doto](https://github.com/oliverlalan/Doto) fonts, under the SIL Open Font License.
 - [Lucide](https://lucide.dev) icons (ISC).
 
+## Made by
+
+momputer is made by Ilya Arbabi. My desktop was a mess, and every AI agent I worked with made it worse, so I built my computer a mom. Also by me: [Marsell](https://getmarsell.com) and [Ilisium](https://ilisium.xyz).
+
+momputer is free. If she saved you an afternoon, you can buy mom a coffee:
+
+| | |
+|---|---|
+| Solana | `5qT8edyi62wwLz9UBTiRVoN3S9UXLjbV2YVEu4GJH3zH` |
+| Zcash | `t1cYbXWEXXc6kZYR1JjkE2qRCEmzCpMA371` |
+| Ethereum | `0xfFa448F43896Cf8227aAceF3A72b80450e1fF86E` |
+| Bitcoin | `bc1qmnw03rsastc08g6zutgx2sdarzapz82q5nn2kd` |
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

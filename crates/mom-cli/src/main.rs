@@ -749,6 +749,18 @@ fn run(cli: Cli) -> Result<i32> {
                 Some(d) => d,
                 None => std::env::current_dir()?,
             };
+            if tidy::is_moms_room(&dir, &paths) {
+                if apply || prompt {
+                    bail!("That's mom's room. You don't tidy your mother's room, sweetie.");
+                }
+                let report = tidy::moms_room(&paths);
+                if json {
+                    print_json(&report)?;
+                } else {
+                    print_room(&st, &report);
+                }
+                return Ok(0);
+            }
             let dir = match tidy::check_room(&dir, &paths) {
                 Ok(d) => d,
                 Err(why) => bail!("{why}"),

@@ -2611,6 +2611,193 @@ button.row-name:hover {
   background: linear-gradient(to bottom, transparent, var(--bg) 16px);
 }
 
+/* ---------------------------------------------------------------- about */
+
+.about-hello {
+  margin: 0 4px 6px;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.about-hello p {
+  margin: 0 0 8px;
+}
+
+.about-lead {
+  color: var(--ink);
+  font: 600 17px/1.3 var(--font-display);
+}
+
+.about-row {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.about-list > :last-child {
+  border-bottom: 0;
+}
+
+button.about-row:hover .about-name {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.about-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.about-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.about-row.tip .about-sub {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.about-row > .ico {
+  color: var(--ink-3);
+}
+
+.about-foot {
+  margin: 16px 4px 4px;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  text-wrap: pretty;
+}
+
+.about-hint {
+  display: inline-block;
+  margin-top: 6px;
+  font-style: italic;
+}
+
+/* ---------------------------------------------------------------- mom's room */
+
+.moms-room {
+  padding: 16px;
+  border-radius: 20px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.door,
+.game-intro,
+.game-over {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.door p,
+.game-intro p,
+.game-over p {
+  margin: 0;
+  max-width: 34ch;
+  color: var(--ink-2);
+  text-wrap: pretty;
+}
+
+.door-sign {
+  padding: 14px 20px;
+  border-radius: 14px;
+  box-shadow: inset 0 0 0 2px var(--ink);
+  font-size: 30px;
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.game-title {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 900;
+}
+
+.game-over .said {
+  color: var(--ink);
+  font: 600 15px/1.3 var(--font-display);
+}
+
+.game-over .button-row {
+  justify-content: center;
+}
+
+.game-head {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 2px 12px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.game-head strong {
+  color: var(--ink);
+}
+
+.game-clock {
+  font-family: var(--font-dot);
+  font-weight: 800;
+  font-size: 16px;
+  color: var(--ink);
+}
+
+.lights {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.light {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  height: 58px;
+  border-radius: 14px;
+  background: var(--card-2);
+  touch-action: manipulation;
+  transition: background 120ms ease, transform 90ms ease;
+}
+
+.light .led {
+  width: 10px;
+  height: 10px;
+}
+
+.light.on {
+  background: color-mix(in srgb, var(--red) 14%, var(--card-2));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--red) 45%, transparent);
+}
+
+.light.hit {
+  transform: scale(0.92);
+}
+
+.light-label {
+  min-height: 14px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-2);
+}
+
 @media (max-width: 400px) {
   .tab {
     padding: 0 9px;
