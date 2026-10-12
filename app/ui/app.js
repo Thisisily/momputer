@@ -8,6 +8,16 @@
   const bridge = T ? { invoke: T.core.invoke, listen: T.event.listen } : window.momMock;
   const invoke = (cmd, args) => bridge.invoke(cmd, args);
   const G = window.gsap;
+  // The widget should cost nothing while you're not looking at it. 60 frames a second is plenty
+  // (GSAP would draw at the screen's rate, 240 on some), and once the last tween ends GSAP stops
+  // asking for frames within a sixth of a second instead of after two.
+  if (G) {
+    G.ticker.fps(60);
+    G.config({ autoSleep: 10 });
+    // Sitting on the desktop while you work elsewhere, half that is plenty for a blink.
+    addEventListener("blur", () => G.ticker.fps(30));
+    addEventListener("focus", () => G.ticker.fps(60));
+  }
   const appWindow = T && T.window && T.window.getCurrentWindow ? T.window.getCurrentWindow() : null;
   const calm = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   // No animation when it can't be seen: a hidden window doesn't run them, and nothing should wait on one.
@@ -65,6 +75,7 @@
     knocked: false, // knocked on mom's door
     version: "",
     tipCoin: "Solana", // which address the tip jar shows
+    recycle: loadRecycle(), // clean-ups that delete send things to the Recycle Bin instead
     rules: null,
     rulesDraft: null,
     rulesEditing: false,
@@ -90,6 +101,20 @@
   function saveView() {
     try {
       localStorage.setItem("mom.listView", JSON.stringify({ sort: state.listView.sort, group: state.listView.group }));
+    } catch {}
+  }
+
+  function loadRecycle() {
+    try {
+      return localStorage.getItem("mom.recycle") === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function saveRecycle() {
+    try {
+      localStorage.setItem("mom.recycle", state.recycle ? "1" : "0");
     } catch {}
   }
 
@@ -985,6 +1010,11 @@
 
   // The details sheet for one clean-up: what's in it, what goes, what stays and why.
 
+  // Clean-ups that delete your own files can send them to the Recycle Bin instead. Docker's things
+  // aren't files, and admin clean-ups run as another user, whose bin you wouldn't see.
+  const canRecycle = (s) => s.action === "delete" && !s.admin && s.id !== "docker";
+  const recycling = (s) => canRecycle(s) && state.recycle;
+
   const ACTION_WORD = {
     delete: "Deleted for good",
     recycle: "Goes to the Recycle Bin",
@@ -1078,10 +1108,12 @@
 
   function cleanLabel(s, p, confirming) {
     const drive = driveOf(state.archive && state.archive.dir);
-    if (state.cleaning === s.id) return s.action === "recycle" ? "Moving to the Recycle Bin…" : s.action === "move" ? `Moving to ${drive}…` : "Cleaning…";
+    const toBin = s.action === "recycle" || recycling(s);
+    if (state.cleaning === s.id) return toBin ? "Moving to the Recycle Bin…" : s.action === "move" ? `Moving to ${drive}…` : "Cleaning…";
     if (s.action !== "tool" && p.count === 0) return (s.items || []).some(tickable) ? "Nothing ticked" : "Nothing to clear";
     if (confirming) {
       if (s.action === "recycle") return `Sure? Press again to move ${plural(p.count, "file")}`;
+      if (toBin) return `Sure? Press again to recycle ${plural(p.count, "item")}`;
       if (s.action === "move") return `Sure? Press again to move ${plural(p.count, "folder")}`;
       return s.action === "tool" ? "Sure? Press again to run it" : "Sure? This can't be undone";
     }
@@ -1095,6 +1127,7 @@
       case "move":
         return `Move ${plural(p.count, "folder")} to ${drive}`;
       default:
+        if (toBin) return p.bytesChosen ? `Recycle ${bytes(p.bytesChosen)}` : `Recycle ${plural(p.count, "empty item")}`;
         return p.bytesChosen ? `Delete ${bytes(p.bytesChosen)}` : `Delete ${plural(p.count, "empty item")}`;
     }
   }
@@ -1226,14 +1259,21 @@
     if (s.action === "tool") card(ICON.wrench, "Runs its own tool", s.exact && s.reclaimableBytes ? `up to ${bytes(s.reclaimableBytes)}` : "it decides what goes", "go");
     else if (n === 0) card(ICON.check, "Nothing to do", (s.items || []).some(tickable) ? "nothing is ticked" : "it's already clean");
     else if (s.action === "recycle") card(ICON.undo, `Recycles ${plural(n, "file")}`, `${bytes(b)}, and you can restore ${n === 1 ? "it" : "them"}`, "go");
+    else if (recycling(s)) card(ICON.undo, `Recycles ${plural(n, "item")}`, `${b ? bytes(b) : "all empty"}, and you can restore ${n === 1 ? "it" : "them"}`, "go");
     else if (s.action === "move") card(ICON.archive, `Moves ${plural(n, "folder")}`, `${bytes(b)} to ${drive}; ${n === 1 ? "it still opens" : "they still open"} from here`, "go");
     else card(ICON.trash, `Deletes ${plural(n, "item")}`, `${b ? bytes(b) : "all empty"}, for good`, "go");
     const keptN = s.keptItems || 0;
     if (keptN) card(ICON.lock, `${plural(keptN, "item")} stay`, s.newItems ? `${s.newItems.toLocaleString("en-US")} you can tick` : "in use, or not old enough", "stay");
     if (s.safety === "review") card(ICON.eye, "Look first", "untick anything you want to keep");
+    else if (recycling(s)) card(ICON.shield, "Safe", "anything too big for the Recycle Bin stays put");
     else card(ICON.shield, "Safe", s.action === "move" ? "nothing is deleted" : s.action === "recycle" ? "it all waits in the Recycle Bin" : "nothing you'd miss, or it comes back");
     if (s.admin) card(ICON.key, "Windows asks first", "only an administrator can");
-    return `<div class="does"><h3>What the button does</h3><div class="does-cards">${cards.join("")}</div>
+    const choice = canRecycle(s)
+      ? `<div class="seg does-choice" role="group" aria-label="Where it goes">
+          <button class="seg-btn" data-act="bin-mode" data-recycle="0" aria-pressed="${!state.recycle}" ${state.cleaning ? "disabled" : ""}>Delete for good</button>
+          <button class="seg-btn" data-act="bin-mode" data-recycle="1" aria-pressed="${state.recycle}" ${state.cleaning ? "disabled" : ""}>Recycle Bin</button></div>`
+      : "";
+    return `<div class="does"><div class="does-head"><h3>What the button does</h3>${choice}</div><div class="does-cards">${cards.join("")}</div>
         <button class="does-more" data-act="toggle-does" aria-expanded="${state.doesOpen}">${state.doesOpen ? "Less" : "Read more"}${ICON.chevron}</button>
         ${state.doesOpen ? `<p class="does-text">${esc(effectNow(s, p))}</p>` : ""}</div>`;
   }
@@ -1309,7 +1349,7 @@
     const confirming = !cleaning && state.cleanConfirm === s.id;
     // Empty folders are 0 bytes but still worth clearing, so this goes by count, not size.
     const disabled = cleaning || (s.action !== "tool" && p.count === 0);
-    const danger = s.action === "delete" || s.action === "empty-bin";
+    const danger = (s.action === "delete" && !recycling(s)) || s.action === "empty-bin";
     const moves = s.action === "move";
     const busy = state.trash.busy;
     const tools = (s.items || []).length > 8 ? listTools() : "";
@@ -1318,7 +1358,7 @@
         <div><h2 id="sheet-title">${esc(s.label)}</h2>
           <div class="pills"><span class="pill"><span class="led ${s.safety === "review" ? "red" : "green"}"></span>${s.safety === "review" ? "Look before you clear" : s.action === "move" ? "Nothing is deleted" : "Safe to clear"}</span>
           ${s.admin ? `<span class="pill"><span class="led red"></span>${state.adminBlock ? "Needs an all-users install" : "Windows asks first"}</span>` : ""}
-          <span class="pill">${ACTION_WORD[s.action] || "Deleted"}</span></div></div>
+          <span class="pill">${recycling(s) ? ACTION_WORD.recycle : ACTION_WORD[s.action] || "Deleted"}</span></div></div>
         <div class="head-acts">
           <button class="icon-btn${busy ? " spinning" : ""}" data-act="refresh-spot" data-spot="${esc(s.id)}" title="${busy ? "Measuring…" : "Check again"}" aria-label="Check again" ${busy || state.cleaning ? "disabled" : ""}>${ICON.refresh}</button>
           <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button>
@@ -2045,10 +2085,11 @@
     if (state.tab === "running" && !document.hidden) render();
     else renderNote();
     renderChecked();
+    // The light flickers once per look: off for a moment, then on. Two frames, not an animation
+    // (a CSS fade would be drawn at the screen's rate, 240 frames a second on some screens).
     const live = $("#live");
-    live.classList.remove("blip");
-    void live.offsetWidth;
     live.classList.add("blip");
+    setTimeout(() => live.classList.remove("blip"), 160);
   }
 
   function renderChecked() {
@@ -2190,7 +2231,8 @@
     renderSheet();
     watchClean(id);
     const pk = p.pk;
-    const pick = p.partial ? { goes: pk.goes, new: pk.new, ticked: [...pk.ticked], unticked: [...pk.unticked] } : null;
+    const toBin = recycling(s);
+    const pick = p.partial || toBin ? { goes: pk.goes, new: pk.new, ticked: [...pk.ticked], unticked: [...pk.unticked], recycle: toBin } : null;
     const r = await act(invoke("clean_trash", { id, pick }));
     state.cleaning = null;
     state.live = null;
@@ -2233,6 +2275,13 @@
         break;
       case "open":
         act(invoke("open_url", { url: `http://localhost:${el.dataset.port}` }), () => null);
+        break;
+      case "bin-mode":
+        if (state.cleaning) break;
+        state.recycle = el.dataset.recycle === "1";
+        state.cleanConfirm = null;
+        saveRecycle();
+        renderSheet();
         break;
       case "tip-coin":
         state.tipCoin = el.dataset.coin;

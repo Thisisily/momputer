@@ -249,13 +249,7 @@ textarea:focus-visible,
 }
 
 #live.blip {
-  animation: blip 700ms ease-out;
-}
-
-@keyframes blip {
-  0% {
-    opacity: 0.2;
-  }
+  opacity: 0.2;
 }
 
 .checked {
@@ -1894,7 +1888,7 @@ button.row-name:hover {
 .mom .eye.heart {
   transform-box: fill-box;
   transform-origin: center;
-  animation: heartbeat 1.3s ease-in-out infinite;
+  animation: heartbeat 1.3s ease-in-out 3;
 }
 
 @keyframes heartbeat {
@@ -1923,7 +1917,7 @@ button.row-name:hover {
 
 .mom .drop {
   opacity: 0;
-  animation: drip 1.9s ease-in infinite;
+  animation: drip 1.9s ease-in 2;
   animation-delay: calc(var(--i) * -0.38s);
 }
 
@@ -1943,7 +1937,7 @@ button.row-name:hover {
 
 .mom .zee {
   opacity: 0;
-  animation: snooze 3.2s ease-in-out infinite;
+  animation: snooze 3.2s ease-in-out 2;
   animation-delay: calc(var(--i) * 0.65s);
 }
 
@@ -1963,7 +1957,7 @@ button.row-name:hover {
 }
 
 .mom .anger {
-  animation: throb 0.9s ease-in-out infinite;
+  animation: throb 0.9s ease-in-out 3;
 }
 
 @keyframes throb {
@@ -2010,7 +2004,7 @@ button.row-name:hover {
 }
 
 .mom.mood-furious .fx {
-  animation: fume 2.4s ease-in-out infinite;
+  animation: fume 2.4s ease-in-out 2;
 }
 
 @keyframes fume {
@@ -2034,7 +2028,7 @@ button.row-name:hover {
 }
 
 .mom.mood-melting .fx {
-  animation: tremble 0.5s ease-in-out infinite;
+  animation: tremble 0.5s ease-in-out 4;
 }
 
 @keyframes tremble {
@@ -2058,7 +2052,7 @@ button.row-name:hover {
 }
 
 .mom.mood-dizzy .fx {
-  animation: woozy 2.2s ease-in-out infinite;
+  animation: woozy 2.2s ease-in-out 2;
 }
 
 @keyframes woozy {
@@ -2159,6 +2153,22 @@ button.row-name:hover {
   border-radius: 18px;
   background: var(--card);
   box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.does-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 9px;
+}
+
+.does-head h3 {
+  margin: 0 2px;
+}
+
+.does-choice {
+  flex: none;
 }
 
 .does h3 {
@@ -2465,6 +2475,9 @@ button.row-name:hover {
   flex: 1;
   min-width: 0;
   display: grid;
+  /* One column that may be narrower than a long name, so the name gets "…" instead of running
+     under Stop. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 

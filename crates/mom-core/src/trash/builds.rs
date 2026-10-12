@@ -162,7 +162,7 @@ pub(super) fn find(ctx: &TrashCtx) -> Found {
             c.verdict(false, IN_USE)
         } else if c.age < idle_after {
             let r = format!("Worked on {} ago", ago(c.age));
-            c.kept_while_new(r)
+            c.kept_but_tickable(r)
         } else {
             let r = format!("Not worked on for {}", ago(c.age));
             c.verdict(true, r)

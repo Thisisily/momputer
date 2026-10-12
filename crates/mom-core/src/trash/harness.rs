@@ -795,9 +795,17 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
         if s.empty_only && (c.files > 0 || c.links > 0 || c.bytes > 0) {
             continue; // not empty after all: it isn't a leftover
         }
+        // The newest of each sort is usually what the app runs now (GitHub Desktop's app-3.6.6
+        // folder is GitHub Desktop), so it's never offered, and it isn't called "older".
+        let newest = !s.empty_only && s.keep_newest > 0 && {
+            let n = kept_per.entry(s.dir.clone()).or_default();
+            *n += 1;
+            *n <= s.keep_newest
+        };
+        let label = if newest { "Newest version" } else { s.kind.0 };
         c.sub = Some(match c.sub.take() {
-            Some(inside) => format!("{}, {inside}", s.kind.0),
-            None => s.kind.0.to_string(),
+            Some(inside) => format!("{label}, {inside}"),
+            None => label.to_string(),
         });
         c.kind = Some(s.kind.1);
         c.tool = Some(a.name);
@@ -805,13 +813,9 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             f.cands.push(c.verdict(true, "Empty, from an older version"));
             continue;
         }
-        if s.keep_newest > 0 {
-            let n = kept_per.entry(s.dir.clone()).or_default();
-            if *n < s.keep_newest {
-                *n += 1;
-                f.cands.push(c.verdict(false, "The newest one, kept"));
-                continue;
-            }
+        if newest {
+            f.cands.push(c.verdict(false, NEWEST));
+            continue;
         }
         f.cands.push(judge(c, ctx, min_age, s.sessions));
     }
@@ -846,6 +850,9 @@ fn version_in(name: &str) -> Option<Vec<u64>> {
     name.rsplit_once('_').map(|(_, n)| n).filter(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())).and_then(nums)
 }
 
+/// What keeps the newest of each sort.
+const NEWEST: &str = "The version the app uses now. Mom never offers it";
+
 /// Agent folders hold links to shared skills; one with a link inside is never a leftover.
 const LINKED: &str = "Holds a link to another folder (a shared skill, say)";
 
@@ -858,7 +865,7 @@ fn judge(c: Cand, ctx: &TrashCtx, min_age: u64, sessions: bool) -> Cand {
         c.verdict(false, IN_USE)
     } else if c.age < min_age {
         let r = too_fresh(c.age, min_age);
-        c.kept_while_new(r)
+        c.kept_but_tickable(r)
     } else {
         let r = format!("Untouched for {}", ago(c.age));
         c.verdict(true, r)
@@ -980,7 +987,7 @@ fn chat_verdict(c: Cand, ctx: &TrashCtx, min_age: u64) -> Cand {
         c.verdict(false, r)
     } else if c.age < min_age {
         let r = format!("Opened {} ago (kept here for {})", ago(c.age), super::human_age_long(min_age));
-        c.kept_while_new(r)
+        c.kept_but_tickable(r)
     } else {
         let r = format!("Not opened for {}", ago(c.age));
         c.verdict(true, r)
@@ -1073,7 +1080,7 @@ mod tests {
         let mut going: Vec<&str> = apps.items.iter().filter(|i| i.goes).map(|i| i.name.as_str()).collect();
         going.sort();
         assert_eq!(going, vec!["VS Code · .8f2b1c", "VS Code · aaa"]);
-        assert_eq!(apps.items.iter().find(|i| i.name == "VS Code · bbb").unwrap().reason, "The newest one, kept");
+        assert_eq!(apps.items.iter().find(|i| i.name == "VS Code · bbb").unwrap().reason, super::NEWEST);
 
         // Nothing here is in Old temp files twice.
         let old = measure("old-temp", &ctx).unwrap();
@@ -1218,7 +1225,7 @@ mod tests {
         let ctx = ctx(&paths, &cfg);
         let spot = measure("app-leftovers", &ctx).unwrap();
         let state = |n: &str| spot.items.iter().find(|i| i.name.contains(n)).map(|i| (i.goes, i.reason.clone())).unwrap();
-        assert_eq!(state("PHSP 27"), (false, "The newest one, kept".to_string()));
+        assert_eq!(state("PHSP 27"), (false, super::NEWEST.to_string()));
         assert!(state("PHSP 26").0 && state("PHSP 25").0);
         std::fs::remove_dir_all(&root).unwrap();
     }

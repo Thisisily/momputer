@@ -90,8 +90,9 @@ pub struct Item {
     pub age_secs: u64,
     /// Cleaning takes it (or, in a review spot, takes it unless the user unticks it).
     pub goes: bool,
-    /// Stays only because it's recent, and nothing is using it, so the user may tick it to clean
-    /// it anyway (`Pick.add`). In-use things, and fresh temp files, are never optional.
+    /// Stays to be careful (it's recent, or the newest older version kept as a fallback) and
+    /// nothing is using it, so the user may tick it to clean it anyway. Only what a running
+    /// program is using, or Docker or a database still needs, is never optional.
     #[serde(default)]
     pub optional: bool,
     /// Why it goes or stays ("Session ended 3 days ago", "Edge is open").
@@ -202,6 +203,11 @@ impl Live {
     /// A file inside an item went (counted by the remover as it goes).
     pub(super) fn file_gone(&self) {
         self.files.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A batch of files went at once.
+    fn files_gone(&self, n: u64) {
+        self.files.fetch_add(n, Ordering::Relaxed);
     }
 }
 
@@ -791,8 +797,8 @@ impl Cand {
         self
     }
 
-    /// Stays for now because it's recent, but the user can tick it.
-    fn kept_while_new(mut self, reason: impl Into<String>) -> Cand {
+    /// Stays to be careful (it's recent, say), but the user can tick it.
+    fn kept_but_tickable(mut self, reason: impl Into<String>) -> Cand {
         self.optional = true;
         self.verdict(false, reason)
     }
@@ -883,7 +889,7 @@ fn judge(c: Cand, ctx: &TrashCtx, min_age: u64) -> Cand {
         c.verdict(false, IN_USE)
     } else if c.age < min_age {
         let r = too_fresh(c.age, min_age);
-        c.kept_while_new(r)
+        c.kept_but_tickable(r)
     } else {
         let r = format!("Untouched for {}", ago(c.age));
         c.verdict(true, r)
@@ -983,7 +989,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                     c.verdict(false, r)
                 } else if c.age < hold {
                     let r = format!("Fetched {} ago (kept for {})", ago(c.age), human_age_long(hold));
-                    c.kept_while_new(r)
+                    c.kept_but_tickable(r)
                 } else {
                     let r = format!("Fetched {} ago, and nothing mom can see runs it", ago(c.age));
                     c.verdict(true, r)
@@ -1070,10 +1076,10 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
             let newest: Vec<(String, u64)> = builds.iter().map(|b| (b.0.clone(), b.1)).collect();
             for (family, rev, c) in builds {
                 let latest = newest.iter().filter(|b| b.0 == family).map(|b| b.1).max().unwrap_or(rev);
-                f.cands.push(if rev >= latest {
-                    c.verdict(false, "Newest version, kept")
-                } else if ctx.in_use(&c.path) {
+                f.cands.push(if ctx.in_use(&c.path) {
                     c.verdict(false, IN_USE)
+                } else if rev >= latest {
+                    c.kept_but_tickable("Newest version, kept. Tests download it again if it's gone")
                 } else {
                     c.verdict(true, format!("Replaced by build {latest}"))
                 });
@@ -1103,7 +1109,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                     c.verdict(false, IN_USE)
                 } else {
                     let r = format!("Downloaded {} ago; tick it if you're done with it", ago(c.age));
-                    c.kept_while_new(r)
+                    c.kept_but_tickable(r)
                 };
                 f.cands.push(c);
             }
@@ -1147,7 +1153,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                 } else if i.name == "<none>" {
                     c.verdict(true, "An untagged leftover of an image that was rebuilt or pulled again")
                 } else {
-                    c.kept_while_new("No container uses it. Pulled ones download again; ones built here need building again")
+                    c.kept_but_tickable("No container uses it. Pulled ones download again; ones built here need building again")
                 });
             }
             for s in stopped {
@@ -1156,7 +1162,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                     Some(p) => format!("{}, compose project {p}", s.status),
                     None => format!("{}, from {}", s.status, s.image),
                 });
-                f.cands.push(c.kept_while_new(if s.project.is_some() {
+                f.cands.push(c.kept_but_tickable(if s.project.is_some() {
                     "Stopped. `docker compose up` makes it again; its volumes stay"
                 } else {
                     "Stopped. Removing it loses anything saved inside it (not in a volume)"
@@ -1201,7 +1207,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                 c.sub = Some(if c.files > 1 { format!("{kind}, {}", plural(c.files, "file")) } else { kind.to_string() });
                 let c = if c.age < CRASH_MIN_AGE {
                     let r = format!("Crashed {} ago (kept for a day)", ago(c.age));
-                    c.kept_while_new(r)
+                    c.kept_but_tickable(r)
                 } else {
                     let r = format!("Crashed {} ago", ago(c.age));
                     c.verdict(true, r)
@@ -1231,7 +1237,7 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                     c.verdict(false, "Running right now")
                 } else if c.age < min {
                     let r = format!("Downloaded {} ago (kept for {OLD_INSTALLER_DAYS} days)", ago(c.age));
-                    c.kept_while_new(r)
+                    c.kept_but_tickable(r)
                 } else {
                     let r = format!("Downloaded {} ago", ago(c.age));
                     c.verdict(true, r)
@@ -1710,17 +1716,19 @@ pub struct Pick {
     pub new: bool,
     pub ticked: Vec<String>,
     pub unticked: Vec<String>,
+    /// Send it to the Recycle Bin instead of deleting it for good (spots that delete).
+    pub recycle: bool,
 }
 
 impl Default for Pick {
     fn default() -> Pick {
-        Pick { goes: true, new: false, ticked: vec![], unticked: vec![] }
+        Pick { goes: true, new: false, ticked: vec![], unticked: vec![], recycle: false }
     }
 }
 
 impl Pick {
     fn is_default(&self) -> bool {
-        self.goes && !self.new && self.ticked.is_empty() && self.unticked.is_empty()
+        self.goes && !self.new && !self.recycle && self.ticked.is_empty() && self.unticked.is_empty()
     }
 }
 
@@ -1741,6 +1749,8 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     let pick = pick.filter(|p| !p.is_default());
     // As administrator, mom only cleans what needs one. Your own files are cleaned as you.
     let elevated = ctx.elevated;
+    // Asked for the Recycle Bin instead: only where mom deletes your own files as you.
+    let recycle = pick.is_some_and(|p| p.recycle) && def.action == "delete" && !elevated && !needs_admin(id);
     if elevated && !needs_admin(id) {
         r.message = "Run this as yourself, not as administrator: it cleans your own files.".into();
         return r;
@@ -1780,8 +1790,12 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
             })
             .collect()
     };
+    // What was too big for the Recycle Bin, and so stayed.
+    let mut big = vec![false; chosen.len()];
     let gone: Vec<Option<bool>> = if def.action == "recycle" {
         each(&|c: &Cand| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok()))
+    } else if recycle {
+        recycle_chosen(&chosen, live, &mut big)
     } else if elevated {
         // As administrator: only where nobody else could have swapped a folder for a link, and
         // one at a time, never following one.
@@ -1818,7 +1832,14 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         out
     };
     let mut left_alone = 0u64;
-    for (c, ok) in chosen.iter().zip(gone) {
+    let too_big = big.iter().filter(|b| **b).count() as u64;
+    for ((c, ok), big) in chosen.iter().zip(gone).zip(big) {
+        if big {
+            if let Some(l) = live {
+                l.finished(c, false, 0);
+            }
+            continue;
+        }
         let freed = match ok {
             None => {
                 left_alone += 1;
@@ -1853,11 +1874,79 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
             }
         }
     }
-    r.message = cleaned_message(def, &r);
+    r.message = if recycle { recycled_message(&r) } else { cleaned_message(def, &r) };
+    if too_big > 0 {
+        r.skipped += too_big;
+        r.message.push_str(&format!(
+            " {} {} too big for the Recycle Bin, so {} stayed: Windows would have deleted {} for good.",
+            plural(too_big, "item"),
+            if too_big == 1 { "was" } else { "were" },
+            if too_big == 1 { "it" } else { "they" },
+            if too_big == 1 { "it" } else { "them" },
+        ));
+    }
     if left_alone > 0 {
         r.message = format!("Stopped. {} {} left as they were.", r.message, plural(left_alone, "item"));
     }
     r
+}
+
+/// Sends what's chosen to the Recycle Bin, in batches like deleting. Only what fits in the bin
+/// on its drive goes (Windows deletes anything bigger for good, without asking); the rest is
+/// marked in `big` and stays. Links are recycled as links, never followed.
+fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool]) -> Vec<Option<bool>> {
+    let stopped = || live.is_some_and(Live::stopped);
+    let mut room = bin::Room::default();
+    for (i, c) in chosen.iter().enumerate() {
+        big[i] = !c.targets.iter().all(|t| room.fits(t, c.bytes));
+    }
+    let mut out: Vec<Option<bool>> = vec![None; chosen.len()];
+    let mut start = 0;
+    while start < chosen.len() {
+        if big[start] {
+            out[start] = Some(false);
+            start += 1;
+            continue;
+        }
+        if stopped() {
+            break;
+        }
+        let mut end = start;
+        let mut files = 0;
+        while end < chosen.len() && !big[end] && end - start < BATCH_ITEMS && (end == start || files + chosen[end].files <= BATCH_FILES) {
+            files += chosen[end].files;
+            end += 1;
+        }
+        if let Some(l) = live {
+            l.working_on(chosen[start]);
+        }
+        let targets: Vec<&PathBuf> = chosen[start..end].iter().flat_map(|c| c.targets.iter()).filter(|t| std::fs::symlink_metadata(t).is_ok()).collect();
+        if !targets.is_empty() {
+            // Whatever couldn't go (in use) shows up below as still there.
+            let _ = ::trash::delete_all(&targets);
+        }
+        for (i, c) in chosen.iter().enumerate().take(end).skip(start) {
+            out[i] = Some(c.targets.iter().all(|t| std::fs::symlink_metadata(t).is_err()));
+        }
+        if let Some(l) = live {
+            l.files_gone(files);
+        }
+        start = end;
+    }
+    bin::refresh_icon();
+    out
+}
+
+fn recycled_message(r: &CleanReport) -> String {
+    let mut msg = if r.deleted == 0 {
+        "Nothing went to the Recycle Bin.".to_string()
+    } else {
+        format!("Moved {} ({}) to the Recycle Bin. Changed your mind? It's all in there.", plural(r.deleted, "item"), human_bytes(r.freed))
+    };
+    if r.skipped > 0 {
+        msg.push_str(&format!(" {} stayed: in use, or changed since mom looked.", plural(r.skipped, "item")));
+    }
+    msg
 }
 
 /// Cleans Docker: exactly the containers, images and build cache that are ticked (by default,
@@ -2266,7 +2355,7 @@ mod tests {
     #[test]
     fn what_was_ticked_travels_to_the_elevated_mom_which_only_cleans_admin_spots() {
         // The app hands the administrator `mom` what was ticked, as hex on its command line.
-        let pick = Pick { goes: false, new: true, ticked: vec![r"C:\x".into()], unticked: vec![] };
+        let pick = Pick { goes: false, new: true, ticked: vec![r"C:\x".into()], ..Default::default() };
         let hex = crate::elevate::to_hex(&serde_json::to_string(&pick).unwrap());
         let back: Pick = serde_json::from_str(&crate::elevate::from_hex(&hex).unwrap()).unwrap();
         assert_eq!((back.goes, back.new, back.ticked), (false, true, vec![r"C:\x".to_string()]));

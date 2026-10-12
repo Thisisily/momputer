@@ -133,6 +133,70 @@ pub(super) fn refresh_icon() {
     }
 }
 
+/// How much the Recycle Bin on each drive takes. Windows deletes anything bigger than that for
+/// good, without asking, so mom recycles only what fits and leaves the rest where it is.
+#[derive(Default)]
+pub(super) struct Room(std::collections::HashMap<String, Option<u64>>);
+
+impl Room {
+    /// Whether `bytes` at `path` would land in the bin rather than be deleted for good.
+    pub(super) fn fits(&mut self, path: &Path, bytes: u64) -> bool {
+        let Some(root) = drive_root(path) else { return false };
+        let cap = *self.0.entry(root.clone()).or_insert_with(|| capacity(&root));
+        cap.is_some_and(|c| bytes < c)
+    }
+}
+
+/// "C:\" for a path on drive C. Network paths have no Recycle Bin.
+fn drive_root(path: &Path) -> Option<String> {
+    use std::path::{Component, Prefix};
+    match path.components().next()? {
+        Component::Prefix(p) => match p.kind() {
+            Prefix::Disk(d) | Prefix::VerbatimDisk(d) => Some(format!("{}:\\", (d as char).to_ascii_uppercase())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The biggest thing the bin on a drive takes, or None when the drive has none: it's switched
+/// off there ("Don't move files to the Recycle Bin"), or it isn't a fixed disk.
+#[cfg(windows)]
+fn capacity(root: &str) -> Option<u64> {
+    use crate::health::reg::{dword_value, Hive};
+    use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetVolumeNameForVolumeMountPointW};
+    if !crate::util::fixed_drives().iter().any(|d| d.eq_ignore_ascii_case(root)) {
+        return None;
+    }
+    let w = crate::util::wide(root);
+    let mut name = [0u16; 64];
+    // SAFETY: `w` is NUL-terminated; `name` holds as many chars as passed.
+    let named = unsafe { GetVolumeNameForVolumeMountPointW(w.as_ptr(), name.as_mut_ptr(), name.len() as u32) } != 0;
+    // "\\?\Volume{1b2c…}\" -> "{1b2c…}", the key Windows keeps the drive's bin settings under.
+    let volume = named.then(|| String::from_utf16_lossy(&name[..name.iter().position(|&c| c == 0).unwrap_or(0)])).and_then(|v| {
+        let start = v.find('{')?;
+        Some(v[start..].trim_end_matches('\\').to_string())
+    });
+    let key = volume.map(|g| format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket\Volume\{g}"));
+    let setting = |value: &str| key.as_deref().and_then(|k| dword_value(Hive::CurrentUser, k, value));
+    if setting("NukeOnDelete") == Some(1) {
+        return None;
+    }
+    if let Some(mb) = setting("MaxCapacity") {
+        return Some(u64::from(mb) * 1024 * 1024);
+    }
+    // Never changed: Windows gives the bin 5% of the drive.
+    let mut total = 0u64;
+    // SAFETY: `w` is NUL-terminated; the one out pointer we want is ours, the others are optional.
+    let ok = unsafe { GetDiskFreeSpaceExW(w.as_ptr(), std::ptr::null_mut(), &mut total, std::ptr::null_mut()) } != 0;
+    ok.then_some(total / 20)
+}
+
+#[cfg(not(windows))]
+fn capacity(_: &str) -> Option<u64> {
+    None
+}
+
 /// The current user's SID ("S-1-5-21-…-1001"), which names their folder in every bin.
 #[cfg(windows)]
 fn current_sid() -> Option<String> {
@@ -178,6 +242,25 @@ fn current_sid() -> Option<String> {
 mod tests {
     use super::*;
     use crate::trash::tests::fixture;
+
+    #[test]
+    fn only_what_fits_a_drives_bin_is_recycled() {
+        assert_eq!(drive_root(Path::new(r"c:\Users\me\x")), Some(r"C:\".to_string()));
+        assert_eq!(drive_root(Path::new(r"\\?\D:\big")), Some(r"D:\".to_string()));
+        assert_eq!(drive_root(Path::new(r"\\server\share\x")), None);
+        let mut room = Room::default();
+        // A network share has no Recycle Bin: Windows would delete for good, so nothing fits.
+        assert!(!room.fits(Path::new(r"\\server\share\x"), 1));
+        #[cfg(windows)]
+        {
+            let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+            let p = PathBuf::from(format!(r"{system}\momputer-test-never-made"));
+            if capacity(&format!(r"{system}\")).is_some() {
+                assert!(room.fits(&p, 1), "a byte fits");
+                assert!(!room.fits(&p, u64::MAX), "nothing fits a bin bigger than the drive");
+            }
+        }
+    }
 
     fn filetime(unix: u64) -> u64 {
         (unix + 11_644_473_600) * 10_000_000

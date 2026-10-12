@@ -1,6 +1,6 @@
 /* Mom, drawn in SVG: a bun, a big white hairdo, giant round glasses and rosy cheeks.
    `momFace.svg(mood)` draws her once (the icons use it). `momFace.mount(el)` puts a live mom on
-   the page, animated with GSAP: she breathes, blinks, turns her head and eyes toward your pointer,
+   the page, animated with GSAP in short moments: she blinks, glances, sighs, turns toward your pointer,
    blushes when you hover over her, squishes when you boop her, and morphs from face to face. */
 (() => {
   "use strict";
@@ -214,11 +214,29 @@
 
     if (!G) return { set, boop() {}, hover() {}, get mood() { return mood; } };
 
-    // Breathing, and a bun that sways a beat behind.
-    const idle = [
-      G.to($(".breath"), { y: -1.8, scaleY: 0.993, transformOrigin: "50% 100%", duration: 2.4, ease: "sine.inOut", yoyo: true, repeat: -1 }),
-      G.to($(".bun"), { rotation: -3.5, transformOrigin: "50% 100%", duration: 2.4, ease: "sine.inOut", yoyo: true, repeat: -1, delay: 0.35 }),
-    ];
+    // Mom costs nothing when nothing's happening. There is no animation loop: she's a still picture
+    // until a moment comes along (a blink, a glance, a sigh, your pointer, a boop), and each moment
+    // is a short tween. Between them GSAP has nothing to do and its ticker goes to sleep, so no frames
+    // are drawn at all. Moments are scheduled with setTimeout, not GSAP's delayedCall, for that reason.
+    const breath = $(".breath");
+    const bun = $(".bun");
+    G.set([breath, bun], { transformOrigin: "50% 100%" });
+    const awake = () => !still() && !document.hidden;
+    // Someone's around: the widget has focus, or the pointer moved over it in the last 30 s. When
+    // nobody is, she rests: moments come `idle` times less often, and some not at all.
+    const near = () => document.hasFocus() || Date.now() - lastPointer < 30_000;
+    const every = (min, spread, fn, idle = 1) => {
+      const next = () => setTimeout(() => (awake() && fn(), next()), (min + Math.random() * spread) * 1000 * (near() ? 1 : idle));
+      next();
+    };
+
+    /** One slow breath, with the bun swaying a beat behind. */
+    function sigh(speed = 1) {
+      const d = 2.4 / speed;
+      G.timeline()
+        .to(breath, { y: -1.8, scaleY: 0.993, duration: d, ease: "sine.inOut", yoyo: true, repeat: 1, overwrite: "auto" }, 0)
+        .to(bun, { rotation: -3.5, duration: d, ease: "sine.inOut", yoyo: true, repeat: 1, overwrite: "auto" }, 0.35 / speed);
+    }
 
     // Where she looks. Her eyes move most, her face a little, her hair barely: it reads as a head turning.
     const turnX = G.quickTo($(".turn"), "x", { duration: 0.7, ease: "power3" });
@@ -250,35 +268,26 @@
         lookAt((e.clientX - cx) / 240, (e.clientY - cy) / 200);
       });
     });
-    document.documentElement.addEventListener("mouseleave", () => G.delayedCall(0.6, () => lookAt(0, 0)));
+    document.documentElement.addEventListener("mouseleave", () => setTimeout(() => lookAt(0, 0), 600));
 
-    // When nobody's moving the pointer she glances around now and then.
-    (function wander() {
-      if (!still() && !document.hidden && Date.now() - lastPointer > 5000) {
-        const spots = [[0, 0], [0, 0], [-0.7, 0.1], [0.7, 0.1], [-0.4, -0.5], [0.5, 0.4], [0, 0.6]];
-        const [x, y] = spots[Math.floor(Math.random() * spots.length)];
-        lookAt(x, y);
-      }
-      G.delayedCall(2 + Math.random() * 3, wander);
-    })();
+    // Now and then, while nobody's moving the pointer, she glances somewhere else.
+    const spots = [[0, 0], [0, 0], [-0.7, 0.1], [0.7, 0.1], [-0.4, -0.5], [0.5, 0.4], [0, 0.6]];
+    every(7, 9, () => Date.now() - lastPointer > 5000 && lookAt(...spots[Math.floor(Math.random() * spots.length)]), 3);
 
-    (function blink() {
+    every(2.4, 4.2, () => {
       const eyes = expr.querySelectorAll(".eye.open");
-      if (eyes.length && !still() && !document.hidden) {
-        const t = G.timeline();
-        t.to(eyes, { scaleY: 0.08, transformOrigin: "50% 50%", duration: 0.07, ease: "power2.in" }).to(eyes, { scaleY: 1, duration: 0.12, ease: "power2.out" });
-        if (Math.random() < 0.18) t.to(eyes, { scaleY: 0.08, duration: 0.07, ease: "power2.in" }, "+=0.08").to(eyes, { scaleY: 1, duration: 0.12 });
-      }
-      G.delayedCall(2.4 + Math.random() * 4.2, blink);
-    })();
+      if (!eyes.length) return;
+      const t = G.timeline();
+      t.to(eyes, { scaleY: 0.08, transformOrigin: "50% 50%", duration: 0.07, ease: "power2.in" }).to(eyes, { scaleY: 1, duration: 0.12, ease: "power2.out" });
+      if (Math.random() < 0.18) t.to(eyes, { scaleY: 0.08, duration: 0.07, ease: "power2.in" }, "+=0.08").to(eyes, { scaleY: 1, duration: 0.12 });
+    }, 2);
 
-    // Now and then the light catches her glasses.
-    (function glint() {
-      if (!still() && !document.hidden) {
-        G.fromTo($$(".glint"), { opacity: 0 }, { opacity: 0.9, duration: 0.18, yoyo: true, repeat: 1, ease: "sine.inOut", stagger: 0.06 });
-      }
-      G.delayedCall(7 + Math.random() * 9, glint);
-    })();
+    // The light catches her glasses; once in a while she takes a breath.
+    every(7, 9, () => G.fromTo($$(".glint"), { opacity: 0 }, { opacity: 0.9, duration: 0.18, yoyo: true, repeat: 1, ease: "sine.inOut", stagger: 0.06 }), 3);
+    every(20, 25, () => near() && sigh());
+    // A mood's own motion (beating hearts, a sweat drop, z's) plays a few times when it starts, then
+    // holds still; now and then it plays again.
+    every(9, 12, () => root.getAnimations({ subtree: true }).forEach((a) => a.playState === "finished" && a.play()), 3);
 
     /** You poked her: a squish, a little hop, and pink cheeks. */
     function boop() {
@@ -287,16 +296,16 @@
         .to($(".squash"), { scaleX: 1.08, scaleY: 0.9, transformOrigin: "50% 100%", duration: 0.09, ease: "power2.out" })
         .to($(".squash"), { scaleX: 1, scaleY: 1, duration: 0.8, ease: "elastic.out(1.1, 0.35)" });
       G.fromTo($$(".blush"), { scale: 1 }, { scale: 1.35, transformOrigin: "50% 50%", duration: 0.25, yoyo: true, repeat: 1, ease: "power2.out" });
+      sigh(1.6);
     }
 
     /** The pointer is on her: she perks up and blushes. */
     function hover(on) {
       if (still()) return;
       G.to($$(".blush"), { scale: on ? 1.18 : 1, opacity: on ? 1 : 0.95, transformOrigin: "50% 50%", duration: 0.35, ease: "power2.out" });
-      G.to(idle[0], { timeScale: on ? 1.6 : 1, duration: 0.3 });
+      if (on) sigh(1.6);
     }
 
-    document.addEventListener("visibilitychange", () => idle.forEach((t) => (document.hidden ? t.pause() : t.resume())));
     return { set, boop, hover, get mood() { return mood; } };
   }
 

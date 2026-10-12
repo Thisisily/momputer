@@ -193,24 +193,24 @@ fn find_with(ctx: &TrashCtx, agent_homes: &[PathBuf], installed: &Installed, min
             c.verdict(false, IN_USE)
         } else if let Some(newer) = &s.newer {
             let r = format!("An older version; {newer} is the one in use. Untouched for {}", ago(age));
-            if age >= A_WHILE { c.verdict(true, r) } else { c.kept_while_new(r) }
+            if age >= A_WHILE { c.verdict(true, r) } else { c.kept_but_tickable(r) }
         } else if let Some(what) = s.thing {
             // A model or a game: still yours to use, so only ever offered, never ticked for you.
             let r = match what {
                 "model" => format!("A model downloaded {} ago", ago(age)),
                 _ => format!("A {what} nobody has opened in {}", ago(age)),
             };
-            if age >= LONG_AGO || (!here && age >= A_WHILE) { c.kept_while_new(r) } else { continue }
+            if age >= LONG_AGO || (!here && age >= A_WHILE) { c.kept_but_tickable(r) } else { continue }
         } else if s.saves && !here && age >= A_WHILE {
-            c.kept_while_new(format!("Probably a game's saves and settings; the game isn't installed any more. Untouched for {}", ago(age)))
+            c.kept_but_tickable(format!("Probably a game's saves and settings; the game isn't installed any more. Untouched for {}", ago(age)))
         } else if s.saves {
             continue;
         } else if !here && age >= LONG_AGO {
             c.verdict(true, format!("Its app isn't installed any more. Untouched for {}", ago(age)))
         } else if !here && age >= A_WHILE {
-            c.kept_while_new(format!("Its app isn't installed any more. Untouched for {}", ago(age)))
+            c.kept_but_tickable(format!("Its app isn't installed any more. Untouched for {}", ago(age)))
         } else if here && age >= VERY_LONG_AGO {
-            c.kept_while_new(format!("Its app is still installed, but nobody has touched this in {}", ago(age)))
+            c.kept_but_tickable(format!("Its app is still installed, but nobody has touched this in {}", ago(age)))
         } else {
             continue; // in use lately, or its app is: nothing to say
         };
