@@ -743,7 +743,7 @@
     const rest = shown.filter((p) => p.kind !== "app" && p.kind !== "background");
     const cpu = list.reduce((a, p) => a + p.cpu, 0);
     const sort = (k, label) => `<button class="seg-btn" data-act="prog-sort" data-sort="${k}" aria-pressed="${v.sort === k}">${label}</button>`;
-    let html = `<div class="lead"><div class="lead-text"><p>${plural(apps.length, "app")} open and ${background.length} in the background, using ${Math.round(cpu)}% of the processor.</p></div></div>
+    let html = `<div class="lead"><div class="lead-text"><p>${plural(apps.length, "app")} open, ${background.length} in the background.<small>Using ${Math.round(cpu)}% of the processor between them.</small></p></div></div>
       <div class="list-tools">
         <label class="list-search">${ICON.search}<input type="search" id="prog-q" placeholder="Filter" value="${esc(v.q)}" autocomplete="off" spellcheck="false" aria-label="Filter programs"></label>
         <div class="seg" role="group" aria-label="Sort by">${sort("cpu", "CPU")}${sort("mem", "Memory")}${sort("gpu", "Graphics")}${sort("name", "A–Z")}</div>
@@ -862,11 +862,11 @@
     if (!list.length) return `<div class="lead"><div class="lead-text"><p>No Chrome, Edge, Brave or Vivaldi here.</p></div>${again}</div>`;
     const profiles = list.reduce((a, b) => a + b.profiles.length, 0);
     const exts = list.reduce((a, b) => a + b.profiles.reduce((x, p) => x + p.extensions.filter((e) => e.on).length, 0), 0);
-    let html = `<div class="lead"><div class="lead-text"><div class="big"><span class="dot free-num">${exts}</span></div><p>${exts === 1 ? "extension is" : "extensions are"} on across ${plural(profiles, "profile")} in ${plural(list.length, "browser")}. Open a profile to see what each one does.</p></div>${again}</div>`;
+    let html = `<div class="lead"><div class="lead-text"><div class="big"><span class="dot free-num">${exts}</span></div><p>${exts === 1 ? "extension is" : "extensions are"} on.<small>Across ${plural(profiles, "profile")} in ${plural(list.length, "browser")}. Open a profile to see what each one does.</small></p></div>${again}</div>`;
     for (const b of list) {
       const state_ = b.open ? `open for ${ageLong(b.openSecs)} · ${plural(b.processes, "process", "processes")} · ${bytes(b.mem)}` : "closed";
-      const buttons = `<div class="browser-acts">${b.open ? `<button class="secondary" data-act="copy-fix" data-text="${esc(b.restart)}" data-hint="${esc(`Paste it into ${b.name}'s address bar. Your tabs come back.`)}">${ICON.refresh}Copy ${esc(b.restart)}</button>` : ""}
-        <button class="secondary" data-act="copy-fix" data-text="${esc(b.extensionsPage)}" data-hint="${esc(`Paste it into ${b.name}'s address bar.`)}">${ICON.copy}Copy ${esc(b.extensionsPage)}</button></div>`;
+      const buttons = `<div class="browser-acts">${b.open ? `<button class="secondary" data-act="copy-fix" data-text="${esc(b.restart)}" data-hint="${esc(`Paste it into ${b.name}'s address bar. Your tabs come back.`)}" title="Copies ${esc(b.restart)}">${ICON.refresh}Restart page</button>` : ""}
+        <button class="secondary" data-act="copy-fix" data-text="${esc(b.extensionsPage)}" data-hint="${esc(`Paste it into ${b.name}'s address bar.`)}" title="Copies ${esc(b.extensionsPage)}">${ICON.copy}Extensions page</button></div>`;
       html += section(`br-${b.id}`, b.name, `<span class="led ${b.open ? "green" : ""}"></span> ${esc(state_)}`, buttons + b.profiles.map((p) => profileRow(b, p)).join(""));
     }
     return html;
@@ -912,7 +912,7 @@
     if (!list) return `<div class="lead"><div class="lead-text"><p>Looking at what starts with Windows…</p></div></div>`;
     const on = list.filter((x) => x.enabled);
     const off = list.filter((x) => !x.enabled);
-    let html = `<div class="lead"><div class="lead-text"><div class="big"><span class="dot free-num">${on.length}</span></div><p>of ${plural(list.length, "app")} start with Windows. Switch off what you don't need the moment you sign in; it still opens when you start it.</p></div>
+    let html = `<div class="lead"><div class="lead-text"><div class="big"><span class="dot free-num">${on.length}</span></div><p>of ${plural(list.length, "app")} start with Windows.<small>Switch off what you don't need the moment you sign in. It still opens when you start it.</small></p></div>
       <button class="secondary" data-act="open-uri" data-url="ms-settings:startupapps">Settings${ICON.out}</button></div>`;
     html += section("start-on", "Starts with Windows", on.length ? `${total(on.filter((x) => x.running))} now` : "", on.map(startupRow).join("") || `<p class="empty">Nothing. Windows starts clean.</p>`);
     if (off.length) html += section("start-off", "Switched off", "", off.map(startupRow).join(""));
@@ -1227,11 +1227,12 @@
         : t.busy
           ? "found so far, still looking."
           : spots.length
-            ? `mom can free up, as of ${ageLong(measuredAgo())} ago. Tap anything to see exactly what it is.`
+            ? "mom can free up."
             : "Let me look under the bed.";
+    const small = spots.length && !t.busy ? `Measured ${ageLong(measuredAgo())} ago. Tap anything to see exactly what it is.` : "";
     const shown = shownFree === null ? "" : sizeDots(shownFree);
     let html = upkeepTabs();
-    html += `<div class="lead" id="upkeep-lead"><div class="lead-text">${spots.length ? `<div class="big" id="free-big">${shown}</div>` : ""}<p>${esc(said)}</p></div>
+    html += `<div class="lead" id="upkeep-lead"><div class="lead-text">${spots.length ? `<div class="big" id="free-big">${shown}</div>` : ""}<p>${esc(said)}${small ? `<small>${esc(small)}</small>` : ""}</p></div>
       <button class="secondary" data-act="measure" ${t.busy ? "disabled" : ""}>${t.busy ? `<span class="led green blink"></span>Measuring` : spots.length ? "Measure again" : "Measure"}</button></div>`;
     for (const [key, title] of GROUPS) {
       const list = spots.filter((x) => (x.group || "dev") === key).sort((a, b) => b.reclaimableBytes - a.reclaimableBytes || b.totalBytes - a.totalBytes);
@@ -1476,9 +1477,14 @@
     const now = Date.now() / 1000;
     let said;
     if (f.busy) said = prog ? `${prog.stage === "comparing" ? "Comparing" : "Looking through"} ${plural(prog.files, "file")} (${bytes(prog.bytes)})…` : "Looking…";
-    else if (!r) said = "Mom can look through the places below for copies of the same file, and big files nobody has opened in a year. She only reads; nothing moves until you say.";
-    else said = `${r.groups.length ? "in extra copies of the same files. " : "No copies of the same file. "}Looked through ${plural(r.scannedFiles, "file")} ${ageLong(Math.max(0, now - r.measuredAt))} ago${r.complete ? "" : ", but was stopped early"}.`;
-    let html = `<div class="lead"><div class="lead-text">${r && r.groups.length && !f.busy ? `<div class="big">${sizeDots(r.wasted)}</div>` : ""}<p>${esc(said)}</p></div>
+    else if (!r) said = "Copies of the same file, and big files nobody opens.";
+    else said = r.groups.length ? "in extra copies of the same files." : "No copies of the same file.";
+    const small = f.busy
+      ? ""
+      : !r
+        ? "Mom looks through the places below. She only reads; nothing moves until you say."
+        : `Looked through ${plural(r.scannedFiles, "file")} ${ageLong(Math.max(0, now - r.measuredAt))} ago${r.complete ? "" : ", but was stopped early"}.`;
+    let html = `<div class="lead"><div class="lead-text">${r && r.groups.length && !f.busy ? `<div class="big">${sizeDots(r.wasted)}</div>` : ""}<p>${esc(said)}${small ? `<small>${esc(small)}</small>` : ""}</p></div>
       ${f.busy ? `<button class="secondary" data-act="files-stop">${ICON.stop}Stop</button>` : `<button class="secondary" data-act="files-scan">${r ? "Look again" : "Look"}</button>`}</div>`;
     if (f.busy && prog) html += `<div class="progress solo"><div class="progress-bar unknown"><span></span></div></div>`;
     html += placesBox();
@@ -2083,10 +2089,10 @@
   function momsRoom() {
     const best = roomBest();
     const body = !state.knocked
-      ? `<div class="door"><div class="door-sign dot">knock<br>first</div>
+      ? `<div class="door"><div class="door-frame"><div class="door-sign dot">knock<br>first</div><span class="door-knob"></span><span class="door-light"></span></div>
           <p>This is mom's room: her settings, her journal and the house rules. Nobody tidies mom's room.</p>
           <button class="primary" data-act="knock">Knock</button></div>`
-      : `<div class="door"><div class="door-sign dot open">come<br>in</div>
+      : `<div class="door"><div class="door-frame"><div class="door-sign dot open">come<br>in</div><span class="door-knob"></span><span class="door-light"></span></div>
           <p>She'll let you help, just this once.${best ? ` Your best: ${mmss(best)}.` : ""}</p>
           <button class="primary" data-act="enter-room">Go in</button></div>`;
     return `<div class="room-title"><h2>Mom's room</h2>${grade("A", 4)}<p class="said">My room? Of course it's spotless c:</p></div>
@@ -2583,6 +2589,7 @@
         else if (state.tab === "rooms") html = renderRooms();
         else html = renderRules();
         morph(page, html);
+        stripEdges();
         if (state.tab === "upkeep") drawFree();
       }
       state.renderFailed = false;
@@ -3432,6 +3439,38 @@
     if (e.key === "Escape" && playroom) leaveRoom();
     else if (e.key === "Escape" && state.sheet) closeSheet();
   });
+
+  // The scrollbar shows while you scroll, then fades away.
+  for (const el of [$("#page"), $("#sheet-body")]) {
+    if (!el) continue;
+    let fade = 0;
+    el.addEventListener(
+      "scroll",
+      () => {
+        el.classList.add("scrolling");
+        clearTimeout(fade);
+        fade = setTimeout(() => el.classList.remove("scrolling"), 900);
+      },
+      { passive: true }
+    );
+  }
+
+  /** A strip of subtabs fades at whichever edge has more, and shows the chosen one. */
+  function stripEdges() {
+    for (const strip of document.querySelectorAll(".subtabs")) {
+      const more = strip.scrollWidth - strip.clientWidth > 2;
+      const chosen = strip.querySelector('[aria-selected="true"]');
+      if (more && chosen) {
+        const left = chosen.offsetLeft - 8;
+        const right = chosen.offsetLeft + chosen.offsetWidth + 28;
+        if (left < strip.scrollLeft) strip.scrollLeft = left;
+        else if (right > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = right - strip.clientWidth;
+      }
+      strip.classList.toggle("more-left", more && strip.scrollLeft > 2);
+      strip.classList.toggle("more-right", more && strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 2);
+    }
+  }
+  document.addEventListener("scroll", (e) => e.target.classList && e.target.classList.contains("subtabs") && stripEdges(), { capture: true, passive: true });
 
   document.addEventListener("input", (e) => {
     if (e.target.id === "rules-text") state.rulesDraft = e.target.value;

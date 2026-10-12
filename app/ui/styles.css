@@ -457,9 +457,9 @@ textarea:focus-visible,
   position: relative;
   display: flex;
   gap: 2px;
-  margin: 0 12px 12px;
-  padding: 3px;
-  border-radius: 20px;
+  margin: 0 12px 10px;
+  padding: 4px;
+  border-radius: 23px;
   background: var(--card);
   box-shadow: inset 0 0 0 1px var(--edge);
   overflow-x: auto;
@@ -467,14 +467,16 @@ textarea:focus-visible,
   cursor: default;
 }
 
+/* The thumb that slides under the chosen tab: ink, with the faintest top light. */
 .tab-thumb {
   position: absolute;
-  top: 3px;
+  top: 4px;
   left: 0;
-  height: calc(100% - 6px);
+  height: calc(100% - 8px);
   width: 0;
-  border-radius: 17px;
+  border-radius: 19px;
   background: var(--ink);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--bg) 14%, transparent);
   pointer-events: none;
 }
 
@@ -485,11 +487,13 @@ textarea:focus-visible,
   align-items: center;
   justify-content: center;
   gap: 7px;
-  height: 32px;
+  height: 34px;
   padding: 0 12px;
-  border-radius: 17px;
-  color: var(--ink-2);
+  border-radius: 19px;
+  color: var(--ink-3);
+  font-size: 13px;
   font-weight: 600;
+  letter-spacing: -0.01em;
   transition: color 200ms ease;
 }
 
@@ -509,7 +513,10 @@ textarea:focus-visible,
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 12.5px;
+  font-family: var(--font-dot);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0;
 }
 
 .tab .count::before {
@@ -527,14 +534,56 @@ textarea:focus-visible,
   position: relative;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 12px 28px;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line-2) transparent;
+  padding: 0 6px 28px 12px;
+  scrollbar-gutter: stable;
+}
+
+/* The scrollbar: a slim pill that shows while you scroll or point at the page, then fades away.
+   No arrows, no track. */
+.page::-webkit-scrollbar,
+.sheet-body::-webkit-scrollbar {
+  width: 10px;
+}
+
+.page::-webkit-scrollbar-track,
+.sheet-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.page::-webkit-scrollbar-button,
+.sheet-body::-webkit-scrollbar-button {
+  display: none;
+  height: 0;
+}
+
+.page::-webkit-scrollbar-thumb,
+.sheet-body::-webkit-scrollbar-thumb {
+  min-height: 48px;
+  border: 3px solid transparent;
+  border-radius: 10px;
+  background: transparent padding-box;
+}
+
+.page:hover::-webkit-scrollbar-thumb,
+.page.scrolling::-webkit-scrollbar-thumb,
+.sheet-body:hover::-webkit-scrollbar-thumb,
+.sheet-body.scrolling::-webkit-scrollbar-thumb {
+  background-color: var(--line-2);
+}
+
+.page::-webkit-scrollbar-thumb:hover,
+.sheet-body::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ink-3);
+}
+
+.page::-webkit-scrollbar-thumb:active,
+.sheet-body::-webkit-scrollbar-thumb:active {
+  background-color: var(--ink-2);
 }
 
 .section + .section,
 :is(.md, .rules-editor, .button-row) + .section {
-  margin-top: 16px;
+  margin-top: 22px;
 }
 
 .md + .section,
@@ -542,31 +591,44 @@ textarea:focus-visible,
   margin-top: 22px;
 }
 
+/* A section's label: small capitals over its card, the aside (a total, a count) across from it. */
 .section-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 8px 7px;
+  min-height: 18px;
+  padding: 0 6px 8px;
 }
 
 .section-head h2 {
   margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
 }
 
 .section-head .aside {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
+/* Cards: one surface, one hairline edge, one radius. */
 .group {
   background: var(--card);
-  border-radius: 20px;
-  padding: 0 14px;
+  border-radius: 24px;
+  padding: 2px 16px;
   box-shadow: inset 0 0 0 1px var(--edge);
 }
 
@@ -575,13 +637,18 @@ textarea:focus-visible,
 }
 
 .group-foot {
-  padding: 10px 0 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 12px 0 14px;
 }
 
 .empty {
   margin: 0;
-  padding: 12px 0;
-  color: var(--ink-2);
+  padding: 16px 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -594,10 +661,15 @@ textarea:focus-visible,
     "meta nums2 act"
     "detail detail detail";
   column-gap: 10px;
-  padding: 10px 0;
+  padding: 12px 0;
   border-bottom: 1px solid var(--line);
   transition: opacity 260ms ease, max-height 320ms ease;
   max-height: 600px;
+}
+
+/* An open row grows with what's in it. */
+.row.is-open {
+  max-height: none;
 }
 
 .row[data-led] {
@@ -706,13 +778,14 @@ button.row-name:hover {
 .badge {
   display: inline-flex;
   align-items: center;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 16px;
-  padding: 0 7px;
-  border-radius: 8px;
-  border: 1px solid var(--line-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: var(--card-2);
   color: var(--ink-2);
+  letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   vertical-align: 1px;
@@ -720,7 +793,7 @@ button.row-name:hover {
 
 .badge.working {
   color: var(--green);
-  border-color: color-mix(in srgb, var(--green) 50%, transparent);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
 }
 
 .badge.look {
@@ -862,23 +935,31 @@ button.row-name:hover {
   font-weight: 600;
   font-size: 12px;
   text-decoration: underline;
-  text-decoration-color: var(--line-2);
-  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--ink) 22%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  transition: text-decoration-color 160ms ease;
 }
 
 .link-btn:hover {
   text-decoration-color: var(--ink);
 }
 
+.link-btn .ico {
+  width: 13px;
+  height: 13px;
+}
+
 .quiet-toggle {
   display: block;
   width: 100%;
-  padding: 11px 0;
+  padding: 12px 0;
   text-align: left;
-  color: var(--ink-2);
+  color: var(--ink-3);
   font-size: 12px;
   font-weight: 600;
   border-bottom: 1px solid var(--line);
+  transition: color 160ms ease;
 }
 
 .quiet-toggle:hover {
@@ -887,22 +968,44 @@ button.row-name:hover {
 
 /* ---------------------------------------------------------------- upkeep */
 
+/* The lead over a view: what mom found, in one sentence (a big dot-matrix number above it when
+   there's a number to say), with the view's one button across from it. */
 .lead {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 4px 8px 14px;
+  gap: 14px;
+  padding: 6px 6px 18px;
+}
+
+.lead-text {
+  min-width: 0;
 }
 
 .lead p {
   margin: 0;
-  font: 600 14px/1.3 var(--font-display);
-  max-width: 34ch;
+  font: 600 15px/1.38 var(--font-display);
+  letter-spacing: -0.012em;
+  max-width: 30ch;
+  text-wrap: pretty;
 }
 
 .lead .big {
-  margin-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+.lead > .secondary {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* The quieter line under a lead's headline. */
+.lead p small {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-2);
+  font: 400 12.5px/1.5 var(--font-ui);
+  letter-spacing: 0;
 }
 
 .lead-note {
@@ -917,16 +1020,19 @@ button.row-name:hover {
   height: 30px;
   padding: 0 14px;
   border-radius: 15px;
-  border: 1px solid var(--line-2);
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--line-2);
   font-weight: 600;
   font-size: 12.5px;
+  letter-spacing: -0.005em;
   color: var(--ink);
   white-space: nowrap;
-  transition: border-color 140ms ease, transform 120ms ease;
+  transition: box-shadow 160ms ease, background 160ms ease, transform 120ms ease;
 }
 
 .secondary:hover {
-  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink-2);
+  background: var(--card-2);
 }
 
 .secondary:active {
@@ -1587,6 +1693,9 @@ button.row-name:hover {
 }
 
 .mini-btn.wide {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   width: auto;
   padding: 0 11px;
   border-radius: 13px;
@@ -1595,6 +1704,16 @@ button.row-name:hover {
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
+  transition: background 160ms ease;
+}
+
+.mini-btn.wide:hover {
+  background: var(--line-2);
+}
+
+.mini-btn.wide .ico {
+  width: 12px;
+  height: 12px;
 }
 
 .moved-acts {
@@ -2296,26 +2415,49 @@ button.row-name:hover {
 
 /* ---------------------------------------------------------------- upkeep's own tabs */
 
+/* A view's own tabs: a quiet strip under the main tabs. The chosen one lifts onto a card with a
+   dot under it, like a Nothing page indicator; the strip scrolls sideways when they don't fit,
+   fading at the edge that has more. */
 .subtabs {
+  position: relative;
   display: flex;
-  gap: 4px;
-  margin: 0 8px 14px;
+  gap: 2px;
+  margin: 0 0 12px;
+  padding: 2px 4px 12px;
   overflow-x: auto;
   scrollbar-width: none;
+  scroll-behavior: smooth;
+}
+
+.subtabs.more-right {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+
+.subtabs.more-left {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+}
+
+.subtabs.more-left.more-right {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
 }
 
 .subtab {
+  position: relative;
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
+  height: 30px;
   padding: 0 12px;
-  border-radius: 14px;
-  color: var(--ink-2);
+  border-radius: 15px;
+  color: var(--ink-3);
   font-size: 12.5px;
   font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--line-2);
-  transition: color 140ms ease, background 140ms ease;
+  letter-spacing: -0.005em;
+  transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
 .subtab:hover {
@@ -2323,16 +2465,38 @@ button.row-name:hover {
 }
 
 .subtab[aria-selected="true"] {
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.subtab::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  width: 4px;
+  height: 4px;
+  margin-left: -2px;
+  border-radius: 50%;
   background: var(--ink);
-  color: var(--bg);
-  box-shadow: none;
+  opacity: 0;
+  transform: scale(0.4);
+  transition: opacity 200ms ease, transform 260ms cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+
+.subtab[aria-selected="true"]::after {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .subtab .count {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11.5px;
+  font-family: var(--font-dot);
+  font-size: 12.5px;
+  font-weight: 800;
 }
 
 .subtab .count::before {
@@ -2756,7 +2920,7 @@ button.row-name:hover {
 
 .secondary.sure {
   background: var(--red);
-  border-color: var(--red);
+  box-shadow: none;
   color: #fff;
 }
 
@@ -3129,8 +3293,8 @@ button.row-name:hover {
 /* ---------------------------------------------------------------- mom's room */
 
 .moms-room {
-  padding: 16px;
-  border-radius: 20px;
+  padding: 22px 16px 20px;
+  border-radius: 24px;
   background: var(--card);
   box-shadow: inset 0 0 0 1px var(--edge);
 }
@@ -3138,32 +3302,84 @@ button.row-name:hover {
 .door {
   display: grid;
   justify-items: center;
-  gap: 12px;
+  gap: 16px;
   text-align: center;
 }
 
 .door p {
   margin: 0;
-  max-width: 34ch;
+  max-width: 32ch;
   color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.5;
   text-wrap: pretty;
 }
 
+/* The door itself: an arched panel with a plaque, a knob that lights up, and (once she says come
+   in) a strip of light under it. */
+.door-frame {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  width: 150px;
+  height: 196px;
+  padding-top: 46px;
+  border-radius: 75px 75px 10px 10px;
+  background:
+    linear-gradient(to right, transparent 49.6%, var(--line) 49.6%, var(--line) 50.4%, transparent 50.4%) 0 0 / 100% 100%,
+    var(--card-2);
+  box-shadow: inset 0 0 0 1px var(--line-2), inset 0 -10px 18px -14px rgba(0, 0, 0, 0.5);
+}
+
 .door-sign {
-  padding: 14px 20px;
-  border-radius: 14px;
-  box-shadow: inset 0 0 0 2px var(--ink);
-  font-size: 30px;
+  position: relative;
+  z-index: 1;
+  padding: 9px 12px 8px;
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--line-2);
+  font-size: 19px;
   font-weight: 900;
   line-height: 1.05;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
-
 .door-sign.open {
-  box-shadow: inset 0 0 0 2px var(--green);
   color: var(--green);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 55%, transparent);
+}
+
+.door-knob {
+  position: absolute;
+  right: 22px;
+  top: 112px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--led-off);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+}
+
+.door-sign.open ~ .door-knob {
+  background: var(--green);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--green) var(--glow), transparent);
+}
+
+.door-light {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: transparent;
+}
+
+.door-sign.open ~ .door-light {
+  background: var(--green);
+  box-shadow: 0 0 14px 2px color-mix(in srgb, var(--green) var(--glow), transparent);
 }
 
 /* The playroom: mom's room, over the whole widget */
@@ -3375,4 +3591,73 @@ button.row-name:hover {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* ---------------------------------------------------------------- the design layer: shared rhythm */
+
+/* Rows: the name, what it is under it, numbers on the right. */
+.row-name {
+  font-size: 13.5px;
+  letter-spacing: -0.005em;
+}
+
+.row-nums {
+  font-weight: 600;
+}
+
+.row-nums2 {
+  font-size: 11.5px;
+}
+
+/* Findings: a light, a title, a sentence or two, and the buttons that do something about it. */
+.check-row {
+  padding: 13px 0 13px 18px;
+}
+
+.check-row::before {
+  top: 19px;
+}
+
+.check-text {
+  gap: 3px;
+}
+
+.check-text strong {
+  font-size: 13.5px;
+  letter-spacing: -0.005em;
+  line-height: 1.35;
+}
+
+.check-text span {
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.check-row.stack {
+  gap: 10px;
+}
+
+/* Open details: an inset panel inside the card. */
+.row-detail {
+  border-radius: 16px;
+  padding: 12px 14px;
+}
+
+/* Small print under lists. */
+.group-note,
+.list-hint {
+  line-height: 1.5;
+}
+
+/* Segmented controls (sorting, choices): a recessed track with the chosen one in ink. */
+.seg {
+  background: var(--card-2);
+  box-shadow: none;
+}
+
+/* A drop of polish for the hero's words and the toast. */
+.big-label {
+  letter-spacing: 0.01em;
 }
