@@ -272,8 +272,13 @@ fn checks(f: &Facts) -> Vec<Check> {
 /// Processes that are Windows itself, not programs anyone chose to run.
 const NOT_PROGRAMS: &[&str] = &["system", "idle", "registry", "memory compression", "secure system"];
 
+/// Windows' own bookkeeping, not a program anyone chose to run.
+pub(crate) fn not_a_program(name: &str) -> bool {
+    NOT_PROGRAMS.contains(&name.to_ascii_lowercase().as_str())
+}
+
 /// A name people recognise for a program's process.
-fn program_name(exe: &str) -> String {
+pub(crate) fn program_name(exe: &str) -> String {
     let lower = exe.to_ascii_lowercase();
     let stem = lower.trim_end_matches(".exe");
     let known = match stem {
@@ -311,6 +316,11 @@ fn program_name(exe: &str) -> String {
         "outlook" | "olk" => "Outlook",
         "photoshop" => "Photoshop",
         "blender" => "Blender",
+        "uninstallmonitor" | "iobituninstaler" | "iobitunsvr" => "IObit Uninstaller",
+        "razerappengine" | "razer central" | "razercentralservice" | "razercortex" | "cortexlauncherservice" | "gamemanagerservice3" | "razerwdl" | "rzactionsvc" => "Razer",
+        "lghub" | "lghub_agent" | "lghub_updater" | "lghub_system_tray" => "Logitech G HUB",
+        "icue" => "Corsair iCUE",
+        "momputer" => "momputer",
         _ => "",
     };
     if !known.is_empty() {
@@ -323,7 +333,7 @@ fn program_name(exe: &str) -> String {
 pub fn top_memory(table: &ProcTable, n: usize) -> Vec<ProcMem> {
     let mut by: HashMap<String, ProcMem> = HashMap::new();
     for p in table.procs.values() {
-        if p.pid == 0 || p.pid == 4 || NOT_PROGRAMS.contains(&p.name.to_ascii_lowercase().as_str()) {
+        if p.pid == 0 || p.pid == 4 || not_a_program(&p.name) {
             continue;
         }
         let name = program_name(&p.name);

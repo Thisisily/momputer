@@ -1020,6 +1020,13 @@ button.row-name:hover {
   border-bottom: 1px solid var(--line);
 }
 
+/* A longer story: the button goes under it, so the words get the whole width. */
+.check-row.stack {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  gap: 9px;
+}
+
 .check-row::before {
   content: "";
   position: absolute;

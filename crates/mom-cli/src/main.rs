@@ -80,6 +80,12 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// What's slowing the PC down: apps that lost the graphics card, driver crashes, hardware
+    /// errors, overclocking tools, helpers that run all day, and what's busy right now.
+    Speed {
+        #[arg(long)]
+        json: bool,
+    },
     /// Windows settings that drifted from the defaults over the years, and leftovers pointing at
     /// things that are gone. `mom settings fix <id>` puts one back.
     Settings {
@@ -415,6 +421,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Machines { .. })
         | Some(Cmd::Trash { .. })
         | Some(Cmd::Health { .. })
+        | Some(Cmd::Speed { .. })
         | Some(Cmd::Files { .. })
         | Some(Cmd::Integrations { .. })
         | Some(Cmd::Config)
@@ -744,6 +751,19 @@ fn run(cli: Cli) -> Result<i32> {
                 print_health(&st, &h);
             }
         }
+        Some(Cmd::Speed { json }) => {
+            // Two looks a moment apart, so there's something to measure "busy right now" by.
+            let mut sampler = mom_core::procs::Sampler::new();
+            sampler.sample();
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let table = sampler.sample();
+            let sp = mom_core::speed::check(&table);
+            if json {
+                print_json(&sp)?;
+            } else {
+                print_speed(&st, &sp);
+            }
+        }
         Some(Cmd::Tidy { dir, apply, only, prompt, json }) => {
             let dir = match dir {
                 Some(d) => d,
@@ -1052,6 +1072,42 @@ fn print_health(st: &Style, h: &mom_core::health::Health) {
     for a in &h.startup {
         let state = if a.enabled { st.green("on ") } else { st.dim("off") };
         println!("  {state} {}{}", pad(&a.name, 30), st.dim(&format!("{} · {}", a.location, ellipsize(&a.command, 60))));
+    }
+}
+
+fn print_speed(st: &Style, sp: &mom_core::speed::Speed) {
+    let warns = sp.findings.iter().filter(|f| f.level == "warn").count();
+    let line = match warns {
+        0 => "Nothing's dragging its feet. Good.".to_string(),
+        1 => "One thing is slowing you down, sweetie.".to_string(),
+        n => format!("{n} things are slowing you down, sweetie."),
+    };
+    println!("{}  {}
+", st.pink(&st.bold("mom")), st.bold(&format!("\"{line}\"")));
+    for f in &sp.findings {
+        let mark = match f.level {
+            "warn" => st.red("!"),
+            "tip" => st.yellow("~"),
+            _ => st.green("✓"),
+        };
+        println!("  {mark} {}  {}", st.bold(&f.title), st.dim(&f.detail));
+        if let Some(x) = &f.fix {
+            println!("      {}", st.dim(&format!("{}{}", x.label, x.hint.as_ref().map(|h| format!(": {h}")).unwrap_or_default())));
+        }
+    }
+    if let Some(g) = &sp.gpu {
+        let mut bits = vec![g.name.clone()];
+        bits.extend(g.temp.map(|t| format!("{t} °C")));
+        bits.extend(g.busy.map(|b| format!("{b}% busy")));
+        bits.extend(g.power_limit.map(|w| format!("power limit {w:.0} W")));
+        println!("
+{}  {}", st.bold("GRAPHICS CARD"), st.dim(&bits.join(" · ")));
+    }
+    println!("
+{}", st.bold("BUSY RIGHT NOW"));
+    for b in &sp.busy {
+        let procs = if b.count == 1 { "1 process".to_string() } else { format!("{} processes", b.count) };
+        println!("  {}{}{}", pad(&format!("{:.1}%", b.cpu), 8), pad(&b.name, 30), st.dim(&format!("{} · {procs}", human_bytes(b.mem))));
     }
 }
 

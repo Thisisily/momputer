@@ -26,6 +26,10 @@
   const state = {
     snap: null,
     tab: "running",
+    runningTab: "agents", // Running's two views: "agents" or "speed"
+    speed: null, // what's slowing the PC down (get_speed)
+    speedAt: 0,
+    speedLoading: false,
     expanded: new Set(),
     stopping: new Set(),
     done: new Set(),
@@ -180,6 +184,7 @@
     out: icon('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
     refresh: icon('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>'),
     trash: icon('<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>'),
+    copy: icon('<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'),
     undo: icon('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>'),
     archive: icon('<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'),
     wrench: icon('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
@@ -485,7 +490,101 @@
 
   const total = (list) => bytes(list.reduce((a, g) => a + g.mem, 0));
 
+  const RUNNING_TABS = [
+    ["agents", "Agents"],
+    ["speed", "Speed"],
+  ];
+
+  function runningTabs() {
+    const warns = state.speed ? state.speed.findings.filter((f) => f.level === "warn").length : 0;
+    const dot = (k) => (k === "speed" && warns ? `<span class="count num">${warns}</span>` : "");
+    return `<div class="subtabs" role="tablist" aria-label="Running">${RUNNING_TABS.map(
+      ([k, label]) => `<button class="subtab" role="tab" data-act="running-tab" data-tab="${k}" aria-selected="${state.runningTab === k}">${label}${dot(k)}</button>`
+    ).join("")}</div>`;
+  }
+
   function renderRunning() {
+    return runningTabs() + (state.runningTab === "speed" ? renderSpeed() : renderAgents());
+  }
+
+  // ------------------------------------------------------------ running: speed
+
+  /** The one thing to do about a finding: copy a page only the browser can open, open Windows
+      Settings, or show another part of the widget. */
+  function fixButton(f) {
+    if (f.kind === "copy")
+      return `<button class="secondary" data-act="copy-fix" data-text="${esc(f.value)}" data-hint="${esc(f.hint || "Copied.")}">${ICON.copy}${esc(f.label)}</button>`;
+    if (f.kind === "open") return `<button class="secondary" data-act="open-uri" data-url="${esc(f.value)}">${esc(f.label)}${ICON.out}</button>`;
+    if (f.kind === "tab") return `<button class="secondary" data-act="go-tab" data-to="${esc(f.value)}">${esc(f.label)}</button>`;
+    return "";
+  }
+
+  function renderSpeed() {
+    const sp = state.speed;
+    const again = `<button class="secondary" data-act="speed-again" ${state.speedLoading ? "disabled" : ""}>${state.speedLoading ? '<span class="led green blink"></span>Looking' : "Look again"}</button>`;
+    if (!sp) return `<div class="lead"><div class="lead-text"><p>Looking for what slows your PC down…</p></div>${again}</div>`;
+    const order = { warn: 0, tip: 1, ok: 2 };
+    const findings = [...sp.findings].sort((a, b) => (order[a.level] ?? 1) - (order[b.level] ?? 1));
+    const warns = findings.filter((f) => f.level === "warn").length;
+    const said = warns ? `${warns === 1 ? "thing is" : "things are"} slowing your PC down.` : "Nothing's slowing your PC down right now.";
+    let html = `<div class="lead"><div class="lead-text">${warns ? `<div class="big"><span class="dot free-num">${warns}</span></div>` : ""}<p>${said}</p></div>${again}</div>`;
+    if (findings.length) {
+      html += section(
+        "slow",
+        "What mom found",
+        "",
+        findings
+          .map(
+            (f) => `<div class="check-row${f.fix ? " stack" : ""}" id="spd-${hash(f.id)}" data-led="${f.level === "warn" ? "red" : f.level === "ok" ? "green" : "off"}">
+          <div class="check-text"><strong>${esc(f.title)}</strong><span>${esc(f.detail)}</span></div>
+          ${f.fix ? fixButton(f.fix) : ""}
+        </div>`
+          )
+          .join("")
+      );
+    }
+    const rows = [];
+    const g = sp.gpu;
+    if (g) {
+      const bits = [g.temp != null ? `${g.temp} °C` : "", g.powerLimit ? `power limit ${Math.round(g.powerLimit)} W` : ""].filter(Boolean).join(" · ");
+      rows.push(`<div class="row" id="spd-gpu" data-led="green" style="grid-template-areas:'name nums act' 'meta nums2 act'">
+          <span class="row-name">${esc(g.name)}</span>
+          <div class="row-meta"><span class="why">Graphics card${bits ? ` · ${esc(bits)}` : ""}</span></div>
+          <div class="row-nums num">${g.busy != null ? `${g.busy}%` : ""}</div>
+          <div class="row-nums2">${g.busy != null ? "busy" : ""}</div>
+          <div class="row-act"></div>
+        </div>`);
+    }
+    for (const b of sp.busy) {
+      rows.push(`<div class="row" id="spd-b-${hash(b.name)}" data-led="${b.cpu >= 10 ? "red" : "off"}" style="grid-template-areas:'name nums act' 'meta nums2 act'">
+          <span class="row-name">${esc(b.name)}</span>
+          <div class="row-meta"><span class="why">${plural(b.count, "process", "processes")} · ${bytes(b.mem)}</span></div>
+          <div class="row-nums num"><span class="${b.cpu >= 10 ? "hot" : ""}">${b.cpu < 10 ? b.cpu.toFixed(1) : Math.round(b.cpu)}%</span></div>
+          <div class="row-nums2">of the CPU</div>
+          <div class="row-act"></div>
+        </div>`);
+    }
+    html += section("busy", "Busy right now", "", rows.join("") || `<p class="empty">Nothing's busy. Your PC is resting.</p>`);
+    return html;
+  }
+
+  /** Looks at what slows the PC down. The busy list changes by the second; the slow parts (the
+      event log, installed tools) are read again at most every five minutes, or when asked. */
+  async function loadSpeed(fresh = false) {
+    if (state.speedLoading) return;
+    state.speedLoading = true;
+    if (state.tab === "running" && state.runningTab === "speed") render();
+    try {
+      state.speed = await invoke("get_speed", { fresh });
+      state.speedAt = Date.now();
+    } catch (e) {
+      console.warn("no speed", e);
+    }
+    state.speedLoading = false;
+    if (state.tab === "running") render();
+  }
+
+  function renderAgents() {
     const s = state.snap;
     if (!s) return section("wait", "Having a look around", "", `<p class="empty">One moment…</p>`);
     const groups = s.groups.filter((g) => !state.done.has(g.id) || state.stopping.has(g.id));
@@ -2364,6 +2463,35 @@
       case "open-spot":
         openSheet({ kind: "spot", id: el.dataset.spot });
         break;
+      case "running-tab":
+        if (state.runningTab === el.dataset.tab) break;
+        state.runningTab = el.dataset.tab;
+        $("#page").scrollTop = 0;
+        render();
+        if (state.runningTab === "speed" && Date.now() - state.speedAt > 10000) loadSpeed();
+        break;
+      case "speed-again":
+        loadSpeed(true);
+        break;
+      case "copy-fix":
+        try {
+          await navigator.clipboard.writeText(el.dataset.text);
+          toast(`Copied ${el.dataset.text}. ${el.dataset.hint}`);
+        } catch {
+          toast("Couldn't reach the clipboard.", true);
+        }
+        break;
+      case "go-tab": {
+        const [tab, sub] = el.dataset.to.split(":");
+        if (tab === "upkeep" && sub) {
+          state.upkeepTab = sub;
+          openUpkeepTab(sub);
+        }
+        selectTab(tab);
+        $("#page").scrollTop = 0;
+        render();
+        break;
+      }
       case "upkeep-tab":
         if (state.upkeepTab === el.dataset.tab) break;
         state.upkeepTab = el.dataset.tab;
@@ -2910,6 +3038,9 @@
       }
       renderChecked();
       if (state.tab === "upkeep" && !document.hidden) loadHealth();
+      const watching = state.tab === "running" && state.runningTab === "speed" && !document.hidden;
+      const age = Date.now() - state.speedAt;
+      if (age > (watching ? 10000 : 300000) && !state.paused) loadSpeed();
     }, 2000);
     document.addEventListener("visibilitychange", async () => {
       if (document.visibilityState !== "visible") return;

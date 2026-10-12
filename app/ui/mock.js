@@ -398,6 +398,31 @@
     ],
   };
 
+  // What Speed finds: an example machine with a browser that lost the graphics card.
+  const speed = {
+    at: now - 20,
+    findings: [
+      { id: "no-gpu-chrome", level: "warn", title: "Chrome is drawing without your graphics card",
+        detail: "Chrome draws video, scrolling and animation on the processor instead, which is why videos stutter. It happens when the graphics driver crashes or updates while Chrome is open, and lasts until Chrome restarts. Chrome has been open 2 days with 79 processes and 14.2 GB of memory; a restart brings every tab back.",
+        fix: { label: "Copy chrome://restart", kind: "copy", value: "chrome://restart", hint: "Paste it into Chrome's address bar. Your tabs come back." } },
+      { id: "gpu-driver", level: "warn", title: "Your graphics driver crashed 6 times in two weeks",
+        detail: "All 6 were 7 days ago. The driver was also updated 19 hours ago. Each time, Windows restarts it, and apps that were open can lose the graphics card until they restart. An overclock on the graphics card is the usual cause; otherwise, reinstall the driver from the maker's site.", fix: null },
+      { id: "tuners", level: "tip", title: "GPU Tweak III is installed, not running",
+        detail: "So nothing is overclocked right now. Your RTX 2070 SUPER runs at its standard power limit (215 W). If you overclocked with it when the crashes above happened, that's the likely cause: leave it at default.", fix: null },
+      { id: "extras", level: "tip", title: "2 helpers running all the time",
+        detail: "IObit Uninstaller (watches every program you install): 2 processes, 33 MB, 45% of a processor core all day. Razer Synapse and Cortex (lighting, mouse settings and a game booster): 19 processes, 866 MB, 10% of a processor core all day. If you don't need them, stop them starting with Windows.",
+        fix: { label: "Startup apps", kind: "tab", value: "upkeep:apps", hint: null } },
+    ],
+    gpu: { name: "RTX 2070 SUPER", temp: 41, busy: 3, powerLimit: 215, defaultPowerLimit: 215 },
+    busy: [
+      { name: "Claude", cpu: 2.8, mem: 3.8 * GB, count: 23 },
+      { name: "Desktop Window Manager", cpu: 0.9, mem: 230 * MB, count: 1 },
+      { name: "Windows services", cpu: 0.7, mem: 1.5 * GB, count: 96 },
+      { name: "UninstallMonitor", cpu: 0.7, mem: 20 * MB, count: 1 },
+      { name: "Chrome", cpu: 0.4, mem: 14.2 * GB, count: 79 },
+    ],
+  };
+
   const room = {
     path: "C:\\Workspace\\storefront\\data\\field-notes",
     name: "field-notes",
@@ -603,6 +628,7 @@
     },
     uninstall_app: async () => (await wait(200), "Atlas Recorder's uninstaller is open. Follow it to the end."),
     get_health: async () => (await wait(150), JSON.parse(JSON.stringify(health))),
+    get_speed: async () => (await wait(400), { ...JSON.parse(JSON.stringify(speed)), at: Math.floor(Date.now() / 1000) - 5 }),
     room_paths: () => [room.path],
     get_rooms: () => [room],
     inspect_room: async () => (await wait(300), room),

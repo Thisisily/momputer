@@ -514,6 +514,38 @@ mod nt {
     }
 }
 
+/// The command lines of a few processes, read now. The table only reads them for processes
+/// worth a look (opening every process is slow with some antivirus), so this is for the odd
+/// one more: a browser's newest tabs, say. A PID now running something else is left out.
+pub fn command_lines(table: &ProcTable, pids: &[u32]) -> HashMap<u32, String> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, UpdateKind};
+    let mut out = HashMap::new();
+    let mut unread = Vec::new();
+    for pid in pids {
+        match table.get(*pid) {
+            Some(p) if !p.cmd.is_empty() => {
+                out.insert(*pid, p.cmdline());
+            }
+            Some(_) => unread.push(Pid::from_u32(*pid)),
+            None => {}
+        }
+    }
+    if unread.is_empty() {
+        return out;
+    }
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&unread), true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+    for pid in unread {
+        let (Some(p), Some(known)) = (sys.process(pid), table.get(pid.as_u32())) else { continue };
+        if p.start_time() != 0 && p.start_time().abs_diff(known.start) > 2 {
+            continue;
+        }
+        let line: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().to_string()).collect();
+        out.insert(pid.as_u32(), line.join(" "));
+    }
+    out
+}
+
 /// Builds a table by hand. Used by tests and by the UI's mock data generator.
 pub fn fake(pid: u32, ppid: u32, name: &str, cmd: &str, start: u64) -> Proc {
     Proc {

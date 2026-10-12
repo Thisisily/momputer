@@ -22,6 +22,7 @@ pub mod ports;
 pub mod procs;
 pub mod rules;
 pub mod scan;
+pub mod speed;
 pub mod tidy;
 pub mod trash;
 pub mod util;

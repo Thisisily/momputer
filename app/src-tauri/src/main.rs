@@ -861,6 +861,22 @@ async fn get_health(s: State<'_, S>) -> Res<mom_core::health::Health> {
     .map_err(err)
 }
 
+/// What's slowing the PC down. `fresh` reads the event log and the installed tools again
+/// instead of using what was read in the last five minutes.
+#[tauri::command]
+async fn get_speed(fresh: bool, s: State<'_, S>) -> Res<mom_core::speed::Speed> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if fresh {
+            mom_core::speed::forget();
+        }
+        let table = s.sampler.lk().sample();
+        mom_core::speed::check(&table)
+    })
+    .await
+    .map_err(err)
+}
+
 #[tauri::command(async)]
 fn get_rooms(s: State<'_, S>) -> Vec<tidy::RoomReport> {
     let rooms = s.cfg().rooms;
@@ -1179,6 +1195,7 @@ fn main() {
             undo_setting,
             open_program,
             get_health,
+            get_speed,
             get_rooms,
             room_paths,
             inspect_room,
