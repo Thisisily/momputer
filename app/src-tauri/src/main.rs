@@ -40,6 +40,9 @@ struct Shared {
     trash_busy: AtomicBool,
     /// The clean-up running now: how it's going, and its stop button.
     cleaning: trash::Live,
+    /// Looking for copies and big forgotten files, and its stop button.
+    files_busy: AtomicBool,
+    files_stop: AtomicBool,
     /// Docker, WSL and Hyper-V. Asking them can take many seconds, so it happens on its own thread.
     machines: Mutex<Machines>,
     machines_busy: AtomicBool,
@@ -626,6 +629,113 @@ fn clean_as_admin(s: &Shared, id: &str, pick: Option<&trash::Pick>) -> trash::Cl
     tally_gone(id, before, r, note)
 }
 
+// ------------------------------------------------------------ files: copies and big forgotten files
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilesState {
+    report: Option<mom_core::files::FilesReport>,
+    busy: bool,
+}
+
+#[tauri::command(async)]
+fn files_state(s: State<'_, S>) -> FilesState {
+    FilesState { report: mom_core::files::load_saved(&s.paths), busy: s.files_busy.load(Ordering::Relaxed) }
+}
+
+/// Looks through your folders on its own thread: "files-progress" while it works, "files" when
+/// it's done (or stopped).
+#[tauri::command(async)]
+fn scan_files(app: AppHandle, s: State<'_, S>) {
+    let s = s.inner().clone();
+    if s.files_busy.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    s.files_stop.store(false, Ordering::SeqCst);
+    std::thread::spawn(move || {
+        let opts = mom_core::files::ScanOpts::for_paths(&s.paths);
+        let progress = |p: mom_core::files::Progress| {
+            let _ = app.emit("files-progress", p);
+        };
+        let r = mom_core::files::scan(&s.paths, &opts, &s.files_stop, &progress);
+        mom_core::files::save(&s.paths, &r);
+        s.files_busy.store(false, Ordering::SeqCst);
+        let _ = app.emit("files", FilesState { report: Some(r), busy: false });
+    });
+}
+
+#[tauri::command(async)]
+fn stop_files_scan(s: State<'_, S>) {
+    s.files_stop.store(true, Ordering::SeqCst);
+}
+
+/// Sends what's ticked to the Recycle Bin, never the last copy of anything (see files::recycle).
+#[tauri::command(async)]
+fn recycle_files(paths: Vec<String>, s: State<'_, S>) -> mom_core::files::RecycleReport {
+    let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let r = mom_core::files::recycle(&s.paths, &files);
+    if r.freed > 0 {
+        s.note(format!("Moved {} of copies and old files to the Recycle Bin.", human_bytes(r.freed)));
+    }
+    r
+}
+
+// ------------------------------------------------------------ Windows settings
+
+#[tauri::command(async)]
+fn get_winsettings(s: State<'_, S>) -> Vec<mom_core::winsettings::Finding> {
+    mom_core::winsettings::check(&s.paths)
+}
+
+/// Puts one setting back the way Windows ships it. Your own settings change right away (with a
+/// backup for undo); the machine's go through an administrator `mom`, the same careful way as
+/// admin clean-ups, and only from mom's own list with her own values.
+#[tauri::command(async)]
+fn fix_setting(id: String, s: State<'_, S>) -> Res<String> {
+    use mom_core::winsettings;
+    let Some(f) = winsettings::check(&s.paths).into_iter().find(|f| f.id == id) else {
+        return Ok("That one is already fine.".into());
+    };
+    let Some(fix) = f.fix else {
+        return Err("Mom can't change that one herself; the settings button opens the right place.".into());
+    };
+    let after = fix.after.map(|a| format!(" {a}")).unwrap_or_default();
+    if !fix.admin {
+        let msg = winsettings::fix(&s.paths, &id).map_err(err)?;
+        s.note(format!("Put back a Windows setting: {}.", f.title));
+        return Ok(msg);
+    }
+    if !winsettings::is_admin_fix(&id) || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':') {
+        return Err("Mom doesn't change that one as administrator.".into());
+    }
+    let app = std::env::current_exe().unwrap_or_default();
+    let mom = app.with_file_name("mom.exe");
+    mom_core::elevate::safe_to_elevate(&mom, &app)?;
+    winsettings::record_admin_fix(&s.paths, &id)?;
+    mom_core::elevate::run_as_admin(&mom, &format!("settings fix {id} --elevated"))?;
+    if winsettings::check(&s.paths).iter().any(|f| f.id == id) {
+        return Err("Windows let mom try, but the setting didn't change.".into());
+    }
+    s.note(format!("Put back a Windows setting: {}.", f.title));
+    Ok(format!("Done: {}.{after}", f.title.trim_end_matches('.')))
+}
+
+#[tauri::command(async)]
+fn undo_setting(id: String, s: State<'_, S>) -> Res<String> {
+    mom_core::winsettings::undo(&s.paths, &id).map_err(err)
+}
+
+/// Opens one of Windows' own settings programs (the ones the checkup points to).
+#[tauri::command(async)]
+fn open_program(name: String) -> Res<()> {
+    const ALLOWED: &[&str] = &["SystemPropertiesPerformance.exe", "SystemPropertiesAdvanced.exe", "UserAccountControlSettings.exe", "cttune.exe"];
+    if !ALLOWED.contains(&name.as_str()) {
+        return Err("mom only opens Windows' own settings programs".into());
+    }
+    let windows = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    mom_core::elevate::open(&windows.join("System32").join(&name), "")
+}
+
 /// Why mom can't clean as administrator from this copy of the app, if she can't: shown before
 /// anyone presses the button.
 #[tauri::command(async)]
@@ -999,6 +1109,8 @@ fn main() {
         trash: Mutex::new(saved_trash),
         trash_busy: AtomicBool::new(false),
         cleaning: trash::Live::default(),
+        files_busy: AtomicBool::new(false),
+        files_stop: AtomicBool::new(false),
         machines: Mutex::new(Machines::default()),
         machines_busy: AtomicBool::new(false),
         machines_at: Mutex::new(None),
@@ -1042,6 +1154,14 @@ fn main() {
             measure_spot,
             clean_progress,
             stop_clean,
+            files_state,
+            scan_files,
+            stop_files_scan,
+            recycle_files,
+            get_winsettings,
+            fix_setting,
+            undo_setting,
+            open_program,
             get_health,
             get_rooms,
             room_paths,

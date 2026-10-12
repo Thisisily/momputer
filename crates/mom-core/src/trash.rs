@@ -96,6 +96,9 @@ pub struct Item {
     pub optional: bool,
     /// Why it goes or stays ("Session ended 3 days ago", "Edge is open").
     pub reason: String,
+    /// What sort of thing it is, plural ("images", "logs"), in spots that hold several sorts.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -811,6 +814,7 @@ impl Cand {
             goes: self.goes,
             optional: self.optional,
             reason: self.reason,
+            kind: self.kind.map(str::to_string),
         }
     }
 }

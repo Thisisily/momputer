@@ -37,6 +37,25 @@
     uninstalled: new Set(), // apps whose uninstaller was opened
     showAllUnused: false,
     showAllStartup: false,
+    upkeepTab: "storage", // storage | apps | windows | files
+    listView: loadView(), // how a clean-up's lists are shown: sort, grouped, filter
+    groupOpen: {}, // "<spot>:<list>:<group>" -> open or shut, where the user changed it
+    doesOpen: false, // the full text under "What the button does"
+    live: null, // how the clean-up running now is going (from clean_progress)
+    gone: new Set(), // what the clean-up running now has removed, by path
+    files: null, // { report, busy }: copies and big forgotten files
+    filesProgress: null,
+    filesKeep: {}, // a set of copies' hash -> the copy to keep instead of mom's pick
+    filesUntick: new Set(), // extra copies the user wants to keep as well
+    bigTicked: new Set(), // big files the user ticked
+    filesConfirm: false,
+    filesWorking: false,
+    showAllCopies: false,
+    winsettings: null, // Windows settings that drifted from the defaults
+    winLoading: false,
+    winBusy: null, // the setting being put back
+    winConfirm: null,
+    winFixed: [], // settings put back this session that can be undone: { id, title }
     roomPaths: [],
     rooms: {},
     roomOpen: null,
@@ -54,6 +73,21 @@
     ready: false,
     lastCount: null,
   };
+
+  /** How lists are shown, kept between sessions (in the webview's own storage). */
+  function loadView() {
+    try {
+      const v = JSON.parse(localStorage.getItem("mom.listView") || "{}");
+      return { sort: ["size", "age", "name"].includes(v.sort) ? v.sort : "size", group: v.group !== false, q: "" };
+    } catch {
+      return { sort: "size", group: true, q: "" };
+    }
+  }
+  function saveView() {
+    try {
+      localStorage.setItem("mom.listView", JSON.stringify({ sort: state.listView.sort, group: state.listView.group }));
+    } catch {}
+  }
 
   // ------------------------------------------------------------ little helpers
 
@@ -115,6 +149,26 @@
     folder: icon('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'),
     close: icon('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
     out: icon('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
+    refresh: icon('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>'),
+    trash: icon('<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>'),
+    undo: icon('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>'),
+    archive: icon('<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'),
+    wrench: icon('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
+    shield: icon('<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>'),
+    eye: icon('<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>'),
+    lock: icon('<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>'),
+    key: icon('<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/>'),
+    check: icon('<path d="M20 6 9 17l-5-5"/>'),
+    search: icon('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>'),
+    layers: icon('<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>'),
+    stop: icon('<rect width="14" height="14" x="5" y="5" rx="2"/>'),
+    image: icon('<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>'),
+    film: icon('<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/>'),
+    music: icon('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'),
+    doc: icon('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/>'),
+    box: icon('<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"/>'),
+    download: icon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>'),
+    file: icon('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>'),
   };
 
   const CATEGORY = {
@@ -544,7 +598,10 @@
   const spotsOf = () => state.trash.spots.filter((x) => x.available);
   const canFree = () => spotsOf().filter((x) => x.exact).reduce((a, x) => a + x.reclaimableBytes, 0);
 
-  function renderHealth() {
+  // The PC checkup, split over Upkeep's tabs: drives and memory with Storage, what runs with
+  // Apps, Windows' own checkups with Windows.
+
+  function renderDrives() {
     const h = state.health;
     if (!h) return section("pc", "Your PC", "", `<p class="empty">Checking…</p>`);
     const drives = h.drives
@@ -564,6 +621,12 @@
         <div class="gauge-head"><span class="gauge-name">Memory</span><span class="num"><strong>${Math.round(memPct * 100)}%</strong> used of ${bytes(mem.total)}</span></div>
         ${meter(memPct, { warn: memPct > 0.85 })}
       </div>`;
+    return section("pc", "Your PC", `up ${ageLong(h.uptimeSecs)}`, drives + memory);
+  }
+
+  function renderChecks() {
+    const h = state.health;
+    if (!h) return "";
     const order = { warn: 0, tip: 1, ok: 2 };
     const checks = [...h.checks]
       .sort((a, b) => (order[a.level] ?? 1) - (order[b.level] ?? 1))
@@ -574,6 +637,13 @@
         </div>`
       )
       .join("");
+    return checks ? section("checks", "Checkups", "", checks) : "";
+  }
+
+  function renderApps() {
+    const h = state.health;
+    if (!h) return `<p class="empty">Checking…</p>`;
+    const mem = h.memory;
     const top = h.topMemory
       .map(
         (p) => `<div class="mini-row" id="tm-${hash(p.name)}"><span class="mini-name">${esc(p.name)}${p.count > 1 ? ` <span class="dim">×${p.count}</span>` : ""}</span>
@@ -603,9 +673,6 @@
       .join("");
     const moreApps = unusedApps.length > 8 ? `<button class="quiet-toggle" data-act="toggle-unused">${state.showAllUnused ? "Show fewer" : `Show all ${unusedApps.length}`}</button>` : "";
     return (
-      section("pc", "Your PC", `up ${ageLong(h.uptimeSecs)}`, drives + memory) +
-      (checks ? section("checks", "Checkups", "", checks) : "") +
-      (top ? section("top", "Using the most memory", "", top) : "") +
       (unusedApps.length
         ? section(
             "unused",
@@ -615,7 +682,7 @@
               moreApps +
               `<p class="group-note">Uninstall opens the app's own uninstaller, which may ask what to keep. Apps you use from a terminal or a right-click menu, runtimes, drivers, wallets and messengers are never listed.</p>`
           )
-        : "") +
+        : section("unused", "Apps you haven't opened in a year", "", `<p class="empty">None. Everything installed gets used.</p>`)) +
       (h.startup.length
         ? section(
             "startup",
@@ -623,7 +690,8 @@
             `${on.length} of ${h.startup.length} on`,
             startup + more + `<div class="group-foot"><button class="link-btn" data-act="open-uri" data-url="ms-settings:startupapps">Turn them on or off in Windows${ICON.out}</button></div>`
           )
-        : "")
+        : "") +
+      (top ? section("top", "Using the most memory", "", top) : "")
     );
   }
 
@@ -675,7 +743,27 @@
     return at.length ? Math.max(0, Math.floor(Date.now() / 1000) - Math.min(...at)) : 0;
   };
 
+  const UPKEEP_TABS = [
+    ["storage", "Storage"],
+    ["apps", "Apps"],
+    ["windows", "Windows"],
+    ["files", "Files"],
+  ];
+
+  function upkeepTabs() {
+    const w = state.winsettings;
+    const serious = w ? w.filter((f) => f.level === "fix").length : 0;
+    const dot = (k) => (k === "windows" && serious ? `<span class="count num">${serious}</span>` : "");
+    return `<div class="subtabs" role="tablist" aria-label="Upkeep">${UPKEEP_TABS.map(
+      ([k, label]) => `<button class="subtab" role="tab" data-act="upkeep-tab" data-tab="${k}" aria-selected="${state.upkeepTab === k}">${label}${dot(k)}</button>`
+    ).join("")}</div>`;
+  }
+
   function renderUpkeep() {
+    const tab = state.upkeepTab;
+    if (tab === "apps") return upkeepTabs() + renderApps();
+    if (tab === "windows") return upkeepTabs() + renderWindows();
+    if (tab === "files") return upkeepTabs() + renderFiles();
     const t = state.trash;
     const spots = spotsOf();
     const said =
@@ -687,7 +775,8 @@
             ? `mom can free up, as of ${ageLong(measuredAgo())} ago. Tap anything to see exactly what it is.`
             : "Let me look under the bed.";
     const shown = shownFree === null ? "" : sizeDots(shownFree);
-    let html = `<div class="lead" id="upkeep-lead"><div class="lead-text">${spots.length ? `<div class="big" id="free-big">${shown}</div>` : ""}<p>${esc(said)}</p></div>
+    let html = upkeepTabs();
+    html += `<div class="lead" id="upkeep-lead"><div class="lead-text">${spots.length ? `<div class="big" id="free-big">${shown}</div>` : ""}<p>${esc(said)}</p></div>
       <button class="secondary" data-act="measure" ${t.busy ? "disabled" : ""}>${t.busy ? `<span class="led green blink"></span>Measuring` : spots.length ? "Measure again" : "Measure"}</button></div>`;
     for (const [key, title] of GROUPS) {
       const list = spots.filter((x) => (x.group || "dev") === key).sort((a, b) => b.reclaimableBytes - a.reclaimableBytes || b.totalBytes - a.totalBytes);
@@ -695,8 +784,195 @@
       const sum = list.filter((x) => x.exact).reduce((a, x) => a + x.reclaimableBytes, 0);
       html += section(`g-${key}`, title, sum ? `${bytes(sum)} can go` : "", list.map(spotRow).join(""));
     }
-    html += renderHealth();
+    html += renderDrives();
     html += `<p class="foot">Nothing is cleaned until you open an item and press its button. Each one tells you exactly what it removes first.</p>`;
+    return html;
+  }
+
+  // ------------------------------------------------------------ Upkeep: Windows settings
+
+  const AREAS = ["Safety", "Memory", "Services", "Display", "Startup", "Shutdown", "Network", "Paths"];
+
+  async function loadWinsettings(force = false) {
+    if (state.winLoading || (state.winsettings && !force)) return;
+    state.winLoading = true;
+    render();
+    try {
+      state.winsettings = await invoke("get_winsettings");
+    } catch (e) {
+      toast(String(e), true);
+    }
+    state.winLoading = false;
+    render();
+  }
+
+  function findingCard(f) {
+    const busy = state.winBusy === f.id;
+    const sure = state.winConfirm === f.id;
+    const led = f.level === "fix" ? "red" : f.level === "check" ? "off" : "";
+    const fix = f.fix
+      ? `<button class="secondary${sure ? " sure" : ""}" data-act="win-fix" data-id="${esc(f.id)}" ${state.winBusy ? "disabled" : ""}>${
+          busy ? '<span class="led green blink"></span>Working…' : sure ? (f.fix.admin ? "Sure? Windows will ask" : "Sure? Press again") : esc(f.fix.label)
+        }</button>`
+      : "";
+    const open = f.settings
+      ? `<button class="link-btn" data-act="${f.settings.startsWith("ms-settings:") ? "open-uri" : "open-program"}" data-url="${esc(f.settings)}">Open the setting${ICON.out}</button>`
+      : "";
+    const after = f.fix ? [f.fix.after, f.fix.admin ? "Windows asks first." : f.fix.undo ? "You can undo it." : ""].filter(Boolean).join(" ") : "";
+    return `<div class="finding" id="wf-${hash(f.id)}" data-level="${f.level}">
+        <div class="finding-title">${led ? `<span class="led ${led === "red" ? "red" : ""}"></span>` : ""}<strong>${esc(f.title)}</strong>${f.level === "info" ? `<span class="badge">your call</span>` : ""}</div>
+        <div class="finding-vals"><div><span>Now</span>${esc(f.now)}</div><div><span>Windows' default</span>${esc(f.default)}</div></div>
+        <p class="finding-why">${esc(f.why)}</p>
+        ${fix || open ? `<div class="finding-acts">${open || "<span></span>"}${fix}</div>` : ""}
+        ${after ? `<p class="finding-after">${esc(after)}</p>` : ""}
+      </div>`;
+  }
+
+  function renderWindows() {
+    const w = state.winsettings;
+    let html;
+    if (!w) {
+      html = `<div class="lead"><div class="lead-text"><p>${state.winLoading ? "Looking at how Windows is set up…" : "Mom can look for settings that drifted from how Windows ships them."}</p></div>
+        <button class="secondary" data-act="win-refresh" ${state.winLoading ? "disabled" : ""}>${state.winLoading ? '<span class="led green blink"></span>Looking' : "Look"}</button></div>`;
+    } else {
+      const serious = w.filter((f) => f.level === "fix").length;
+      const odd = w.filter((f) => f.level !== "info").length;
+      const said = !w.length
+        ? "Windows is set up the way it shipped. Nothing to put back."
+        : serious
+          ? `${serious === 1 ? "setting is" : "settings are"} getting in your way. Each one says what it does now and what Windows ships with.`
+          : odd
+            ? `${odd === 1 ? "old tweak or leftover" : "old tweaks and leftovers"}, from years of trying things. Nothing urgent.`
+            : "Only choices that are fine either way.";
+      html = `<div class="lead"><div class="lead-text">${w.length && (serious || odd) ? `<div class="big"><span class="dot free-num">${serious || odd}</span></div>` : ""}<p>${esc(said)}</p></div>
+        <button class="secondary" data-act="win-refresh" ${state.winLoading ? "disabled" : ""}>${state.winLoading ? '<span class="led green blink"></span>Looking' : "Look again"}</button></div>`;
+      if (state.winFixed.length) {
+        const rows = state.winFixed
+          .map(
+            (x) => `<div class="item stays moved" id="wu-${hash(x.id)}"><span class="led green"></span>
+            <span class="item-main"><span class="item-name">${esc(x.title)}</span><span class="item-sub">Put back to Windows' default</span></span>
+            <span class="moved-acts"><button class="mini-btn wide" data-act="win-undo" data-id="${esc(x.id)}">Undo</button></span></div>`
+          )
+          .join("");
+        html += section("win-fixed", "Put back just now", "", `<div class="items">${rows}</div>`);
+      }
+      const areas = [...AREAS, ...new Set(w.map((f) => f.area).filter((a) => !AREAS.includes(a)))];
+      for (const area of areas) {
+        const list = w.filter((f) => f.area === area);
+        if (list.length) html += section(`win-${area.toLowerCase()}`, area, "", list.map(findingCard).join(""));
+      }
+    }
+    html += renderChecks();
+    html += `<p class="foot">Mom only changes a setting when you press its button. Your own settings come with an undo; the ones for the whole PC need an administrator, so Windows asks first.</p>`;
+    return html;
+  }
+
+  // ------------------------------------------------------------ Upkeep: copies and big forgotten files
+
+  const KIND_ICON = { photos: "image", videos: "film", music: "music", documents: "doc", archives: "box", installers: "download" };
+  const kindIcon = (k) => ICON[KIND_ICON[k]] || ICON.file;
+  const cap = (t) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+  const baseName = (p) => String(p).split(/[\\/]/).pop();
+  const parentOf = (p) => String(p).replace(/[\\/][^\\/]*$/, "");
+
+  async function loadFiles() {
+    try {
+      state.files = await invoke("files_state");
+    } catch {
+      state.files = { report: null, busy: false };
+    }
+    render();
+  }
+
+  const keptPath = (g) => state.filesKeep[g.hash] || (g.files.find((f) => f.keep) || g.files[0]).path;
+
+  /** Everything ticked: extra copies (but never the one kept) and big files. */
+  function filesChosen(r) {
+    const paths = [];
+    let size = 0;
+    for (const g of r.groups) {
+      const keep = keptPath(g);
+      for (const f of g.files) {
+        if (f.path !== keep && !state.filesUntick.has(f.path)) {
+          paths.push(f.path);
+          size += g.size;
+        }
+      }
+    }
+    for (const b of r.big) {
+      if (state.bigTicked.has(b.path) && !paths.includes(b.path)) {
+        paths.push(b.path);
+        size += b.size;
+      }
+    }
+    return { paths, size };
+  }
+
+  function copiesList(r) {
+    const now = Date.now() / 1000;
+    const groups = state.showAllCopies ? r.groups : r.groups.slice(0, 20);
+    const html = groups
+      .map((g) => {
+        const keep = keptPath(g);
+        const rows = g.files
+          .map((f) => {
+            const isKeep = f.path === keep;
+            const on = !isKeep && !state.filesUntick.has(f.path);
+            const sub = `${f.folder} · ${parentOf(f.path)} · changed ${ageLong(Math.max(0, now - f.modified))} ago`;
+            const box = isKeep ? `<span class="led green" title="This copy stays"></span>` : `<input type="checkbox" data-act="files-pick" data-path="${esc(f.path)}" ${on ? "checked" : ""} aria-label="Recycle this copy">`;
+            const swap = isKeep ? `<span class="keep-tag">Stays</span>` : `<button class="mini-btn wide" data-act="files-keep" data-hash="${esc(g.hash)}" data-path="${esc(f.path)}">Keep this</button>`;
+            return `<label class="item copy${isKeep ? " keep" : ""}" id="cp-${hash(f.path)}">${box}
+              <span class="item-main"><span class="item-name" title="${esc(f.path)}">${esc(baseName(f.path))}</span><span class="item-sub" title="${esc(sub)}">${esc(sub)}</span></span>
+              ${swap}<button class="mini-btn" data-act="reveal-path" data-path="${esc(f.path)}" title="Show in File Explorer">${ICON.folder}</button></label>`;
+          })
+          .join("");
+        return `<div class="copy-group" id="cg-${esc(g.hash.slice(0, 16))}">
+            <div class="copy-head"><span class="kind-ico">${kindIcon(g.kind)}</span><strong>${esc(cap(g.kind))}</strong>
+              <span class="dim num">${bytes(g.size)} × ${g.files.length}</span><span class="num copy-extra">${bytes(g.size * (g.files.length - 1))} extra</span></div>
+            <div class="items">${rows}</div></div>`;
+      })
+      .join("");
+    const more = r.groups.length > 20 ? `<button class="quiet-toggle" data-act="toggle-copies">${state.showAllCopies ? "Show fewer" : `Show all ${r.groups.length}`}</button>` : "";
+    return html + more;
+  }
+
+  function bigList(r) {
+    const now = Date.now() / 1000;
+    return `<div class="items">${r.big
+      .map((b) => {
+        const when = r.accessTimes ? `opened ${ageLong(Math.max(0, now - b.accessed))} ago` : `changed ${ageLong(Math.max(0, now - b.modified))} ago`;
+        const sub = `${b.folder} · ${parentOf(b.path)} · ${when}`;
+        return `<label class="item${state.bigTicked.has(b.path) ? " added" : " stays"}" id="bf-${hash(b.path)}">
+          <input type="checkbox" data-act="big-pick" data-path="${esc(b.path)}" ${state.bigTicked.has(b.path) ? "checked" : ""}>
+          <span class="item-main"><span class="item-name" title="${esc(b.path)}">${esc(baseName(b.path))}</span><span class="item-sub" title="${esc(sub)}">${esc(sub)}</span></span>
+          <span class="item-size num">${bytes(b.size)}</span>
+          <button class="mini-btn" data-act="reveal-path" data-path="${esc(b.path)}" title="Show in File Explorer">${ICON.folder}</button></label>`;
+      })
+      .join("")}</div>`;
+  }
+
+  function renderFiles() {
+    const f = state.files;
+    if (!f) return `<p class="empty">Checking…</p>`;
+    const r = f.report;
+    const prog = state.filesProgress;
+    const now = Date.now() / 1000;
+    let said;
+    if (f.busy) said = prog ? `${prog.stage === "comparing" ? "Comparing" : "Looking through"} ${plural(prog.files, "file")} (${bytes(prog.bytes)})…` : "Looking…";
+    else if (!r) said = "Mom can look through Downloads, Documents, Desktop, Pictures, Videos and Music for copies of the same file, and big files nobody has opened in a year. She only reads; nothing moves until you say.";
+    else said = `${r.groups.length ? "in extra copies of the same files. " : "No copies of the same file. "}Looked through ${plural(r.scannedFiles, "file")} ${ageLong(Math.max(0, now - r.measuredAt))} ago${r.complete ? "" : ", but was stopped early"}.`;
+    let html = `<div class="lead"><div class="lead-text">${r && r.groups.length && !f.busy ? `<div class="big">${sizeDots(r.wasted)}</div>` : ""}<p>${esc(said)}</p></div>
+      ${f.busy ? `<button class="secondary" data-act="files-stop">${ICON.stop}Stop</button>` : `<button class="secondary" data-act="files-scan">${r ? "Look again" : "Look"}</button>`}</div>`;
+    if (f.busy && prog) html += `<div class="progress solo"><div class="progress-bar unknown"><span></span></div></div>`;
+    if (!r || f.busy) return html;
+    const note = `<p class="group-note">A copy is only ever another file with exactly the same contents. Ticked ones go to the Recycle Bin, and mom never sends the last copy of anything.</p>`;
+    if (r.groups.length) html += section("copies", "Copies of the same file", `${plural(r.groups.length, "set")}`, copiesList(r) + note);
+    if (r.big.length) html += section("big", r.accessTimes ? "Big files nobody has opened in a year" : "Big files nobody has changed in a year", `${plural(r.big.length, "file")}`, bigList(r));
+    if (r.groups.length || r.big.length) {
+      const c = filesChosen(r);
+      const label = state.filesWorking ? "Moving…" : !c.paths.length ? "Nothing ticked" : state.filesConfirm ? `Sure? Press again to move ${plural(c.paths.length, "file")}` : `Move ${plural(c.paths.length, "file")} (${bytes(c.size)}) to the Recycle Bin`;
+      html += `<div class="files-foot"><button class="primary${state.filesConfirm ? " armed" : ""}" data-act="files-recycle" ${!c.paths.length || state.filesWorking ? "disabled" : ""}>${esc(label)}</button></div>`;
+    } else html += `<p class="foot">No copies, and no big files gathering dust. Tidy.</p>`;
     return html;
   }
 
@@ -812,23 +1088,185 @@
     }
   }
 
-  function itemRow(s, i, picking) {
+  function itemRow(s, i, picking, label) {
     const sub = [i.sub, i.reason || (i.ageSecs ? `changed ${ageLong(i.ageSecs)} ago` : "")].filter(Boolean).join(" · ");
     const id = `it-${hash(i.path || i.name)}`;
-    const main = `<span class="item-main"><span class="item-name">${esc(i.name)}</span>${sub ? `<span class="item-sub">${esc(sub)}</span>` : ""}</span>`;
-    // Tool clean-ups (Docker) list made-up paths; only real files get a folder button.
-    const reveal = i.path && s.action !== "tool" ? `<button class="mini-btn" data-act="reveal-path" data-path="${esc(i.path)}" title="Show in File Explorer" aria-label="Show ${esc(i.name)} in File Explorer">${ICON.folder}</button>` : "";
+    const shown = label || i.name;
+    const main = `<span class="item-main"><span class="item-name"${shown !== i.name ? ` title="${esc(i.name)}"` : ""}>${esc(shown)}</span>${sub ? `<span class="item-sub">${esc(sub)}</span>` : ""}</span>`;
+    // Docker's things aren't files: no folder button for them.
+    const reveal = i.path && s.action !== "tool" && !i.path.startsWith("docker:") ? `<button class="mini-btn" data-act="reveal-path" data-path="${esc(i.path)}" title="Show in File Explorer" aria-label="Show ${esc(i.name)} in File Explorer">${ICON.folder}</button>` : "";
     const size = `<span class="item-size num">${bytes(i.bytes)}</span>`;
+    const gone = state.gone.has(i.path) ? " gone" : "";
     if (picking && tickable(i)) {
       const on = isTicked(pickOf(s.id), i);
-      return `<label class="item${i.goes ? "" : " stays"}${on && !i.goes ? " added" : ""}" id="${id}">
-        <input type="checkbox" data-act="pick" data-path="${esc(i.path)}" ${on ? "checked" : ""}>${main}${size}${reveal}</label>`;
+      return `<label class="item${i.goes ? "" : " stays"}${on && !i.goes ? " added" : ""}${gone}" id="${id}">
+        <input type="checkbox" data-act="pick" data-path="${esc(i.path)}" ${on ? "checked" : ""} ${state.cleaning ? "disabled" : ""}>${main}${size}${reveal}</label>`;
     }
     if (!i.goes) {
       // In use (or otherwise not allowed): no box to tick.
       return `<div class="item stays" id="${id}"><span class="led green" title="Can't be cleared: ${esc(i.reason)}"></span>${main}${size}${reveal}</div>`;
     }
-    return `<div class="item" id="${id}"><span class="led red"></span>${main}${size}${reveal}</div>`;
+    return `<div class="item${gone}" id="${id}"><span class="led red"></span>${main}${size}${reveal}</div>`;
+  }
+
+  // Lists group by what comes before the first " · " in a name ("Unity games · Lifeslide ·
+  // Player.log" belongs to Unity games), or by the sort of thing (Docker's images, containers).
+  const SEP = " · ";
+  const KIND_NAMES = { images: "Images", "stopped containers": "Stopped containers", "build cache": "Build cache", volumes: "Volumes" };
+  function groupOf(i) {
+    const parts = i.name.split(SEP);
+    if (parts.length >= 2) return [parts[0], parts.slice(1)];
+    return [i.kind ? KIND_NAMES[i.kind] || cap(i.kind) : "", parts];
+  }
+  const ORDER = {
+    size: (a, b) => b.bytes - a.bytes,
+    age: (a, b) => (b.age || 0) - (a.age || 0),
+    name: (a, b) => a.name.localeCompare(b.name),
+  };
+  const matches = (i, q) => !q || `${i.name} ${i.sub || ""} ${i.reason || ""}`.toLowerCase().includes(q);
+  const listQuery = () => state.listView.q.trim().toLowerCase();
+
+  /** A group's (or an item's) place in the list: its size, oldest age and name. */
+  const weigh = (name, items) => ({ name, bytes: items.reduce((a, i) => a + i.bytes, 0), age: Math.max(0, ...items.map((i) => i.ageSecs || 0)) });
+
+  function listTools() {
+    const v = state.listView;
+    const sort = (k, label) => `<button class="seg-btn" data-act="list-sort" data-sort="${k}" aria-pressed="${v.sort === k}">${label}</button>`;
+    return `<div class="list-tools">
+        <label class="list-search">${ICON.search}<input type="search" id="list-q" placeholder="Filter" value="${esc(v.q)}" autocomplete="off" spellcheck="false" aria-label="Filter the lists"></label>
+        <div class="seg" role="group" aria-label="Sort by">${sort("size", "Size")}${sort("age", "Oldest")}${sort("name", "A–Z")}</div>
+        <button class="seg-btn solo" data-act="list-group" aria-pressed="${v.group}" title="${v.group ? "Grouped by app" : "Group by app"}" aria-label="Group by app">${ICON.layers}</button>
+      </div>`;
+  }
+
+  function listBody(s, items, picking, list) {
+    const v = state.listView;
+    const q = listQuery();
+    const shown = items.filter((i) => matches(i, q));
+    if (!shown.length) return `<p class="more">Nothing here matches “${esc(v.q.trim())}”.</p>`;
+    const cmp = ORDER[v.sort] || ORDER.size;
+    const one = (i) => ({ ...weigh(i.name, [i]), row: () => itemRow(s, i, picking) });
+    if (!v.group) return shown.map(one).sort(cmp).map((e) => e.row()).join("");
+    const groups = new Map();
+    for (const i of shown) {
+      const [key, rest] = groupOf(i);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ i, rest });
+    }
+    const real = [...groups].filter(([k, m]) => k && m.length > 1);
+    // One group holding everything isn't worth a header.
+    if (!real.length || (real.length === 1 && real[0][1].length === shown.length)) return shown.map(one).sort(cmp).map((e) => e.row()).join("");
+    const shut = shown.length > 12 && real.length > 1;
+    const entries = [];
+    for (const [k, members] of groups) {
+      if (k && members.length > 1) entries.push({ ...weigh(k, members.map((m) => m.i)), row: () => groupBlock(s, list, k, members, picking, shut, cmp) });
+      else for (const m of members) entries.push(one(m.i));
+    }
+    return entries.sort(cmp).map((e) => e.row()).join("");
+  }
+
+  function groupBlock(s, list, key, members, picking, shut, cmp) {
+    const gid = `${s.id}:${list}:${key}`;
+    const open = listQuery() ? true : gid in state.groupOpen ? state.groupOpen[gid] : !shut;
+    const items = members.map((m) => m.i);
+    const total = items.reduce((a, i) => a + i.bytes, 0);
+    const pk = pickOf(s.id);
+    const tick = items.filter(tickable);
+    let box = "<span></span>";
+    if (picking && tick.length) {
+      const on = tick.filter((i) => isTicked(pk, i)).length;
+      const st = on === 0 ? "none" : on === tick.length ? "all" : "some";
+      box = `<button class="tick ${st}" data-act="pick-group" data-group="${esc(gid)}" role="checkbox" aria-checked="${st === "all" ? "true" : st === "some" ? "mixed" : "false"}" aria-label="Tick all of ${esc(key)}" ${state.cleaning ? "disabled" : ""}>${ICON.check}</button>`;
+    }
+    const goneAll = items.every((i) => state.gone.has(i.path));
+    const head = `<div class="lgroup-head" data-act="toggle-group" data-group="${esc(gid)}" role="button" tabindex="0" aria-expanded="${open}">
+        ${box}<span class="lgroup-name">${esc(key)}</span><span class="lgroup-count num">${items.length}</span><span class="item-size num">${bytes(total)}</span><span class="lgroup-chev">${ICON.chevron}</span></div>`;
+    const cls = `lgroup${open ? " open" : ""}${goneAll ? " gone" : ""}`;
+    if (!open) return `<div class="${cls}" id="g-${hash(gid)}">${head}</div>`;
+    // Inside: by the next part of the name when several items share it (a game, a tool).
+    const subs = new Map();
+    for (const m of members) {
+      const sk = m.rest.length >= 2 ? m.rest[0] : "";
+      if (!subs.has(sk)) subs.set(sk, []);
+      subs.get(sk).push(m);
+    }
+    const nested = members.length > 4 && subs.size > 1 && [...subs.values()].some((x) => x.length > 1);
+    let body;
+    if (nested) {
+      const parts = [];
+      for (const [sk, ms] of subs) {
+        if (sk && ms.length > 1) {
+          const w = weigh(sk, ms.map((m) => m.i));
+          parts.push({ ...w, row: () => `<div class="subgroup"><span>${esc(sk)}</span><span class="num">${bytes(w.bytes)}</span></div>` + ms.map((m) => ({ ...weigh(m.i.name, [m.i]), m })).sort(cmp).map((x) => itemRow(s, x.m.i, picking, x.m.rest.slice(1).join(SEP))).join("") });
+        } else for (const m of ms) parts.push({ ...weigh(m.i.name, [m.i]), row: () => itemRow(s, m.i, picking, m.rest.join(SEP)) });
+      }
+      body = parts.sort(cmp).map((x) => x.row()).join("");
+    } else body = members.map((m) => ({ ...weigh(m.i.name, [m.i]), m })).sort(cmp).map((x) => itemRow(s, x.m.i, picking, x.m.rest.join(SEP))).join("");
+    return `<div class="${cls}" id="g-${hash(gid)}">${head}<div class="lgroup-body">${body}</div></div>`;
+  }
+
+  /** What the button does, as a few cards, with the whole story behind "Read more". */
+  function doesBox(s, p) {
+    const n = p.count;
+    const b = p.bytesChosen;
+    const drive = driveOf(state.archive && state.archive.dir);
+    const cards = [];
+    const card = (ico, big, small, tone = "") => cards.push(`<div class="does-card${tone ? ` ${tone}` : ""}">${ico}<div><strong>${esc(big)}</strong><span>${esc(small)}</span></div></div>`);
+    if (s.action === "tool") card(ICON.wrench, "Runs its own tool", s.exact && s.reclaimableBytes ? `up to ${bytes(s.reclaimableBytes)}` : "it decides what goes", "go");
+    else if (n === 0) card(ICON.check, "Nothing to do", (s.items || []).some(tickable) ? "nothing is ticked" : "it's already clean");
+    else if (s.action === "recycle") card(ICON.undo, `Recycles ${plural(n, "file")}`, `${bytes(b)}, and you can restore ${n === 1 ? "it" : "them"}`, "go");
+    else if (s.action === "move") card(ICON.archive, `Moves ${plural(n, "folder")}`, `${bytes(b)} to ${drive}; ${n === 1 ? "it still opens" : "they still open"} from here`, "go");
+    else card(ICON.trash, `Deletes ${plural(n, "item")}`, `${b ? bytes(b) : "all empty"}, for good`, "go");
+    const keptN = s.keptItems || 0;
+    if (keptN) card(ICON.lock, `${plural(keptN, "item")} stay`, s.newItems ? `${s.newItems.toLocaleString("en-US")} you can tick` : "in use, or not old enough", "stay");
+    if (s.safety === "review") card(ICON.eye, "Look first", "untick anything you want to keep");
+    else card(ICON.shield, "Safe", s.action === "move" ? "nothing is deleted" : s.action === "recycle" ? "it all waits in the Recycle Bin" : "nothing you'd miss, or it comes back");
+    if (s.admin) card(ICON.key, "Windows asks first", "only an administrator can");
+    return `<div class="does"><h3>What the button does</h3><div class="does-cards">${cards.join("")}</div>
+        <button class="does-more" data-act="toggle-does" aria-expanded="${state.doesOpen}">${state.doesOpen ? "Less" : "Read more"}${ICON.chevron}</button>
+        ${state.doesOpen ? `<p class="does-text">${esc(effectNow(s, p))}</p>` : ""}</div>`;
+  }
+
+  /** While a clean-up runs: how far along it is, what it's on, and a way to stop it. */
+  function cleanProgress(s) {
+    const lv = state.live || {};
+    const total = lv.total || 0;
+    const known = total > 0;
+    const pct = lv.totalFiles ? Math.min(1, lv.files / lv.totalFiles) : known ? lv.done / total : 0;
+    const now = lv.stopping
+      ? "Stopping after this one…"
+      : lv.current
+        ? lv.current
+        : s.admin
+          ? "Waiting for Windows to say yes…"
+          : s.action === "move"
+            ? "Copying…"
+            : "Starting…";
+    const counts = known ? `${(lv.done || 0).toLocaleString("en-US")} of ${plural(total, "item")} · ${bytes(lv.freed || 0)}` : "";
+    return `<div class="progress" role="status" aria-live="polite">
+        <div class="progress-bar${known ? "" : " unknown"}"><span style="width:${(pct * 100).toFixed(1)}%"></span></div>
+        <div class="progress-row"><span class="progress-now">${esc(now)}</span><span class="num">${counts}</span></div>
+      </div>
+      <button class="secondary" data-act="stop-clean" ${lv.stopping || !known ? "disabled" : ""}>${ICON.stop}Stop</button>`;
+  }
+
+  /** Watches a clean-up while it runs, so the list shows what's gone as it goes. */
+  async function watchClean(id) {
+    let since = 0;
+    while (state.cleaning === id) {
+      await new Promise((r) => setTimeout(r, 250));
+      if (state.cleaning !== id) break;
+      try {
+        const now = await invoke("clean_progress", { since });
+        if (state.cleaning !== id) break;
+        since = now.goneCount;
+        for (const g of now.gone) state.gone.add(g);
+        state.live = now;
+        renderSheet();
+      } catch {
+        break;
+      }
+    }
   }
 
   // Admin clean-ups: Windows asks first, and only from a copy installed for all users.
@@ -844,12 +1282,12 @@
     const p = picked(s);
     const pk = p.pk;
     const stays = (s.items || []).filter((i) => !i.goes);
-    const picking = s.action !== "tool" && s.action !== "empty-bin" && (p.goes.length > 0 || p.fresh.length > 0);
+    const picking = s.action !== "tool" && (p.goes.length > 0 || p.fresh.length > 0);
     const unlisted = Math.max(0, (s.reclaimableItems || 0) - p.goes.length);
     const keptUnlisted = Math.max(0, (s.keptItems || 0) - stays.length);
     const newUnlisted = Math.max(0, (s.newItems || 0) - p.fresh.length);
     const allButton = (list, items, base) =>
-      picking && items.length ? `<button class="link-btn" data-act="pick-all" data-list="${list}">${allTicked(pk, base, items) ? "Untick all" : "Tick all"}</button>` : "";
+      picking && items.length ? `<button class="link-btn" data-act="pick-all" data-list="${list}" ${state.cleaning ? "disabled" : ""}>${allTicked(pk, base, items) ? "Untick all" : "Tick all"}</button>` : "";
     const hint =
       (p.fresh.length === stays.length ? "These are" : "The ones with a box are") +
       (s.action === "recycle"
@@ -863,12 +1301,18 @@
     const disabled = cleaning || (s.action !== "tool" && p.count === 0);
     const danger = s.action === "delete" || s.action === "empty-bin";
     const moves = s.action === "move";
+    const busy = state.trash.busy;
+    const tools = (s.items || []).length > 8 ? listTools() : "";
+    const lastGoes = p.goes[p.goes.length - 1];
     return `<div class="sheet-head">
         <div><h2 id="sheet-title">${esc(s.label)}</h2>
           <div class="pills"><span class="pill"><span class="led ${s.safety === "review" ? "red" : "green"}"></span>${s.safety === "review" ? "Look before you clear" : s.action === "move" ? "Nothing is deleted" : "Safe to clear"}</span>
           ${s.admin ? `<span class="pill"><span class="led red"></span>${state.adminBlock ? "Needs an all-users install" : "Windows asks first"}</span>` : ""}
           <span class="pill">${ACTION_WORD[s.action] || "Deleted"}</span></div></div>
-        <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button>
+        <div class="head-acts">
+          <button class="icon-btn${busy ? " spinning" : ""}" data-act="refresh-spot" data-spot="${esc(s.id)}" title="${busy ? "Measuring…" : "Check again"}" aria-label="Check again" ${busy || state.cleaning ? "disabled" : ""}>${ICON.refresh}</button>
+          <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button>
+        </div>
       </div>
       <p class="sheet-what">${esc(s.what)}</p>
       ${
@@ -877,16 +1321,17 @@
         <div class="split-legend num"><span><span class="led red"></span><strong>${bytes(go)}</strong> ${moves ? "can move" : "can go"}</span><span><span class="led green"></span>${bytes(kept)} ${moves ? "stays here" : "stays"}</span><span class="dim">${bytes(s.totalBytes)} in all</span></div></div>`
           : `<div class="split-legend num"><span>${bytes(s.totalBytes)} in all. The tool works out what's safe to drop.</span></div>`
       }
-      <div class="callout"><h3>What the button does</h3><p>${esc(effectNow(s, p))}</p></div>
+      ${doesBox(s, p)}
       ${s.action === "move" ? archiveBox(s.id) : ""}
       ${s.admin ? adminHint() : ""}
       ${s.note ? `<p class="sheet-note"><span class="led red"></span>${esc(s.note)}</p>` : ""}
+      ${tools}
       ${
         p.goes.length
           ? `<h3 class="list-head">${moves ? "Moves" : "Goes"} <span class="dim num">${plural(s.reclaimableItems || p.goes.length, "item")}</span>${allButton("goes", p.goes, pk.goes)}</h3>
-        <div class="items">${p.goes.map((i) => itemRow(s, i, picking)).join("")}${
+        <div class="items">${listBody(s, p.goes, picking, "goes")}${
           unlisted
-            ? `<p class="more">…and ${plural(unlisted, p.goes[p.goes.length - 1].bytes ? "smaller item" : "more", p.goes[p.goes.length - 1].bytes ? "smaller items" : "more")}${
+            ? `<p class="more">…and ${plural(unlisted, lastGoes.bytes ? "smaller item" : "more", lastGoes.bytes ? "smaller items" : "more")}${
                 picking ? (pk.goes ? ", ticked too" : ", not ticked") : ""
               }.</p>`
             : ""
@@ -897,7 +1342,7 @@
         stays.length
           ? `<h3 class="list-head">${moves ? "Stays here" : "Stays"} <span class="dim num">${plural(s.keptItems || stays.length, "item")}</span>${allButton("new", p.fresh, pk.new)}</h3>
         ${picking && p.fresh.length ? `<p class="list-hint">${hint}</p>` : ""}
-        <div class="items">${stays.map((i) => itemRow(s, i, picking)).join("")}${
+        <div class="items">${listBody(s, stays, picking, "stays")}${
           keptUnlisted
             ? `<p class="more">…and ${plural(keptUnlisted, "more", "more")}${
                 picking && newUnlisted
@@ -908,20 +1353,24 @@
         }</div>`
           : ""
       }
-      <div class="sheet-foot">
+      <div class="sheet-foot${cleaning ? " cleaning" : ""}">
         ${
-          confirming
-            ? `<button class="link-btn" data-act="cancel-clean">Cancel</button>`
-            : s.path
-              ? `<button class="link-btn" data-act="reveal-path" data-path="${esc(s.path)}" title="Show in File Explorer">${ICON.folder}Show folder</button>`
-              : "<span></span>"
-        }
+          cleaning
+            ? cleanProgress(s)
+            : `${
+                confirming
+                  ? `<button class="link-btn" data-act="cancel-clean">Cancel</button>`
+                  : s.path
+                    ? `<button class="link-btn" data-act="reveal-path" data-path="${esc(s.path)}" title="Show in File Explorer">${ICON.folder}Show folder</button>`
+                    : "<span></span>"
+              }
         ${
           s.action === "move" && !(state.archive && state.archive.dir)
             ? `<button class="primary" data-act="choose-archive">Choose a drive</button>`
-            : `<button class="primary${cleaning ? " busy" : confirming ? (danger ? " danger" : " armed") : ""}" id="clean-btn" data-act="clean-spot" data-spot="${esc(s.id)}" ${disabled ? "disabled" : ""}>${
-                cleaning ? '<span class="led green blink"></span>' : confirming ? '<span class="led red blink"></span>' : danger ? '<span class="led red"></span>' : ""
+            : `<button class="primary${confirming ? (danger ? " danger" : " armed") : ""}" id="clean-btn" data-act="clean-spot" data-spot="${esc(s.id)}" ${disabled ? "disabled" : ""}>${
+                confirming ? '<span class="led red blink"></span>' : danger ? '<span class="led red"></span>' : ""
               }${esc(cleanLabel(s, p, confirming))}</button>`
+        }`
         }
       </div>`;
   }
@@ -1371,9 +1820,16 @@
       // more than half a day ago (the old numbers stay up while she looks).
       if (!state.trash.busy && (!state.trash.spots.length || state.trash.complete === false || measuredAgo() > 12 * 3600)) invoke("measure_trash");
       loadHealth();
+      openUpkeepTab(state.upkeepTab);
     }
     if (tab === "rooms") loadRooms();
     if (tab === "rules") loadRules();
+  }
+
+  /** What a tab of Upkeep needs the first time it's shown. */
+  function openUpkeepTab(tab) {
+    if (tab === "windows") loadWinsettings();
+    if (tab === "files" && !state.files) loadFiles();
   }
 
   function groupById(id) {
@@ -1422,6 +1878,9 @@
 
   let cleanTimer = null;
 
+  let winTimer = null;
+  let filesTimer = null;
+
   async function cleanSpot(id) {
     const s = state.trash.spots.find((x) => x.id === id);
     if (!s) return;
@@ -1441,11 +1900,15 @@
     const p = picked(s);
     state.cleanConfirm = null;
     state.cleaning = id;
+    state.live = null;
+    state.gone = new Set();
     renderSheet();
+    watchClean(id);
     const pk = p.pk;
     const pick = p.partial ? { goes: pk.goes, new: pk.new, ticked: [...pk.ticked], unticked: [...pk.unticked] } : null;
     const r = await act(invoke("clean_trash", { id, pick }));
     state.cleaning = null;
+    state.live = null;
     delete state.picks[id];
     if (s.action === "move") loadArchive();
     if (r && r.deleted > 0) {
@@ -1553,6 +2016,158 @@
       case "open-spot":
         openSheet({ kind: "spot", id: el.dataset.spot });
         break;
+      case "upkeep-tab":
+        if (state.upkeepTab === el.dataset.tab) break;
+        state.upkeepTab = el.dataset.tab;
+        $("#page").scrollTop = 0;
+        render();
+        openUpkeepTab(state.upkeepTab);
+        break;
+      case "refresh-spot":
+        invoke("measure_spot", { id: el.dataset.spot });
+        state.trash.busy = true;
+        renderSheet();
+        break;
+      case "stop-clean":
+        invoke("stop_clean");
+        if (state.live) state.live.stopping = true;
+        renderSheet();
+        break;
+      case "toggle-does":
+        state.doesOpen = !state.doesOpen;
+        renderSheet();
+        break;
+      case "list-sort":
+        state.listView.sort = el.dataset.sort;
+        saveView();
+        renderSheet();
+        break;
+      case "list-group":
+        state.listView.group = !state.listView.group;
+        saveView();
+        renderSheet();
+        break;
+      case "toggle-group": {
+        const gid = el.dataset.group;
+        state.groupOpen[gid] = el.getAttribute("aria-expanded") !== "true";
+        renderSheet();
+        break;
+      }
+      case "pick-group": {
+        e.preventDefault();
+        const id = state.sheet && state.sheet.id;
+        const s = state.trash.spots.find((x) => x.id === id);
+        if (!s) return;
+        const gid = el.dataset.group;
+        const list = gid.slice(id.length + 1).split(":")[0];
+        const key = gid.slice(id.length + list.length + 2);
+        const q = listQuery();
+        const items = s.items.filter((i) => (list === "goes" ? i.goes : !i.goes) && tickable(i) && groupOf(i)[0] === key && matches(i, q));
+        const pk = pickOf(id);
+        const on = !items.every((i) => isTicked(pk, i));
+        for (const i of items) {
+          const changes = startsTicked(pk, i) ? pk.unticked : pk.ticked;
+          on === startsTicked(pk, i) ? changes.delete(i.path) : changes.add(i.path);
+        }
+        state.cleanConfirm = null;
+        renderSheet();
+        break;
+      }
+      case "open-program":
+        act(invoke("open_program", { name: el.dataset.url }), () => null);
+        break;
+      case "win-refresh":
+        loadWinsettings(true);
+        break;
+      case "win-fix": {
+        const id = el.dataset.id;
+        const f = (state.winsettings || []).find((x) => x.id === id);
+        if (!f || state.winBusy) return;
+        clearTimeout(winTimer);
+        if (state.winConfirm !== id) {
+          state.winConfirm = id;
+          render();
+          winTimer = setTimeout(() => {
+            state.winConfirm = null;
+            render();
+          }, 6000);
+          return;
+        }
+        state.winConfirm = null;
+        state.winBusy = id;
+        render();
+        const msg = await act(invoke("fix_setting", { id }));
+        state.winBusy = null;
+        if (msg && f.fix && f.fix.undo && !f.fix.admin) state.winFixed = [{ id, title: f.title }, ...state.winFixed.filter((x) => x.id !== id)];
+        if (msg) react("cool");
+        await loadWinsettings(true);
+        break;
+      }
+      case "win-undo": {
+        const id = el.dataset.id;
+        const r = await act(invoke("undo_setting", { id }));
+        if (r) state.winFixed = state.winFixed.filter((x) => x.id !== id);
+        await loadWinsettings(true);
+        break;
+      }
+      case "files-scan":
+        state.files = { ...(state.files || {}), busy: true };
+        state.filesProgress = null;
+        state.filesConfirm = false;
+        invoke("scan_files");
+        render();
+        break;
+      case "files-stop":
+        invoke("stop_files_scan");
+        break;
+      case "files-keep":
+        e.preventDefault();
+        state.filesKeep[el.dataset.hash] = el.dataset.path;
+        state.filesUntick.delete(el.dataset.path);
+        state.filesConfirm = false;
+        render();
+        break;
+      case "files-pick":
+        el.checked ? state.filesUntick.delete(el.dataset.path) : state.filesUntick.add(el.dataset.path);
+        state.filesConfirm = false;
+        render();
+        break;
+      case "big-pick":
+        el.checked ? state.bigTicked.add(el.dataset.path) : state.bigTicked.delete(el.dataset.path);
+        state.filesConfirm = false;
+        render();
+        break;
+      case "toggle-copies":
+        state.showAllCopies = !state.showAllCopies;
+        render();
+        break;
+      case "files-recycle": {
+        const r = state.files && state.files.report;
+        if (!r || state.filesWorking) return;
+        const c = filesChosen(r);
+        if (!c.paths.length) return;
+        clearTimeout(filesTimer);
+        if (!state.filesConfirm) {
+          state.filesConfirm = true;
+          render();
+          filesTimer = setTimeout(() => {
+            state.filesConfirm = false;
+            render();
+          }, 6000);
+          return;
+        }
+        state.filesConfirm = false;
+        state.filesWorking = true;
+        render();
+        const done = await act(invoke("recycle_files", { paths: c.paths }));
+        state.filesWorking = false;
+        if (done && done.freed > 0) react("cool");
+        state.filesUntick = new Set();
+        state.bigTicked = new Set();
+        state.filesKeep = {};
+        await loadFiles();
+        break;
+      }
       case "close-sheet":
         closeSheet();
         break;
@@ -1749,6 +2364,10 @@
 
   document.addEventListener("input", (e) => {
     if (e.target.id === "rules-text") state.rulesDraft = e.target.value;
+    if (e.target.id === "list-q") {
+      state.listView.q = e.target.value;
+      renderSheet();
+    }
   });
 
   // Settings switches and numbers live in the sheet.
@@ -1900,8 +2519,18 @@
       } catch {}
       render();
     });
+    bridge.listen("files-progress", (e) => {
+      state.filesProgress = e.payload;
+      if (state.tab === "upkeep" && state.upkeepTab === "files") render();
+    });
+    bridge.listen("files", (e) => {
+      state.files = e.payload;
+      state.filesProgress = null;
+      if (state.tab === "upkeep") render();
+    });
     bridge.listen("trash", (e) => {
       state.trash = e.payload;
+      if (!state.cleaning) state.gone = new Set();
       if (state.tab === "upkeep") render();
       else if (state.sheet && state.sheet.kind === "spot") renderSheet();
     });

@@ -2014,6 +2014,573 @@ button.row-name:hover {
   }
 }
 
+/* ---------------------------------------------------------------- upkeep's own tabs */
+
+.subtabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 8px 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.subtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 14px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--line-2);
+  transition: color 140ms ease, background 140ms ease;
+}
+
+.subtab:hover {
+  color: var(--ink);
+}
+
+.subtab[aria-selected="true"] {
+  background: var(--ink);
+  color: var(--bg);
+  box-shadow: none;
+}
+
+.subtab .count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+}
+
+.subtab .count::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--red) var(--glow), transparent);
+}
+
+/* ---------------------------------------------------------------- a clean-up's sheet */
+
+.head-acts {
+  display: flex;
+  gap: 2px;
+}
+
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.icon-btn.spinning svg {
+  animation: spin 1.1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* What the button does: a few cards, the whole story behind "Read more" */
+.does {
+  margin: 0 0 12px;
+  padding: 12px 12px 6px;
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.does h3 {
+  margin: 0 2px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.does-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.does-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: 13px;
+  background: var(--card-2);
+}
+
+.does-card > .ico {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  margin-top: 1px;
+  color: var(--ink-2);
+}
+
+.does-card.go > .ico {
+  color: var(--red);
+}
+
+.does-card.stay > .ico {
+  color: var(--green);
+}
+
+.does-card div {
+  display: grid;
+  min-width: 0;
+}
+
+.does-card strong {
+  font-size: 12.5px;
+  line-height: 1.25;
+}
+
+.does-card span {
+  color: var(--ink-2);
+  font-size: 11.5px;
+  line-height: 1.3;
+  text-wrap: pretty;
+}
+
+.does-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 6px 2px 2px;
+  padding: 4px 0;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.does-more:hover {
+  color: var(--ink);
+}
+
+.does-more .ico {
+  width: 13px;
+  height: 13px;
+  transform: rotate(90deg);
+  transition: transform 160ms ease;
+}
+
+.does-more[aria-expanded="true"] .ico {
+  transform: rotate(-90deg);
+}
+
+.does-text {
+  margin: 2px 2px 8px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  text-wrap: pretty;
+}
+
+/* Filter, sort, group */
+.list-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 0;
+}
+
+.list-search {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 15px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  color: var(--ink-3);
+}
+
+.list-search .ico {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.list-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  user-select: text;
+}
+
+.list-search:focus-within {
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+
+.seg {
+  display: flex;
+  padding: 2px;
+  border-radius: 15px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.seg-btn {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 13px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.seg-btn[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.seg-btn.solo {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 15px;
+  box-shadow: inset 0 0 0 1px var(--edge);
+  background: var(--card);
+}
+
+.seg-btn.solo[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.seg-btn.solo .ico {
+  width: 15px;
+  height: 15px;
+}
+
+/* Groups in a list: Unity games, then each game */
+.lgroup {
+  border-bottom: 1px solid var(--line);
+}
+
+.items > .lgroup:last-child {
+  border-bottom: 0;
+}
+
+.lgroup-head {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto 16px;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 0;
+  cursor: pointer;
+}
+
+.lgroup-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.lgroup-count {
+  min-width: 22px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--card-2);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
+.lgroup-chev {
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+}
+
+.lgroup-chev .ico {
+  width: 14px;
+  height: 14px;
+  transition: transform 160ms ease;
+}
+
+.lgroup.open > .lgroup-head .lgroup-chev .ico {
+  transform: rotate(90deg);
+}
+
+.lgroup-body {
+  margin: 0 0 6px 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+}
+
+.lgroup-body > .item:last-child {
+  border-bottom: 0;
+}
+
+.subgroup {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 0 3px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--line);
+}
+
+/* A tri-state tick for a whole group */
+.tick {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1.5px var(--ink-3);
+  color: transparent;
+}
+
+.tick .ico {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3;
+}
+
+.tick.all {
+  background: var(--ink);
+  box-shadow: none;
+  color: var(--bg);
+}
+
+.tick.some {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+  background: linear-gradient(var(--ink), var(--ink)) center / 7px 2px no-repeat;
+}
+
+.tick:disabled {
+  opacity: 0.5;
+}
+
+/* Gone while you watch */
+.item.gone :is(.item-name, .item-size) {
+  text-decoration: line-through;
+  text-decoration-color: var(--red);
+}
+
+.item.gone,
+.lgroup.gone > .lgroup-head {
+  opacity: 0.4;
+  transition: opacity 300ms ease;
+}
+
+/* A clean-up running: how far along, and Stop */
+.sheet-foot.cleaning {
+  align-items: center;
+}
+
+.progress {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.progress.solo {
+  margin: -6px 8px 14px;
+}
+
+.progress-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--led-off);
+  overflow: hidden;
+}
+
+.progress-bar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 3px;
+  background: var(--red);
+  transition: width 250ms ease;
+}
+
+.progress-bar.unknown span {
+  width: 30% !important;
+  animation: sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  from {
+    left: -30%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+.progress-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.progress-row .num {
+  white-space: nowrap;
+}
+
+.progress-now {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.secondary.sure {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+
+.secondary .ico {
+  width: 13px;
+  height: 13px;
+}
+
+/* ---------------------------------------------------------------- upkeep: Windows */
+
+.finding {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.finding:last-child {
+  border-bottom: 0;
+}
+
+.finding-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.finding-title .badge {
+  margin-left: auto;
+}
+
+.finding-vals {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 8px 0 6px;
+}
+
+.finding-vals > div {
+  display: grid;
+  gap: 1px;
+  padding: 7px 9px;
+  border-radius: 11px;
+  background: var(--card-2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.finding-vals span {
+  color: var(--ink-3);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.finding-why {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  text-wrap: pretty;
+}
+
+.finding-acts {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.finding-after {
+  margin: 6px 0 0;
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+/* ---------------------------------------------------------------- upkeep: Files */
+
+.copy-group + .copy-group {
+  margin-top: 10px;
+}
+
+.copy-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 4px 6px;
+  font-size: 12.5px;
+}
+
+.kind-ico {
+  display: grid;
+  place-items: center;
+  color: var(--ink-2);
+}
+
+.kind-ico .ico {
+  width: 15px;
+  height: 15px;
+}
+
+.copy-extra {
+  margin-left: auto;
+  color: var(--red);
+  font-weight: 600;
+}
+
+.keep-tag {
+  color: var(--green);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.files-foot {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  margin: 10px -6px 0;
+  padding: 18px 6px 12px;
+  background: linear-gradient(to bottom, transparent, var(--bg) 16px);
+}
+
 @media (max-width: 400px) {
   .tab {
     padding: 0 9px;

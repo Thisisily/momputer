@@ -130,7 +130,29 @@
     const newBytes = fresh.reduce((a, i) => a + i.bytes, 0);
     return { exact: true, available: true, measuredAt: now, owner: null, note: null, path: null, keptBytes: o.totalBytes - o.reclaimableBytes, newItems: fresh.length, newBytes, ...o };
   };
+  const games = [
+    ["Unity games", "Lanternfall", "Player-prev.log", 506, 209],
+    ["Unity games", "Lanternfall", "Player.log", 120, 209],
+    ["Unity games", "Hollow Reed", "Player-prev.log", 241, 475],
+    ["Unity games", "Hollow Reed", "Player.log", 88, 475],
+    ["Unity games", "Copperline", "Player.log", 159, 1179],
+    ["Unity games", "Quiet Harbor", "Player.log", 133, 278],
+    ["Unity games", "Nimbus Drift", "Player.log", 114, 310],
+    ["Unity games", "Nimbus Drift", "Player-prev.log", 97, 310],
+    ["Unreal games", "Atlas Run", "Logs", 96, 365],
+    ["Unreal games", "Atlas Run", "crash 2025-11-02", 76, 340],
+    ["Unreal games", "Paper Moons", "Logs", 73, 448],
+    ["itch games", "Small Hours", "crash reports", 41, 600],
+  ].map(([who, game, what, mb, days]) => item(`${who} · ${game} · ${what}`, what.includes("crash") ? "Crash report" : "Log, 1 file", mb * MB, true, `Untouched for ${days} days`, days * D2));
+
   const spots = [
+    spot({
+      id: "game-junk", label: "Games' logs and crash reports", group: "personal", action: "delete", safety: "safe",
+      what: "Logs and crash reports games write every time they run (never your saves).",
+      effect: "Deletes 12 logs and crash reports (1.7 GB) that games wrote and nobody has touched in 67 days, permanently (they don't go to the Recycle Bin). Games write new ones the next time they run; your saves, settings and the games themselves aren't touched.",
+      totalBytes: games.reduce((a, i) => a + i.bytes, 0), reclaimableBytes: games.reduce((a, i) => a + i.bytes, 0), reclaimableItems: games.length, keptItems: 0,
+      items: games,
+    }),
     spot({
       id: "claude-temp", label: "Claude Code scratch", group: "agents", action: "delete", safety: "safe", owner: "claude-code",
       what: "Scratchpads, screenshots and task output Claude Code saves while it works. Each session gets its own folder.",
@@ -283,6 +305,51 @@
   ];
 
   // Where old conversations go (none chosen yet) and one that was moved before.
+  let live = { done: 0, total: 0, freed: 0, files: 0, totalFiles: 0, current: "", gone: [], goneCount: 0, stopping: false };
+  let liveStop = false;
+
+  const mockFiles = () => {
+    const f = (path, folder, days, keep = false) => ({ path, folder, modified: now - days * D2, keep });
+    return {
+      groups: [
+        { size: 219 * MB, hash: "a1".repeat(32), kind: "videos", files: [f("C:\\Users\\me\\Videos\\launch-video-final.mp4", "Videos", 40, true), f("C:\\Users\\me\\Downloads\\launch-video-final (1).mp4", "Downloads", 39)] },
+        { size: 90 * MB, hash: "b2".repeat(32), kind: "videos", files: [f("C:\\Users\\me\\Videos\\storefront-demo.mov", "Videos", 120, true), f("C:\\Users\\me\\Downloads\\storefront-demo.mov", "Downloads", 118), f("C:\\Users\\me\\Desktop\\storefront-demo.mov", "Desktop", 100)] },
+        { size: 34 * MB, hash: "c3".repeat(32), kind: "archives", files: [f("C:\\Users\\me\\Documents\\nimbus-assets.zip", "Documents", 200, true), f("C:\\Users\\me\\Downloads\\nimbus-assets.zip", "Downloads", 200)] },
+        { size: 4.7 * MB, hash: "d4".repeat(32), kind: "installers", files: [1, 2, 3, 4].map((n) => f(`C:\\Users\\me\\Downloads\\AtlasSetup${n === 1 ? "" : ` (${n - 1})`}.exe`, "Downloads", 300 - n, n === 1)) },
+        { size: 6.1 * MB, hash: "e5".repeat(32), kind: "photos", files: [f("C:\\Users\\me\\Pictures\\Lake trip\\IMG_2041.jpg", "Pictures", 400, true), f("C:\\Users\\me\\Desktop\\IMG_2041.jpg", "Desktop", 390)] },
+      ],
+      wasted: 219 * MB + 2 * 90 * MB + 34 * MB + 3 * 4.7 * MB + 6.1 * MB,
+      big: [{ path: "C:\\Users\\me\\Videos\\Raw footage\\atlas-run-capture.mkv", size: 14.2 * GB, accessed: now - 500 * D2, modified: now - 520 * D2, kind: "videos", folder: "Videos" }],
+      scannedFiles: 8309,
+      scannedBytes: 29.4 * GB,
+      roots: [],
+      complete: true,
+      accessTimes: true,
+      measuredAt: now - 2 * 3600,
+    };
+  };
+  let filesReport = null;
+
+  let winsettings = [
+    { id: "pagefile", area: "Memory", level: "check", title: "The page file has a fixed size", now: "Fixed at 8,192 MB on C:", default: "Managed by Windows",
+      why: "A fixed page file can run out when memory gets tight, and apps then crash instead of slowing down. Windows sizes it well on its own.",
+      fix: { label: "Let Windows manage it", admin: true, undo: false, after: "Takes effect after a restart." }, settings: "SystemPropertiesPerformance.exe" },
+    { id: "paging-executive", area: "Memory", level: "check", title: "Windows is told to keep all its own code in memory", now: "On", default: "Off",
+      why: "An old speed-up tip from the days of slow disks. Today it only holds memory other apps could use.",
+      fix: { label: "Turn it off", admin: true, undo: false, after: "Takes effect after a restart." }, settings: null },
+    { id: "myths", area: "Memory", level: "check", title: "Old speed-up tweaks that do nothing", now: "SecondLevelDataCache, IoPageLockLimit", default: "Not set",
+      why: "These come from guides for Windows XP. Windows 10 and 11 ignore them.",
+      fix: { label: "Remove them", admin: true, undo: false, after: null }, settings: null },
+    { id: "path-user", area: "Paths", level: "check", title: "1 folder in your PATH is gone", now: "C:\\tools\\old-sdk\\bin", default: "Only folders that exist",
+      why: "Every command you type looks there first, for nothing. Harmless, just clutter.",
+      fix: { label: "Take it out", admin: false, undo: true, after: "Apps you start from now on see the change." }, settings: null },
+    { id: "env-gone", area: "Paths", level: "check", title: "2 variables point at things that are gone", now: "NIMBUS_HOME → C:\\Nimbus, ATLAS_SDK → C:\\Atlas SDK", default: "Not set",
+      why: "Left behind by apps you uninstalled. They do nothing now.", fix: null, settings: null },
+    { id: "compat-orphans-user", area: "Paths", level: "info", title: "Compatibility settings for 2 programs that are gone", now: "Lanternfall.exe, Copperline.exe", default: "None",
+      why: "Windows remembers 'run as administrator' and old-Windows modes per program, even after the program is gone.",
+      fix: { label: "Forget them", admin: false, undo: true, after: null }, settings: null },
+  ];
+
   const archive = {
     dir: null,
     free: null,
@@ -424,14 +491,26 @@
       emit("trash", { spots: JSON.parse(JSON.stringify(list)), busy: false });
     },
     clean_trash: async ({ id, pick }) => {
-      await wait(800);
       const s = spots.find((x) => x.id === id);
       const pk = { goes: true, new: false, ticked: [], unticked: [], ...(pick || {}) };
       // Like mom-core's choose(), for the listed items (the mock has nothing unlisted).
-      const goes = s.items.filter((i) => {
+      const chosen = s.items.filter((i) => {
         if (!i.goes && !i.optional) return false;
         return (i.goes ? pk.goes : pk.new) ? !pk.unticked.includes(i.path) : pk.ticked.includes(i.path);
       });
+      live = { done: 0, total: chosen.length, freed: 0, files: 0, totalFiles: chosen.reduce((a, i) => a + (i.files || 1), 0), current: "", gone: [], goneCount: 0, stopping: false };
+      liveStop = false;
+      const goes = [];
+      for (const i of chosen) {
+        if (liveStop) break;
+        live.current = i.name;
+        await wait(Math.min(900, 160 + (i.files || 1) / 4));
+        goes.push(i);
+        live.done++;
+        live.freed += i.bytes;
+        live.files += i.files || 1;
+        live.gone.push(i.path);
+      }
       const sum = (list) => list.reduce((a, i) => a + i.bytes, 0);
       const freed = sum(goes);
       s.items = s.items.filter((i) => !goes.includes(i));
@@ -456,6 +535,49 @@
       return { id, freed, deleted: goes.length, skipped: 0, message };
     },
     admin_check: async () => (await wait(60), null),
+    measure_spot: async ({ id }) => {
+      await wait(700);
+      emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
+      return id;
+    },
+    clean_progress: ({ since }) => ({ ...live, gone: live.gone.slice(since), goneCount: live.gone.length, stopping: liveStop }),
+    stop_clean: () => {
+      liveStop = true;
+      return null;
+    },
+    files_state: async () => (await wait(80), { report: filesReport, busy: false }),
+    scan_files: async () => {
+      for (let n = 1; n <= 8; n++) {
+        await wait(250);
+        emit("files-progress", { files: n * 1040, bytes: n * 3.6 * GB, stage: n < 6 ? "listing" : "comparing" });
+      }
+      filesReport = filesReport || mockFiles();
+      filesReport.measuredAt = Math.floor(Date.now() / 1000);
+      emit("files", { report: JSON.parse(JSON.stringify(filesReport)), busy: false });
+    },
+    stop_files_scan: () => null,
+    recycle_files: async ({ paths }) => {
+      await wait(500);
+      let freed = 0;
+      for (const g of filesReport.groups) {
+        for (const f of g.files) if (paths.includes(f.path)) freed += g.size;
+        g.files = g.files.filter((f) => !paths.includes(f.path));
+      }
+      filesReport.groups = filesReport.groups.filter((g) => g.files.length > 1);
+      for (const b of filesReport.big) if (paths.includes(b.path)) freed += b.size;
+      filesReport.big = filesReport.big.filter((b) => !paths.includes(b.path));
+      filesReport.wasted = filesReport.groups.reduce((a, g) => a + g.size * (g.files.length - 1), 0);
+      return { recycled: paths, skipped: [], freed, message: `Moved ${paths.length} files (${(freed / GB).toFixed(1)} GB) to the Recycle Bin.` };
+    },
+    get_winsettings: async () => (await wait(300), JSON.parse(JSON.stringify(winsettings))),
+    fix_setting: async ({ id }) => {
+      await wait(600);
+      const f = winsettings.find((x) => x.id === id);
+      winsettings = winsettings.filter((x) => x.id !== id);
+      return `Put back: ${f.title}. ${f.fix.after || ""}`.trim();
+    },
+    undo_setting: async () => (await wait(300), "Put back the way it was."),
+    open_program: () => null,
     archive_info: async () => (await wait(80), JSON.parse(JSON.stringify(archive))),
     choose_archive_dir: async () => {
       await wait(200);
