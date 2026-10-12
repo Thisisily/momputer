@@ -36,6 +36,9 @@
     progView: { sort: "cpu", q: "", rest: false }, // how Programs is sorted and filtered, and whether Windows' own show
     progOpen: null, // the program whose details are open
     progConfirm: null, // "id|action" waiting for its second press
+    progOrder: null, // the order rows are shown in, kept between refreshes so nothing moves under the pointer
+    progOrderSort: null,
+    filesPlaces: null, // where the Files scan looks (files_places)
     progBusy: null, // { id, action } while mom does it
     system: null, // the PC, its protection, updates and registry (get_system)
     systemLoading: false,
@@ -526,7 +529,10 @@
   function openRunningTab(tab) {
     state.runningTab = tab;
     if (tab === "speed" && Date.now() - state.speedAt > 10000) loadSpeed();
-    if (tab === "programs" && Date.now() - state.programsAt > 3000) loadPrograms();
+    if (tab === "programs") {
+      state.progOrder = null;
+      if (Date.now() - state.programsAt > 3000) loadPrograms();
+    }
     if (tab === "startup" && Date.now() - state.startupAt > 15000) loadStartup();
   }
 
@@ -539,6 +545,16 @@
       return `<button class="secondary" data-act="copy-fix" data-text="${esc(f.value)}" data-hint="${esc(f.hint || "Copied.")}">${ICON.copy}${esc(f.label)}</button>`;
     if (f.kind === "open") return `<button class="secondary" data-act="open-uri" data-url="${esc(f.value)}">${esc(f.label)}${ICON.out}</button>`;
     if (f.kind === "tab") return `<button class="secondary" data-act="go-tab" data-to="${esc(f.value)}">${esc(f.label)}</button>`;
+    if (f.kind === "end") {
+      const armed = state.progConfirm === `${f.value}|end`;
+      const busy = state.progBusy && state.progBusy.id === f.value;
+      return `<button class="secondary${armed ? " sure" : ""}" data-act="prog-act" data-id="${esc(f.value)}" data-action="end" data-sure="1" ${busy ? "disabled" : ""}>${ICON.stop}${busy ? "Ending…" : armed ? "Sure? End it" : esc(f.label)}</button>`;
+    }
+    if (f.kind === "uninstall") {
+      const armed = state.uninstallConfirm === f.value;
+      const opened = state.uninstalled.has(f.value);
+      return `<button class="secondary${armed ? " sure" : ""}" data-act="uninstall-app" data-key="${esc(f.value)}" ${opened ? "disabled" : ""}>${ICON.trash}${opened ? "Uninstaller opened" : armed ? "Sure? Uninstall" : esc(f.label)}</button>`;
+    }
     if (f.kind === "program") {
       const armed = state.progConfirm === `${f.value}|restart`;
       const busy = state.progBusy && state.progBusy.id === f.value;
@@ -566,7 +582,7 @@
           .map(
             (f) => `<div class="check-row${f.fix ? " stack" : ""}" id="spd-${hash(f.id)}" data-led="${f.level === "warn" ? "red" : f.level === "ok" ? "green" : "off"}">
           <div class="check-text"><strong>${esc(f.title)}</strong><span>${esc(f.detail)}</span></div>
-          ${f.fix ? fixButton(f.fix) : ""}
+          ${f.fix ? `<div class="fix-row">${[f.fix, ...(f.more || [])].map(fixButton).join("")}</div>` : ""}
         </div>`
           )
           .join("")
@@ -642,7 +658,7 @@
     const armed = state.progConfirm === `${p.id}|${action}`;
     const label = busy && state.progBusy.action === action ? ACTION[action][1] : armed ? `Sure? ${ACTION[action][0]}` : ACTION[action][0];
     const title = { restart: `Close ${p.name} and start it again`, quit: `Ask ${p.name} to close, like its X button`, end: `Stop ${p.name} at once; anything unsaved is lost` }[action];
-    return `<button class="secondary${armed ? " sure" : ""}" data-act="prog-act" data-id="${esc(p.id)}" data-action="${action}" data-sure="${action === "quit" ? "" : "1"}" title="${esc(title)}" ${busy ? "disabled" : ""}>${ICON[ACTION_ICON[action]]}${label}</button>`;
+    return `<button class="secondary${armed ? " sure" : ""}" data-act="prog-act" data-id="${esc(p.id)}" data-action="${action}" data-sure="1" title="${esc(title)}" ${busy ? "disabled" : ""}>${ICON[ACTION_ICON[action]]}${label}</button>`;
   }
 
   function progDetail(p) {
@@ -681,12 +697,31 @@
     </div>`;
   }
 
+  /** The programs in the order they're shown. Sorted once (when the view opens or a sort is
+      tapped), then kept: what's there stays where it is and what's new joins at the end, so a
+      button never slides out from under the pointer when the numbers change. */
+  function orderPrograms(list) {
+    const sort = state.progView.sort;
+    const sorted = [...list].sort(PROG_SORT[sort] || PROG_SORT.cpu);
+    if (!state.progOrder || state.progOrderSort !== sort) {
+      state.progOrder = sorted.map((p) => p.id);
+      state.progOrderSort = sort;
+      return sorted;
+    }
+    const byId = new Map(list.map((p) => [p.id, p]));
+    const kept = state.progOrder.filter((id) => byId.has(id)).map((id) => byId.get(id));
+    const known = new Set(state.progOrder);
+    const out = [...kept, ...sorted.filter((p) => !known.has(p.id))];
+    state.progOrder = out.map((p) => p.id);
+    return out;
+  }
+
   function renderPrograms() {
     const list = state.programs;
     if (!list) return `<div class="lead"><div class="lead-text"><p>Looking at what's running…</p></div></div>`;
     const v = state.progView;
     const q = v.q.trim().toLowerCase();
-    const shown = list.filter((p) => !q || `${p.name} ${p.exe || ""}`.toLowerCase().includes(q)).sort(PROG_SORT[v.sort] || PROG_SORT.cpu);
+    const shown = orderPrograms(list).filter((p) => !q || `${p.name} ${p.exe || ""}`.toLowerCase().includes(q));
     const apps = shown.filter((p) => p.kind === "app");
     const background = shown.filter((p) => p.kind === "background");
     const rest = shown.filter((p) => p.kind !== "app" && p.kind !== "background");
@@ -696,7 +731,8 @@
       <div class="list-tools">
         <label class="list-search">${ICON.search}<input type="search" id="prog-q" placeholder="Filter" value="${esc(v.q)}" autocomplete="off" spellcheck="false" aria-label="Filter programs"></label>
         <div class="seg" role="group" aria-label="Sort by">${sort("cpu", "CPU")}${sort("mem", "Memory")}${sort("gpu", "Graphics")}${sort("name", "A–Z")}</div>
-      </div>`;
+      </div>
+      <p class="list-hint">Rows stay where they are while you look, so nothing moves under your pointer. Tap a sort to sort again.</p>`;
     html += section("apps", "Apps", apps.length ? total(apps) : "", apps.map(progRow).join("") || `<p class="empty">${q ? "No app matches that." : "No app windows open."}</p>`);
     if (background.length) html += section("background", "In the background", total(background), background.map(progRow).join(""));
     if (rest.length)
@@ -1321,13 +1357,14 @@
     const now = Date.now() / 1000;
     let said;
     if (f.busy) said = prog ? `${prog.stage === "comparing" ? "Comparing" : "Looking through"} ${plural(prog.files, "file")} (${bytes(prog.bytes)})…` : "Looking…";
-    else if (!r) said = "Mom can look through Downloads, Documents, Desktop, Pictures, Videos and Music for copies of the same file, and big files nobody has opened in a year. She only reads; nothing moves until you say.";
+    else if (!r) said = "Mom can look through the places below for copies of the same file, and big files nobody has opened in a year. She only reads; nothing moves until you say.";
     else said = `${r.groups.length ? "in extra copies of the same files. " : "No copies of the same file. "}Looked through ${plural(r.scannedFiles, "file")} ${ageLong(Math.max(0, now - r.measuredAt))} ago${r.complete ? "" : ", but was stopped early"}.`;
     let html = `<div class="lead"><div class="lead-text">${r && r.groups.length && !f.busy ? `<div class="big">${sizeDots(r.wasted)}</div>` : ""}<p>${esc(said)}</p></div>
       ${f.busy ? `<button class="secondary" data-act="files-stop">${ICON.stop}Stop</button>` : `<button class="secondary" data-act="files-scan">${r ? "Look again" : "Look"}</button>`}</div>`;
     if (f.busy && prog) html += `<div class="progress solo"><div class="progress-bar unknown"><span></span></div></div>`;
+    html += placesBox();
     if (!r || f.busy) return html;
-    const note = `<p class="group-note">A copy is only ever another file with exactly the same contents. Ticked ones go to the Recycle Bin, and mom never sends the last copy of anything.</p>`;
+    const note = `<p class="group-note">A copy is only ever another file with exactly the same contents: the same size, the same fingerprint (BLAKE3) and, right before anything goes, the same bytes as the copy that stays. Ticked ones go to the Recycle Bin, and mom never sends the last copy of anything.</p>`;
     const extras = r.groups.flatMap((g) => g.files.filter((f) => f.path !== keptPath(g)).map((f) => f.path));
     const allExtras = extras.every((x) => !state.filesUntick.has(x));
     const allBig = r.big.every((b) => state.bigTicked.has(b.path));
@@ -1339,6 +1376,37 @@
       html += `<div class="files-foot"><button class="primary${state.filesConfirm ? " armed" : ""}" data-act="files-recycle" ${!c.paths.length || state.filesWorking ? "disabled" : ""}>${esc(label)}</button></div>`;
     } else html += `<p class="foot">No copies, and no big files gathering dust. Tidy.</p>`;
     return html;
+  }
+
+  /** Where the Files scan looks: your usual folders, every drive, folders you added. */
+  function placesBox() {
+    const pl = state.filesPlaces;
+    if (!pl) return "";
+    const busy = state.files && state.files.busy;
+    const chip = (x) => {
+      const sub = x.kind === "drive" ? `${bytes(x.free)} free of ${bytes(x.total)}` : x.kind === "added" ? "added by you" : "";
+      return `<button class="place${x.on ? " on" : ""}" data-act="files-place" data-path="${esc(x.path)}" aria-pressed="${x.on}" title="${esc(x.path)}" ${busy ? "disabled" : ""}>
+        <span class="place-led"></span><span class="place-name">${esc(x.name)}</span>${sub ? `<span class="place-sub num">${esc(sub)}</span>` : ""}</button>`;
+    };
+    const folders = pl.filter((x) => x.kind !== "drive").map(chip).join("");
+    const drives = pl.filter((x) => x.kind === "drive").map(chip).join("");
+    return section(
+      "places",
+      "Where mom looks",
+      `${pl.filter((x) => x.on).length} on`,
+      `<div class="places">${folders}<button class="place add" data-act="files-add-place" ${busy ? "disabled" : ""}>${ICON.folder}<span class="place-name">Add a folder</span></button></div>
+       ${drives ? `<h4 class="places-head">Whole drives</h4><div class="places">${drives}</div>` : ""}
+       <p class="group-note">On a whole drive, mom skips Windows, your programs, game libraries and the system's own folders: copies in there are on purpose. Projects are skipped everywhere.</p>`
+    );
+  }
+
+  async function loadPlaces() {
+    try {
+      state.filesPlaces = await invoke("files_places");
+    } catch (e) {
+      console.warn("no places", e);
+    }
+    if (state.tab === "upkeep" && state.upkeepTab === "files") render();
   }
 
   // The details sheet for one clean-up: what's in it, what goes, what stays and why.
@@ -2492,6 +2560,7 @@
       if (!state.system) loadSystem();
     }
     if (tab === "files" && !state.files) loadFiles();
+    if (tab === "files") loadPlaces();
   }
 
   function groupById(id) {
@@ -2712,6 +2781,27 @@
         break;
       case "prog-sort":
         state.progView.sort = el.dataset.sort;
+        state.progOrder = null;
+        render();
+        break;
+      case "files-place": {
+        const x = state.filesPlaces && state.filesPlaces.find((y) => y.path === el.dataset.path);
+        if (!x) break;
+        try {
+          state.filesPlaces = await invoke("set_files_place", { path: x.path, on: !x.on });
+        } catch (e) {
+          toast(String(e), true);
+        }
+        render();
+        break;
+      }
+      case "files-add-place":
+        try {
+          const pl = await invoke("add_files_place");
+          if (pl) state.filesPlaces = pl;
+        } catch (e) {
+          toast(String(e), true);
+        }
         render();
         break;
       case "prog-rest":

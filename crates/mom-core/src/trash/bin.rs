@@ -136,11 +136,11 @@ pub(super) fn refresh_icon() {
 /// How much the Recycle Bin on each drive takes. Windows deletes anything bigger than that for
 /// good, without asking, so mom recycles only what fits and leaves the rest where it is.
 #[derive(Default)]
-pub(super) struct Room(std::collections::HashMap<String, Option<u64>>);
+pub(crate) struct Room(std::collections::HashMap<String, Option<u64>>);
 
 impl Room {
     /// Whether `bytes` at `path` would land in the bin rather than be deleted for good.
-    pub(super) fn fits(&mut self, path: &Path, bytes: u64) -> bool {
+    pub(crate) fn fits(&mut self, path: &Path, bytes: u64) -> bool {
         let Some(root) = drive_root(path) else { return false };
         let cap = *self.0.entry(root.clone()).or_insert_with(|| capacity(&root));
         cap.is_some_and(|c| bytes < c)

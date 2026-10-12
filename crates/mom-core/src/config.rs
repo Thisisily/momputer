@@ -13,6 +13,7 @@ pub struct Config {
     pub hooks: HookConfig,
     pub tidy: TidyConfig,
     pub trash: TrashConfig,
+    pub files: FilesConfig,
     pub ui: UiConfig,
     /// Substrings (matched against the command line, case-insensitive) that mom never touches.
     pub protect: Vec<String>,
@@ -97,6 +98,16 @@ impl Default for TidyConfig {
             screenshot_pile: 10,
         }
     }
+}
+
+/// Where the Files scan looks, beyond and instead of the usual folders.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FilesConfig {
+    /// Drives and folders added to the usual ones ("D:\\", "E:\\Photos").
+    pub places: Vec<PathBuf>,
+    /// Usual folders switched off, by name ("OneDrive").
+    pub skip: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

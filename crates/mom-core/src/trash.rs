@@ -6,7 +6,7 @@
 //! Recycle Bin, and "review" spots ask the user to look first. Mom skips anything a running
 //! process is using and anything touched recently.
 
-mod bin;
+pub(crate) mod bin;
 mod browsers;
 mod builds;
 mod claude;

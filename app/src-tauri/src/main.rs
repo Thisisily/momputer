@@ -653,7 +653,7 @@ fn scan_files(app: AppHandle, s: State<'_, S>) {
     }
     s.files_stop.store(false, Ordering::SeqCst);
     std::thread::spawn(move || {
-        let opts = mom_core::files::ScanOpts::for_paths(&s.paths);
+        let opts = mom_core::files::ScanOpts::for_config(&s.paths, &s.cfg().files);
         let progress = |p: mom_core::files::Progress| {
             let _ = app.emit("files-progress", p);
         };
@@ -882,6 +882,34 @@ async fn get_speed(fresh: bool, s: State<'_, S>) -> Res<mom_core::speed::Speed> 
 #[tauri::command]
 async fn get_system(fresh: bool) -> Res<mom_core::system::System> {
     tauri::async_runtime::spawn_blocking(move || mom_core::system::get(fresh)).await.map_err(err)
+}
+
+/// Where the Files scan looks: your usual folders, each drive, and folders you added.
+#[tauri::command(async)]
+fn files_places(s: State<'_, S>) -> Vec<mom_core::files::Place> {
+    mom_core::files::places(&s.paths, &s.cfg().files)
+}
+
+/// Switches a place on or off.
+#[tauri::command(async)]
+fn set_files_place(path: String, on: bool, s: State<'_, S>) -> Res<Vec<mom_core::files::Place>> {
+    let mut cfg = s.config.lk();
+    mom_core::files::set_place(&s.paths, &mut cfg.files, std::path::Path::new(&path), on)?;
+    cfg.save(&s.paths).map_err(err)?;
+    Ok(mom_core::files::places(&s.paths, &cfg.files))
+}
+
+/// Adds a folder you pick.
+#[tauri::command]
+async fn add_files_place(app: AppHandle, s: State<'_, S>) -> Res<Option<Vec<mom_core::files::Place>>> {
+    let Some(picked) = app.dialog().file().set_title("Which folder should mom look through for copies?").blocking_pick_folder() else {
+        return Ok(None);
+    };
+    let path = picked.into_path().map_err(err)?;
+    let mut cfg = s.config.lk();
+    mom_core::files::set_place(&s.paths, &mut cfg.files, &path, true)?;
+    cfg.save(&s.paths).map_err(err)?;
+    Ok(Some(mom_core::files::places(&s.paths, &cfg.files)))
 }
 
 /// Every program running, as one line each.
@@ -1250,6 +1278,9 @@ fn main() {
             get_health,
             get_speed,
             get_programs,
+            files_places,
+            set_files_place,
+            add_files_place,
             get_system,
             program_action,
             get_startup,

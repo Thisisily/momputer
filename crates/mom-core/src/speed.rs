@@ -33,6 +33,8 @@ pub struct Finding {
     pub title: String,
     pub detail: String,
     pub fix: Option<Fix>,
+    /// More buttons, after the main one.
+    pub more: Vec<Fix>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -42,7 +44,9 @@ pub struct Fix {
     /// "copy": put `value` on the clipboard (a page like chrome://restart, which only the browser
     /// itself can open). "open": open `value`, a Windows Settings page or a driver download page.
     /// "tab": show a part of the widget ("running:startup"). "program": restart the program
-    /// whose id is `value` (from `programs::list`), after a "Sure?".
+    /// whose id is `value` (from `programs::list`), after a "Sure?". "end": end that program,
+    /// after a "Sure?". "uninstall": open the uninstaller of the app whose uninstall entry is
+    /// `value` (from `installed::programs`), after a "Sure?".
     pub kind: &'static str,
     pub value: String,
     /// What to say once it's copied, or what restarting it also ends.
@@ -92,17 +96,17 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
     findings.extend(hardware_errors(&slow.events, now));
     let trouble = findings.iter().any(|f| f.id == "gpu-driver" || f.id == "hardware-errors");
     findings.extend(tuners(&slow.tuners, table, slow.gpu.as_ref(), trouble));
-    findings.extend(extras(table, now));
+    findings.extend(extras(table, &programs, &slow.apps, &crate::health::startup_apps(paths), now));
     findings.extend(slow.extensions.as_ref().and_then(too_many_extensions));
     // From the Windows checkup (gathered on its own thread): what holds the PC back.
     if let Some(sys) = crate::system::cached() {
         for c in sys.checks.into_iter().filter(|c| c.level != "ok" && (matches!(c.area, "Performance" | "Hardware") || c.id == "two-antivirus" || c.id == "broken-services")) {
-            findings.push(Finding { id: c.id, level: c.level, title: c.title, detail: c.detail, fix: c.fix });
+            findings.push(Finding { more: vec![], id: c.id, level: c.level, title: c.title, detail: c.detail, fix: c.fix });
         }
     }
     let starting = crate::health::startup_apps(paths).iter().filter(|a| a.enabled).count();
     if starting >= 12 {
-        findings.push(Finding {
+        findings.push(Finding { more: vec![],
             id: "startup".into(),
             level: "tip",
             title: format!("{starting} apps start with Windows"),
@@ -111,7 +115,7 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
         });
     }
     if slow.power_saver {
-        findings.push(Finding {
+        findings.push(Finding { more: vec![],
             id: "power-plan".into(),
             level: "tip",
             title: "Windows is on Power saver".into(),
@@ -196,7 +200,7 @@ fn lost_gpu(table: &ProcTable, programs: &[Program], now: u64) -> Vec<Finding> {
             };
             let open = format!("{label} has been open {} with {} and {} of memory", human_age_long(open_for), processes(family.len()), human_bytes(mem));
             out.push(if software {
-                Finding {
+                Finding { more: vec![],
                     id: format!("no-gpu-{}", exe.trim_end_matches(".exe")),
                     level: "warn",
                     title: format!("{label} is drawing without your graphics card"),
@@ -207,7 +211,7 @@ fn lost_gpu(table: &ProcTable, programs: &[Program], now: u64) -> Vec<Finding> {
                     fix,
                 }
             } else {
-                Finding {
+                Finding { more: vec![],
                     id: format!("long-open-{}", exe.trim_end_matches(".exe")),
                     level: "tip",
                     title: format!("{label} has been open for {}", human_age_long(open_for)),
@@ -243,7 +247,7 @@ fn busy_for_minutes(programs: &[Program], cpus: usize) -> Vec<Finding> {
         let cores = p.avg_cpu * cpus.max(1) as f32 / 100.0;
         let mins = human_age_long(p.avg_secs);
         match p.kind {
-            "security" if cores >= 0.5 && p.name.contains("Defender") => out.push(Finding {
+            "security" if cores >= 0.5 && p.name.contains("Defender") => out.push(Finding { more: vec![],
                 id: "defender-busy".into(),
                 level: "tip",
                 title: "Microsoft Defender is scanning".into(),
@@ -252,14 +256,14 @@ fn busy_for_minutes(programs: &[Program], cpus: usize) -> Vec<Finding> {
                 ),
                 fix: Some(Fix { label: "Windows Security".into(), kind: "open", value: "windowsdefender:".into(), hint: None }),
             }),
-            "windows" if cores >= 0.5 && p.name.to_ascii_lowercase().contains("search") => out.push(Finding {
+            "windows" if cores >= 0.5 && p.name.to_ascii_lowercase().contains("search") => out.push(Finding { more: vec![],
                 id: "search-busy".into(),
                 level: "tip",
                 title: "Windows Search is indexing".into(),
                 detail: format!("It's kept {cores:.1} processor cores busy for the last {mins}, reading your files so search is quick. It settles down by itself; you can leave big folders out of it."),
                 fix: Some(Fix { label: "Search settings".into(), kind: "open", value: "ms-settings:cortana-windowssearch".into(), hint: None }),
             }),
-            "app" | "background" if cores >= 0.75 => out.push(Finding {
+            "app" | "background" if cores >= 0.75 => out.push(Finding { more: vec![],
                 id: format!("busy-{}", p.id),
                 level: if cores >= 1.5 { "warn" } else { "tip" },
                 title: format!("{} is busy all the time", p.name),
@@ -297,7 +301,7 @@ fn memory_full(programs: &[Program]) -> Option<Finding> {
     let mut top: Vec<&Program> = programs.iter().filter(|p| !matches!(p.kind, "windows" | "security")).collect();
     top.sort_by(|a, b| b.mem.cmp(&a.mem));
     let names: Vec<String> = top.iter().take(3).map(|p| format!("{} ({})", p.name, human_bytes(p.mem))).collect();
-    Some(Finding {
+    Some(Finding { more: vec![],
         id: "memory-full".into(),
         level: "warn",
         title: if commit >= 0.9 && ram < 0.9 {
@@ -453,7 +457,7 @@ fn driver_trouble(events: &[Event], now: u64) -> Option<Finding> {
         .collect();
     let latest_update = updates.iter().map(|e| e.at).max();
     if resets.is_empty() {
-        return latest_update.filter(|t| now.saturating_sub(*t) < 3 * 86_400).map(|t| Finding {
+        return latest_update.filter(|t| now.saturating_sub(*t) < 3 * 86_400).map(|t| Finding { more: vec![],
             id: "gpu-driver".into(),
             level: "tip",
             title: format!("Your graphics driver was updated {}", when(t, now)),
@@ -472,7 +476,7 @@ fn driver_trouble(events: &[Event], now: u64) -> Option<Finding> {
         format!("The last was {}, the first {}", when(last, now), when(first, now))
     };
     let updated = latest_update.filter(|t| *t > last).map(|t| format!(" The driver was also updated {}.", when(t, now))).unwrap_or_default();
-    Some(Finding {
+    Some(Finding { more: vec![],
         id: "gpu-driver".into(),
         level: if n >= 3 || now.saturating_sub(last) < 3 * 86_400 { "warn" } else { "tip" },
         title: format!("Your graphics driver crashed {} in two weeks", if n == 1 { "once".to_string() } else { format!("{n} times") }),
@@ -493,7 +497,7 @@ fn hardware_errors(events: &[Event], now: u64) -> Option<Finding> {
     let fatal = whea.iter().filter(|e| matches!(e.id, 18 | 20 | 46)).count() as u64;
     let n = whea.len() as u64;
     let last = whea.iter().map(|e| e.at).max().unwrap_or(now);
-    Some(Finding {
+    Some(Finding { more: vec![],
         id: "hardware-errors".into(),
         level: if fatal > 0 || n >= 3 { "warn" } else { "tip" },
         title: if fatal > 0 {
@@ -569,39 +573,43 @@ fn tuners(installed: &[String], table: &ProcTable, gpu: Option<&Gpu>, trouble: b
             ),
         )
     };
-    Some(Finding { id: "tuners".into(), level, title, detail, fix: None })
+    Some(Finding { more: vec![], id: "tuners".into(), level, title, detail, fix: None })
 }
 
 // ------------------------------------------------------------------ helpers that run all the time
 
 /// Helpers that come with hardware and utilities and run all day: (who, what they do, process
-/// names without .exe, lowercase).
-const EXTRAS: &[(&str, &str, &[&str])] = &[
-    ("IObit Uninstaller", "watches every program you install", &["uninstallmonitor", "iobituninstaler", "iobitunsvr"]),
+/// names without .exe, lowercase, and the apps worth offering to uninstall: never the ones that
+/// run your mouse or lights).
+const EXTRAS: &[(&str, &str, &[&str], &[&str])] = &[
+    ("IObit Uninstaller", "watches every program you install", &["uninstallmonitor", "iobituninstaler", "iobitunsvr"], &["IObit Uninstaller"]),
     (
         "Razer Synapse and Cortex",
-        "lighting, mouse settings and a game booster",
+        "mouse settings, lighting and a game booster",
         &[
             "razerappengine", "razer central", "razercentralservice", "razercortex", "cortexlauncherservice", "gamemanagerservice3",
             "razer_elevation_service", "rzactionsvc", "razerwdl", "rzchromasdkservice", "rzsdkserver", "rzsdkservice", "chromastreamserver",
         ],
+        &["Razer Cortex"],
     ),
     (
         "Adobe Creative Cloud",
         "keeps Creative Cloud apps and fonts in sync",
         &["adobe desktop service", "creative cloud", "ccxprocess", "coresync", "adobeipcbroker", "adobeupdateservice", "agsservice", "agmservice", "cclibrary"],
+        &[],
     ),
     (
         "ASUS Armoury Crate and Aura",
         "lighting and fan control",
         &["armourycrate.service", "armourycrate.usersessionhelper", "armourycratecontrolinterface", "asuscertservice", "lightingservice", "atkexcomsvc", "asus_framework", "ledcontrolservice"],
+        &[],
     ),
-    ("Logitech G HUB", "mouse, keyboard and lighting settings", &["lghub", "lghub_agent", "lghub_updater", "lghub_system_tray"]),
-    ("Corsair iCUE", "lighting and fan control", &["icue", "corsair.service", "corsairdeviceservice", "icue.service"]),
-    ("NZXT CAM", "lighting and fan control", &["nzxt cam", "nzxtcam"]),
-    ("SteelSeries GG", "device settings", &["steelseriesgg", "steelseriesengine", "steelseriesggclient"]),
-    ("MSI Center", "lighting and fan control", &["msi.centralserver", "msi_central_service", "mysticlight_service", "msi.centralserver.service"]),
-    ("Wallpaper Engine", "moving wallpapers", &["wallpaper32", "wallpaper64", "webwallpaper32"]),
+    ("Logitech G HUB", "mouse, keyboard and lighting settings", &["lghub", "lghub_agent", "lghub_updater", "lghub_system_tray"], &[]),
+    ("Corsair iCUE", "lighting and fan control", &["icue", "corsair.service", "corsairdeviceservice", "icue.service"], &[]),
+    ("NZXT CAM", "lighting and fan control", &["nzxt cam", "nzxtcam"], &[]),
+    ("SteelSeries GG", "device settings", &["steelseriesgg", "steelseriesengine", "steelseriesggclient"], &[]),
+    ("MSI Center", "lighting and fan control", &["msi.centralserver", "msi_central_service", "mysticlight_service", "msi.centralserver.service"], &[]),
+    ("Wallpaper Engine", "moving wallpapers", &["wallpaper32", "wallpaper64", "webwallpaper32"], &[]),
 ];
 
 /// Worth mentioning: a quarter of a core all day long (on average since it started), or this
@@ -609,9 +617,11 @@ const EXTRAS: &[(&str, &str, &[&str])] = &[
 const EXTRA_CORES: f64 = 0.25;
 const EXTRA_MEM: u64 = 400 * 1024 * 1024;
 
-fn extras(table: &ProcTable, now: u64) -> Option<Finding> {
-    let mut lines = Vec::new();
-    for (who, what, names) in EXTRAS {
+/// One card per helper that runs all day, with buttons that do something about it: end it now,
+/// switch off how it starts, or uninstall it.
+fn extras(table: &ProcTable, programs: &[Program], apps: &[(String, String)], startup: &[crate::health::StartupApp], now: u64) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for (who, what, names, uninstall) in EXTRAS {
         let procs: Vec<&Proc> = table.procs.values().filter(|p| names.contains(&stem(&p.name).as_str())).collect();
         if procs.is_empty() {
             continue;
@@ -622,21 +632,43 @@ fn extras(table: &ProcTable, now: u64) -> Option<Finding> {
         if cores < EXTRA_CORES && mem < EXTRA_MEM {
             continue;
         }
+        let pids: Vec<u32> = procs.iter().map(|p| p.pid).collect();
+        let prog = programs.iter().find(|p| p.can.contains(&"end") && p.pids.iter().any(|pid| pids.contains(pid)));
+        let app = apps.iter().find(|(_, name)| uninstall.iter().any(|u| name.contains(u)));
+        let from_startup = startup.iter().any(|a| a.enabled && names.iter().any(|n| a.command.to_ascii_lowercase().contains(n)));
         let cpu = if cores >= 0.05 { format!(", {:.0}% of a processor core all day", cores * 100.0) } else { String::new() };
-        lines.push((cores, format!("{who} ({what}): {}, {}{cpu}", processes(procs.len()), human_bytes(mem))));
+        let comes_back = if from_startup {
+            "It's in your startup list, so switching it off there keeps it from coming back."
+        } else {
+            "It starts with Windows by itself (through its own service), so if you end it, it's back after the next restart."
+        };
+        let gone = if app.is_some() { " Uninstalling it stops it for good." } else { "" };
+        let mut buttons: Vec<Fix> = Vec::new();
+        if let Some(p) = prog {
+            buttons.push(Fix { label: format!("End {}", short(who)), kind: "end", value: p.id.clone(), hint: None });
+        }
+        if let Some((key, name)) = app {
+            buttons.push(Fix { label: format!("Uninstall {name}"), kind: "uninstall", value: key.clone(), hint: None });
+        }
+        if from_startup {
+            buttons.push(Fix { label: "Startup apps".into(), kind: "tab", value: "running:startup".into(), hint: None });
+        }
+        let mut cards = buttons.into_iter();
+        out.push(Finding {
+            id: format!("extras-{}", short(who).to_ascii_lowercase().replace(' ', "-")),
+            level: "tip",
+            title: format!("{who} runs all the time"),
+            detail: format!("It {what}: {}, {}{cpu}. {comes_back}{gone}", processes(procs.len()), human_bytes(mem)),
+            fix: cards.next(),
+            more: cards.collect(),
+        });
     }
-    if lines.is_empty() {
-        return None;
-    }
-    lines.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let text: Vec<String> = lines.into_iter().map(|(_, l)| l).collect();
-    Some(Finding {
-        id: "extras".into(),
-        level: "tip",
-        title: format!("{} running all the time", plural(text.len() as u64, "helper")),
-        detail: format!("{}. If you don't need them, stop them starting with Windows.", text.join(". ")),
-        fix: Some(Fix { label: "Startup apps".into(), kind: "tab", value: "running:startup".into(), hint: None }),
-    })
+    out
+}
+
+/// "IObit Uninstaller", "Razer" (from "Razer Synapse and Cortex"), "Adobe Creative Cloud".
+fn short(who: &str) -> &str {
+    who.split(" and ").next().map(|w| if w.starts_with("Razer") { "Razer" } else { w }).unwrap_or(who)
 }
 
 // ------------------------------------------------------------------ busy right now
@@ -666,6 +698,8 @@ struct Slow {
     extensions: Option<(String, usize, Vec<String>)>,
     /// The graphics driver named in the event log ("nvlddmkm"), for when there's no card info.
     driver_vendor: String,
+    /// Installed apps: (uninstall entry, name).
+    apps: Vec<(String, String)>,
 }
 
 static SLOW: Mutex<Option<Slow>> = Mutex::new(None);
@@ -689,7 +723,8 @@ fn slow_facts(now: u64) -> Slow {
     }
     let events = read_events();
     let driver_vendor = events.iter().find(|e| GPU_DRIVERS.contains(&e.provider.to_ascii_lowercase().as_str())).map(|e| e.provider.to_ascii_lowercase()).unwrap_or_default();
-    let s = Slow { at: now, events, tuners: installed_tuners(), gpu: read_gpu(), power_saver: power_saver(), extensions: chrome_extensions(), driver_vendor };
+    let apps: Vec<(String, String)> = crate::installed::programs().into_iter().map(|a| (a.key, a.name)).collect();
+    let s = Slow { at: now, events, tuners: installed_tuners(), gpu: read_gpu(), power_saver: power_saver(), extensions: chrome_extensions(), driver_vendor, apps };
     *SLOW.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
     s
 }
@@ -775,7 +810,7 @@ fn too_many_extensions(e: &(String, usize, Vec<String>)) -> Option<Finding> {
         return None;
     }
     let doubled = if blockers.len() >= 2 { format!(" {} of them block ads ({}); one does the job.", blockers.len(), blockers.join(", ")) } else { String::new() };
-    Some(Finding {
+    Some(Finding { more: vec![],
         id: "chrome-extensions".into(),
         level: "tip",
         title: format!("{n} Chrome extensions are on in {profile}"),
@@ -926,21 +961,6 @@ mod tests {
         assert_eq!(parse_gpu("NVIDIA GeForce RTX 2070 SUPER, 41, 30, 215.00, 215.00\n").unwrap().name, "RTX 2070 SUPER");
     }
 
-    #[test]
-    fn helpers_that_run_all_day_are_counted_by_their_average() {
-        let now = 1_000_000;
-        let mut monitor = fake(20, 1, "UninstallMonitor.exe", "UninstallMonitor", now - 100_000);
-        monitor.cpu_ms = 27_000_000; // 0.27 of a core for 100,000 s
-        let mut quiet = fake(21, 1, "lghub_agent.exe", "lghub_agent", now - 100_000);
-        quiet.cpu_ms = 1_000;
-        quiet.mem = 50 * 1024 * 1024;
-        let table = ProcTable::from_procs(vec![monitor, quiet], 999);
-        let f = extras(&table, now).unwrap();
-        assert_eq!(f.title, "1 helper running all the time");
-        assert!(f.detail.starts_with("IObit Uninstaller (watches every program you install): 1 process"), "{}", f.detail);
-        assert!(f.detail.contains("27% of a processor core all day"), "{}", f.detail);
-    }
-
     fn program(name: &str, kind: &'static str, avg_cpu: f32, can: Vec<&'static str>) -> Program {
         Program {
             id: format!("app:{}", name.to_lowercase()),
@@ -959,6 +979,28 @@ mod tests {
             can,
             pids: vec![77],
         }
+    }
+
+    #[test]
+    fn helpers_that_run_all_day_get_buttons() {
+        let now = 1_000_000;
+        let mut monitor = fake(20, 1, "UninstallMonitor.exe", "UninstallMonitor", now - 100_000);
+        monitor.cpu_ms = 27_000_000; // 0.27 of a core for 100,000 s
+        let mut quiet = fake(21, 1, "lghub_agent.exe", "lghub_agent", now - 100_000);
+        quiet.cpu_ms = 1_000;
+        quiet.mem = 50 * 1024 * 1024;
+        let table = ProcTable::from_procs(vec![monitor, quiet], 999);
+        let mut prog = program("IObit Uninstaller", "background", 1.0, vec!["restart", "end"]);
+        prog.pids = vec![20];
+        let apps = vec![("HKLM\\...\\IObit Uninstaller_is1".to_string(), "IObit Uninstaller 16".to_string())];
+        let f = extras(&table, &[prog], &apps, &[], now);
+        assert_eq!(f.len(), 1, "G HUB is quiet");
+        assert_eq!(f[0].title, "IObit Uninstaller runs all the time");
+        assert!(f[0].detail.contains("27% of a processor core all day") && f[0].detail.contains("its own service"), "{}", f[0].detail);
+        let fix = f[0].fix.as_ref().unwrap();
+        assert_eq!((fix.kind, fix.value.as_str(), fix.label.as_str()), ("end", "app:iobit uninstaller", "End IObit Uninstaller"));
+        assert_eq!((f[0].more[0].kind, f[0].more[0].label.as_str()), ("uninstall", "Uninstall IObit Uninstaller 16"));
+        assert_eq!(short("Razer Synapse and Cortex"), "Razer");
     }
 
     #[test]

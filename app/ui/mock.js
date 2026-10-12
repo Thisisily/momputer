@@ -412,9 +412,10 @@
         detail: "All 6 were 7 days ago. The driver was also updated 19 hours ago. Each time, Windows restarts it, and apps that were open can lose the graphics card until they restart. An overclock on the graphics card is the usual cause; otherwise, reinstall the driver from the maker's site.", fix: null },
       { id: "tuners", level: "tip", title: "GPU Tweak III is installed, not running",
         detail: "So nothing is overclocked right now. Your RTX 2070 SUPER runs at its standard power limit (215 W). If you overclocked with it when the crashes above happened, that's the likely cause: leave it at default.", fix: null },
-      { id: "extras", level: "tip", title: "2 helpers running all the time",
-        detail: "IObit Uninstaller (watches every program you install): 2 processes, 33 MB, 45% of a processor core all day. Razer Synapse and Cortex (lighting, mouse settings and a game booster): 19 processes, 866 MB, 10% of a processor core all day. If you don't need them, stop them starting with Windows.",
-        fix: { label: "Startup apps", kind: "tab", value: "upkeep:apps", hint: null } },
+      { id: "extras-iobit-uninstaller", level: "tip", title: "IObit Uninstaller runs all the time",
+        detail: "It watches every program you install: 2 processes, 33 MB, 44% of a processor core all day. It starts with Windows by itself (through its own service), so if you end it, it's back after the next restart. Uninstalling it stops it for good.",
+        fix: { label: "End IObit Uninstaller", kind: "end", value: "app:iobit uninstaller", hint: null },
+        more: [{ label: "Uninstall IObit Uninstaller 16", kind: "uninstall", value: "HKLM\IObit Uninstaller_is1", hint: null }] },
     ],
     gpu: { name: "RTX 2070 SUPER", temp: 41, busy: 3, powerLimit: 215, defaultPowerLimit: 215 },
     busy: [
@@ -446,6 +447,17 @@
     prog("Desktop Window Manager", "windows", 0.9, 230 * MB, 1, { gpu: 3 }),
     prog("Claude Code", "agent", 0.5, 993 * MB, 2),
     prog("momputer", "mom", 0.2, 120 * MB, 6),
+  ];
+  const places = [
+    { path: "C:\\Users\\me\\Downloads", name: "Downloads", kind: "folder", on: true, total: 0, free: 0 },
+    { path: "C:\\Users\\me\\Documents", name: "Documents", kind: "folder", on: true, total: 0, free: 0 },
+    { path: "C:\\Users\\me\\Desktop", name: "Desktop", kind: "folder", on: true, total: 0, free: 0 },
+    { path: "C:\\Users\\me\\Pictures", name: "Pictures", kind: "folder", on: true, total: 0, free: 0 },
+    { path: "C:\\Users\\me\\Videos", name: "Videos", kind: "folder", on: true, total: 0, free: 0 },
+    { path: "C:\\Users\\me\\OneDrive", name: "OneDrive", kind: "folder", on: false, total: 0, free: 0 },
+    { path: "C:\\", name: "C: (Windows)", kind: "drive", on: false, total: 1000 * GB, free: 210 * GB },
+    { path: "D:\\", name: "D: (Games)", kind: "drive", on: false, total: 2000 * GB, free: 640 * GB },
+    { path: "F:\\", name: "F: (Backup)", kind: "drive", on: true, total: 4000 * GB, free: 1900 * GB },
   ];
   const startup = [
     { id: "run-user:RazerAppEngine", name: "Razer Synapse", entry: "RazerAppEngine", command: '"C:\\Program Files\\Razer\\RazerAppEngine\\RazerAppEngine.exe" --autostart', exe: "C:\\Program Files\\Razer\\RazerAppEngine\\RazerAppEngine.exe", location: "Run (you)", enabled: true, yours: true, running: true, mem: 509 * MB, cpu: 0.6, keep: null },
@@ -684,6 +696,9 @@
         ],
       }
     ),
+    files_places: () => JSON.parse(JSON.stringify(places)),
+    set_files_place: ({ path, on }) => ((places.find((x) => x.path === path).on = on), JSON.parse(JSON.stringify(places))),
+    add_files_place: async () => (await wait(300), places.push({ path: "E:\\Photos", name: "Photos", kind: "added", on: true, total: 0, free: 0 }), JSON.parse(JSON.stringify(places))),
     get_programs: async () => (await wait(250), JSON.parse(JSON.stringify(programs))),
     program_action: async ({ id, action }) => {
       await wait(action === "restart" ? 1800 : 700);

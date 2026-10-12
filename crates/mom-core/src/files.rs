@@ -1,7 +1,9 @@
 //! Files of your own that only take up room: exact copies of the same file, and big files nobody
 //! has opened in a year. Mom looks in Downloads, Documents, Desktop, Pictures, Videos, Music and
-//! OneDrive, never inside projects, links or files that are only in the cloud, and suggests which
-//! copy to keep. Nothing goes without a tick, and what goes goes to the Recycle Bin.
+//! OneDrive, and any drive or folder you add; never inside projects, links, files that are only in
+//! the cloud, or (on a whole drive) Windows, programs and game libraries. She suggests which copy
+//! to keep. Nothing goes without a tick; what goes goes to the Recycle Bin, and only after it's
+//! checked byte for byte against the copy that stays.
 
 use crate::paths::Paths;
 use crate::util::{norm_path, now_secs};
@@ -82,6 +84,92 @@ impl ScanOpts {
     pub fn for_paths(paths: &Paths) -> Self {
         ScanOpts { roots: default_roots(paths), min_dupe_size: 1024 * 1024, big_min_size: 500 * 1024 * 1024, big_unused_days: 365 }
     }
+
+    /// The same, in the places you chose: usual folders not switched off, and what you added.
+    pub fn for_config(paths: &Paths, cfg: &crate::config::FilesConfig) -> Self {
+        ScanOpts { roots: chosen_roots(paths, cfg), ..Self::for_paths(paths) }
+    }
+}
+
+/// A place the Files scan can look, as the widget lists it.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Place {
+    pub path: String,
+    pub name: String,
+    /// "folder" (one of your usual folders), "drive" or "added".
+    pub kind: &'static str,
+    pub on: bool,
+    /// Drives: size and free space, bytes.
+    pub total: u64,
+    pub free: u64,
+}
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    norm_path(&a.to_string_lossy()) == norm_path(&b.to_string_lossy())
+}
+
+/// "D:\\" is a drive's root.
+fn is_drive_root(p: &Path) -> bool {
+    p.parent().is_none() || p.components().count() == 1 || p.to_string_lossy().trim_end_matches('\\').len() == 2
+}
+
+/// Every place mom can look: your usual folders, each drive, and the folders you added.
+pub fn places(paths: &Paths, cfg: &crate::config::FilesConfig) -> Vec<Place> {
+    let mut out: Vec<Place> = known_folders(paths)
+        .into_iter()
+        .filter(|(p, _)| p.is_dir())
+        .map(|(p, name)| Place { path: p.to_string_lossy().to_string(), name: name.into(), kind: "folder", on: !cfg.skip.iter().any(|s| s == name), total: 0, free: 0 })
+        .collect();
+    let mut seen = HashSet::new();
+    out.retain(|p| seen.insert(norm_path(&p.path)));
+    for (root, label, total, free) in drives() {
+        let on = cfg.places.iter().any(|p| same_path(p, Path::new(&root)));
+        out.push(Place { name: format!("{} ({label})", root.trim_end_matches('\\')), path: root, kind: "drive", on, total, free });
+    }
+    for p in &cfg.places {
+        if !is_drive_root(p) && p.is_dir() {
+            out.push(Place { path: p.to_string_lossy().to_string(), name: p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default(), kind: "added", on: true, total: 0, free: 0 });
+        }
+    }
+    out
+}
+
+/// Where the next scan looks.
+pub fn chosen_roots(paths: &Paths, cfg: &crate::config::FilesConfig) -> Vec<PathBuf> {
+    places(paths, cfg).into_iter().filter(|p| p.on).map(|p| PathBuf::from(p.path)).collect()
+}
+
+/// Fixed drives with their label, size and free space.
+fn drives() -> Vec<(String, String, u64, u64)> {
+    crate::health::drives().into_iter().map(|d| (d.root, d.label, d.total, d.free)).collect()
+}
+
+/// Switches a place on or off: a usual folder by name, a drive or folder by path. A folder
+/// that's added must exist and mustn't be Windows' or programs' own.
+pub fn set_place(paths: &Paths, cfg: &mut crate::config::FilesConfig, path: &Path, on: bool) -> Result<(), String> {
+    if let Some((_, name)) = known_folders(paths).into_iter().find(|(p, _)| same_path(p, path)) {
+        cfg.skip.retain(|s| s != name);
+        if !on {
+            cfg.skip.push(name.to_string());
+        }
+        return Ok(());
+    }
+    cfg.places.retain(|p| !same_path(p, path));
+    if !on {
+        return Ok(());
+    }
+    if !path.is_dir() {
+        return Err(format!("{} isn't a folder mom can look in.", path.display()));
+    }
+    let l = norm_path(&path.to_string_lossy());
+    let windows = norm_path(&std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()));
+    let off_limits = [windows, norm_path(r"C:\Program Files"), norm_path(r"C:\Program Files (x86)"), norm_path(r"C:\ProgramData")];
+    if off_limits.iter().any(|o| l == *o || l.starts_with(&format!("{o}\\"))) {
+        return Err("That's Windows' or your programs' own folder. Copies in there are on purpose, so mom doesn't look.".into());
+    }
+    cfg.places.push(path.to_path_buf());
+    Ok(())
 }
 
 /// How far a scan has got, for a progress line.
@@ -112,8 +200,17 @@ pub struct RecycleReport {
 }
 
 /// Folders that are never worth looking in: tools' and projects' own stuff, not yours.
-const SKIP_DIRS: &[&str] =
-    &["node_modules", ".git", "target", ".venv", "venv", "__pycache__", "appdata", "$recycle.bin", ".next", ".turbo", "site-packages"];
+const SKIP_DIRS: &[&str] = &[
+    "node_modules", ".git", "target", ".venv", "venv", "__pycache__", "appdata", "$recycle.bin", ".next", ".turbo", "site-packages", "steamapps",
+];
+
+/// At the top of a whole drive: Windows, programs, game libraries and the system's own folders.
+/// Their copies are on purpose (every game ships the same libraries).
+const SKIP_AT_DRIVE_ROOT: &[&str] = &[
+    "windows", "program files", "program files (x86)", "programdata", "system volume information", "recovery", "perflogs",
+    "$windows.~bt", "$windows.~ws", "$winreagent", "windowsapps", "msocache", "xboxgames", "steamlibrary", "steam", "epic games",
+    "riot games", "battle.net", "gog games", "ea games", "origin games", "ubisoft", "msi", "drivers", "intel", "amd", "nvidia",
+];
 
 /// A folder holding one of these is a project: its files are code and build output, where
 /// copies are on purpose.
@@ -222,6 +319,7 @@ pub fn scan(paths: &Paths, opts: &ScanOpts, cancel: &AtomicBool, progress: &dyn 
         if inside_another || !root.is_dir() {
             continue;
         }
+        let at_drive = is_drive_root(root);
         let mut stack = vec![root.clone()];
         while let Some(dir) = stack.pop() {
             if cancel.load(Ordering::Relaxed) {
@@ -242,7 +340,8 @@ pub fn scan(paths: &Paths, opts: &ScanOpts, cancel: &AtomicBool, progress: &dyn 
                 }
                 let name = e.file_name().to_string_lossy().to_lowercase();
                 if meta.is_dir() {
-                    if !SKIP_DIRS.contains(&name.as_str()) && !name.starts_with('.') {
+                    let system = at_drive && dir == *root && SKIP_AT_DRIVE_ROOT.contains(&name.as_str());
+                    if !SKIP_DIRS.contains(&name.as_str()) && !name.starts_with('.') && !system {
                         stack.push(e.path());
                     }
                     continue;
@@ -382,7 +481,7 @@ fn folder_names(paths: &Paths, roots: &[PathBuf]) -> Vec<(String, String)> {
                 .iter()
                 .find(|(k, _)| *k == n)
                 .map(|(_, name)| name.to_string())
-                .unwrap_or_else(|| r.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| n.clone()));
+                .unwrap_or_else(|| r.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| format!("{} drive", r.to_string_lossy().trim_end_matches('\\'))));
             (n, name)
         })
         .collect();
@@ -524,16 +623,17 @@ fn full_hash(path: &Path, cancel: &AtomicBool, read: &mut dyn FnMut(u64)) -> Has
 /// it still has the same contents and another copy with them stays (one not ticked too), a big
 /// file only if it's unchanged. Never deletes anything for good. The saved scan is updated.
 pub fn recycle(paths: &Paths, files: &[PathBuf]) -> RecycleReport {
-    recycle_with(paths, files, &mut |p| ::trash::delete(p).is_ok())
+    let mut room = crate::trash::bin::Room::default();
+    recycle_with(paths, files, &mut |p, size| room.fits(p, size), &mut |p| ::trash::delete(p).is_ok())
 }
 
-fn recycle_with(paths: &Paths, files: &[PathBuf], remove: &mut dyn FnMut(&Path) -> bool) -> RecycleReport {
+fn recycle_with(paths: &Paths, files: &[PathBuf], fits: &mut dyn FnMut(&Path, u64) -> bool, remove: &mut dyn FnMut(&Path) -> bool) -> RecycleReport {
     let mut report = load_saved(paths).unwrap_or_default();
     let mut r = RecycleReport::default();
     let ticked: HashSet<String> = files.iter().map(|f| norm_path(&f.to_string_lossy())).collect();
     let never_stopped = AtomicBool::new(false);
     // Groups whose staying copy has been checked this time: the copy that stays, or None.
-    let mut checked: HashMap<usize, bool> = HashMap::new();
+    let mut checked: HashMap<usize, Option<PathBuf>> = HashMap::new();
     let mut gone: HashSet<String> = HashSet::new();
     for file in files {
         let key = norm_path(&file.to_string_lossy());
@@ -548,16 +648,29 @@ fn recycle_with(paths: &Paths, files: &[PathBuf], remove: &mut dyn FnMut(&Path) 
                 r.skipped.push(skip("It changed since mom looked, so it may not be a copy any more."));
                 continue;
             }
-            let stays = *checked.entry(gi).or_insert_with(|| {
-                g.files
-                    .iter()
-                    .filter(|f| !ticked.contains(&norm_path(&f.path.to_string_lossy())))
-                    .any(|f| std::fs::metadata(&f.path).is_ok_and(|m| m.len() == g.size) && same(&f.path))
-            });
-            if !stays {
+            let stays = checked
+                .entry(gi)
+                .or_insert_with(|| {
+                    g.files
+                        .iter()
+                        .filter(|f| !ticked.contains(&norm_path(&f.path.to_string_lossy())))
+                        .find(|f| std::fs::metadata(&f.path).is_ok_and(|m| m.len() == g.size) && same(&f.path))
+                        .map(|f| f.path.clone())
+                })
+                .clone();
+            let Some(keeper) = stays else {
                 r.skipped.push(skip(
                     "No other copy would be left (every copy was ticked, or the others changed or are gone), so this one stays.",
                 ));
+                continue;
+            };
+            // The hash says they're the same; the bytes have the last word.
+            if !identical(file, &keeper) {
+                r.skipped.push(skip("It isn't the same, byte for byte, as the copy that stays, so it stays too."));
+                continue;
+            }
+            if !fits(file, g.size) {
+                r.skipped.push(skip(NO_BIN));
                 continue;
             }
             if remove(file) {
@@ -572,6 +685,8 @@ fn recycle_with(paths: &Paths, files: &[PathBuf], remove: &mut dyn FnMut(&Path) 
         if let Some(b) = report.big.iter().find(|b| norm_path(&b.path.to_string_lossy()) == key) {
             if !unchanged(file, b.size, b.modified) {
                 r.skipped.push(skip("It changed since mom looked."));
+            } else if !fits(file, b.size) {
+                r.skipped.push(skip(NO_BIN));
             } else if remove(file) {
                 r.freed += b.size;
                 r.recycled.push(file.clone());
@@ -614,6 +729,32 @@ fn recycle_with(paths: &Paths, files: &[PathBuf], remove: &mut dyn FnMut(&Path) 
 }
 
 /// Is the file still there, the same size and not changed since?
+/// Why something stays when the Recycle Bin can't take it: Windows would delete it for good.
+const NO_BIN: &str = "Too big for this drive's Recycle Bin (or the drive has none), so Windows would delete it for good. Mom left it.";
+
+/// The same, byte for byte.
+fn identical(a: &Path, b: &Path) -> bool {
+    let (Ok(mut fa), Ok(mut fb)) = (open_quietly(a), open_quietly(b)) else { return false };
+    if fa.metadata().map(|m| m.len()).ok() != fb.metadata().map(|m| m.len()).ok() {
+        return false;
+    }
+    let mut ba = vec![0u8; 1 << 20];
+    let mut bb = vec![0u8; 1 << 20];
+    loop {
+        let n = match fa.read(&mut ba) {
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return false,
+        };
+        if n == 0 {
+            return fb.read(&mut bb[..1]).is_ok_and(|m| m == 0);
+        }
+        if fb.read_exact(&mut bb[..n]).is_err() || ba[..n] != bb[..n] {
+            return false;
+        }
+    }
+}
+
 fn unchanged(path: &Path, size: u64, modified: u64) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() == size && secs(m.modified()) == modified)
 }
@@ -661,6 +802,40 @@ mod tests {
 
     fn look(paths: &Paths) -> FilesReport {
         scan(paths, &opts(paths), &AtomicBool::new(false), &|_| {})
+    }
+
+    #[test]
+    fn copies_are_checked_byte_for_byte_and_places_are_yours_to_choose() {
+        let root = fixture("places");
+        let (a, b, c) = (root.join("a.bin"), root.join("b.bin"), root.join("c.bin"));
+        put(&a, &stuff(300_000, 1));
+        put(&b, &stuff(300_000, 1));
+        let mut differs = stuff(300_000, 1);
+        differs[299_999] ^= 1;
+        put(&c, &differs);
+        assert!(identical(&a, &b));
+        assert!(!identical(&a, &c), "one byte apart");
+        assert!(!identical(&a, &root.join("missing.bin")));
+
+        let paths = Paths::under(&root);
+        let mut cfg = crate::config::FilesConfig::default();
+        assert!(set_place(&paths, &mut cfg, Path::new(r"C:\Windows\System32"), true).is_err());
+        assert!(set_place(&paths, &mut cfg, Path::new(r"C:\Program Files"), true).is_err());
+        let photos = root.join("Photos");
+        std::fs::create_dir_all(&photos).unwrap();
+        set_place(&paths, &mut cfg, &photos, true).unwrap();
+        assert!(chosen_roots(&paths, &cfg).iter().any(|r| same_path(r, &photos)));
+        set_place(&paths, &mut cfg, &photos, false).unwrap();
+        assert!(!chosen_roots(&paths, &cfg).iter().any(|r| same_path(r, &photos)));
+        // A usual folder is switched off by its name.
+        std::fs::create_dir_all(&paths.downloads).unwrap();
+        set_place(&paths, &mut cfg, &paths.downloads, false).unwrap();
+        assert_eq!(cfg.skip, vec!["Downloads".to_string()]);
+        assert!(!chosen_roots(&paths, &cfg).iter().any(|r| same_path(r, &paths.downloads)));
+        set_place(&paths, &mut cfg, &paths.downloads, true).unwrap();
+        assert!(cfg.skip.is_empty());
+        assert!(is_drive_root(Path::new(r"D:\")) && !is_drive_root(&photos));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// Made-up contents of a given size, different for each seed.
@@ -808,12 +983,12 @@ mod tests {
             std::fs::remove_file(p).is_ok()
         };
         // Every copy ticked: none goes.
-        let r = recycle_with(&paths, &[keep.clone(), extra.clone(), extra2.clone()], &mut fake);
+        let r = recycle_with(&paths, &[keep.clone(), extra.clone(), extra2.clone()], &mut |_, _| true, &mut fake);
         assert!(r.recycled.is_empty() && r.skipped.len() == 3, "{r:?}");
         assert!(keep.exists() && extra.exists() && extra2.exists());
         // One extra changed since: it stays; the other goes, and the saved scan drops it.
         std::fs::write(&extra2, stuff(20_000, 12)).unwrap();
-        let r = recycle_with(&paths, &[extra.clone(), extra2.clone()], &mut fake);
+        let r = recycle_with(&paths, &[extra.clone(), extra2.clone()], &mut |_, _| true, &mut fake);
         assert_eq!(r.recycled, vec![extra.clone()], "{r:?}");
         assert_eq!(r.freed, 20_000);
         assert!(r.skipped[0].why.contains("changed"));
@@ -823,10 +998,10 @@ mod tests {
         assert_eq!(saved.groups[0].files.len(), 2, "{:?}", saved.groups);
         // With the staying copy changed, the last unchanged one stays too.
         std::fs::write(&keep, stuff(20_000, 13)).unwrap();
-        let r = recycle_with(&paths, std::slice::from_ref(&extra2), &mut fake);
+        let r = recycle_with(&paths, std::slice::from_ref(&extra2), &mut |_, _| true, &mut fake);
         assert!(r.recycled.is_empty(), "{r:?}");
         // Something mom never found isn't touched.
-        let r = recycle_with(&paths, &[root.join("whatever.txt")], &mut fake);
+        let r = recycle_with(&paths, &[root.join("whatever.txt")], &mut |_, _| true, &mut fake);
         assert!(r.recycled.is_empty() && r.skipped[0].why.contains("didn't find"));
         assert_eq!(removed, vec![extra.clone()]);
         std::fs::remove_dir_all(&root).unwrap();

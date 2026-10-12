@@ -1089,6 +1089,79 @@ button.row-name:hover {
   overflow-wrap: anywhere;
 }
 
+/* A finding's buttons, side by side. */
+.fix-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* Where the Files scan looks: a chip each, lit when it's on. */
+.places {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 0 4px;
+}
+
+.places-head {
+  margin: 10px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.place {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 15px;
+  background: var(--card-2);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+
+.place:hover {
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
+
+.place.on {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.place-led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--led-off);
+}
+
+.place.on .place-led {
+  background: var(--green);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--green) var(--glow), transparent);
+}
+
+.place-sub {
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+.place.add {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
+
+.place.add .ico {
+  width: 13px;
+  height: 13px;
+}
+
 /* A restart that ends agent work says so before the second press. */
 .fix-stack {
   display: grid;

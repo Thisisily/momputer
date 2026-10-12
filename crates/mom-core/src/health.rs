@@ -429,6 +429,11 @@ pub fn startup_apps(paths: &Paths) -> Vec<StartupApp> {
     out
 }
 
+/// The fixed drives, with their labels and space.
+pub(crate) fn drives() -> Vec<Drive> {
+    os::drives()
+}
+
 /// Windows is waiting for a restart to finish installing something.
 pub(crate) fn reboot_pending() -> bool {
     os::reboot_pending()
