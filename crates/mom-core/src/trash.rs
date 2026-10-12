@@ -23,6 +23,8 @@ use walk::{remove_all, remove_without_following, tally, tally_many, Tally};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,7 +70,7 @@ pub struct Spot {
     pub measured_at: u64,
     /// A blocker or a tip ("Close Edge to clear its cache.").
     pub note: Option<String>,
-    /// Biggest first: up to 60 that go, then up to 40 that stay.
+    /// Biggest first: up to 300 that go, then up to 150 that stay.
     pub items: Vec<Item>,
 }
 
@@ -108,6 +110,98 @@ pub struct CleanReport {
     pub message: String,
 }
 
+/// A clean-up as it happens: how far along it is, what just went, and a way to stop it. The app
+/// keeps one, hands it to `clean` through `TrashCtx::live` and reads it while the clean runs.
+#[derive(Default)]
+pub struct Live {
+    stop: AtomicBool,
+    done: AtomicU64,
+    total: AtomicU64,
+    freed: AtomicU64,
+    /// Files deleted so far, counted inside big folders too, so a long one still moves.
+    files: AtomicU64,
+    total_files: AtomicU64,
+    /// Items gone so far, by path, in order.
+    gone: Mutex<Vec<String>>,
+    /// The item being cleaned right now.
+    current: Mutex<String>,
+}
+
+/// How a clean-up is going, for the widget.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveNow {
+    pub done: u64,
+    pub total: u64,
+    pub freed: u64,
+    pub files: u64,
+    pub total_files: u64,
+    pub current: String,
+    /// Paths gone since the `since` the widget asked with.
+    pub gone: Vec<String>,
+    /// How many have gone in all (what to ask from next time).
+    pub gone_count: usize,
+    pub stopping: bool,
+}
+
+impl Live {
+    /// Asks the clean-up to stop after what it's doing now.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+
+    /// Ready for a new clean-up.
+    pub fn reset(&self) {
+        self.stop.store(false, Ordering::SeqCst);
+        for n in [&self.done, &self.total, &self.freed, &self.files, &self.total_files] {
+            n.store(0, Ordering::SeqCst);
+        }
+        self.gone.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.current.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    pub fn now(&self, since: usize) -> LiveNow {
+        let gone = self.gone.lock().unwrap_or_else(|e| e.into_inner());
+        LiveNow {
+            done: self.done.load(Ordering::Relaxed),
+            total: self.total.load(Ordering::Relaxed),
+            freed: self.freed.load(Ordering::Relaxed),
+            files: self.files.load(Ordering::Relaxed),
+            total_files: self.total_files.load(Ordering::Relaxed),
+            current: self.current.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            gone: gone.get(since..).map(<[String]>::to_vec).unwrap_or_default(),
+            gone_count: gone.len(),
+            stopping: self.stopped(),
+        }
+    }
+
+    fn start(&self, chosen: &[&Cand]) {
+        self.total.store(chosen.len() as u64, Ordering::SeqCst);
+        self.total_files.store(chosen.iter().map(|c| c.files.max(1)).sum(), Ordering::SeqCst);
+    }
+
+    fn working_on(&self, c: &Cand) {
+        *self.current.lock().unwrap_or_else(|e| e.into_inner()) = c.name.clone();
+    }
+
+    fn finished(&self, c: &Cand, gone: bool, freed: u64) {
+        self.done.fetch_add(1, Ordering::Relaxed);
+        self.freed.fetch_add(freed, Ordering::Relaxed);
+        if gone {
+            self.gone.lock().unwrap_or_else(|e| e.into_inner()).push(c.path.to_string_lossy().to_string());
+        }
+    }
+
+    /// A file inside an item went (counted by the remover as it goes).
+    pub(super) fn file_gone(&self) {
+        self.files.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// What mom knows about the machine right now, so she doesn't throw out anything in use.
 pub struct TrashCtx<'a> {
     pub paths: &'a Paths,
@@ -126,6 +220,8 @@ pub struct TrashCtx<'a> {
     pub now: u64,
     /// Running as administrator: then only the spots that need one are cleaned (see `clean`).
     pub elevated: bool,
+    /// Where a clean-up reports how it's going, and learns it should stop.
+    pub live: Option<&'a Live>,
 }
 
 impl<'a> TrashCtx<'a> {
@@ -160,6 +256,7 @@ impl<'a> TrashCtx<'a> {
             docker_running: crate::containers::docker_running(table),
             now: now_secs(),
             elevated: crate::elevate::is_elevated(),
+            live: None,
         }
     }
 
@@ -455,10 +552,11 @@ const DEFS: &[Def] = &[
     Def {
         id: "docker",
         label: "Docker junk",
-        detail: "Runs `docker system prune`: stopped containers, dangling images, build cache. Volumes are kept.",
-        what: "Stopped containers, networks nothing uses, untagged images and build cache that Docker keeps around.",
+        detail: "Build cache, untagged images, and images and stopped containers you pick. Volumes are kept.",
+        what: "Images Docker keeps (each one listed with the containers that use it), stopped containers, and the \
+               build cache. Volumes, where databases keep their data, are never touched.",
         group: "dev",
-        action: "tool",
+        action: "delete",
         safety: "review",
         owner: None,
     },
@@ -859,18 +957,31 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                 return Found::none();
             }
             let mut f = Found::at(root.clone());
-            let list = entries(&root).into_iter().map(|p| {
+            let list: Vec<(PathBuf, String)> = entries(&root).into_iter().map(|p| {
                 let n = npx_name(&p);
                 (p, n)
-            });
-            for c in cands(list.collect(), ctx.now) {
+            }).collect();
+            let deps: Vec<Vec<String>> = list.iter().map(|(p, _)| npx_deps(p)).collect();
+            // npx never writes to a folder it runs from again, so its age is when it was fetched,
+            // not when it last ran. Hold them as long as agents' other leftovers, and keep any that
+            // your shell history or an MCP server set-up names.
+            let hold = ctx.cfg.agent_scratch_days * 86_400;
+            let signs = npx_signs(ctx.paths);
+            for (c, deps) in cands(list, ctx.now).into_iter().zip(deps) {
+                let named = deps.iter().find_map(|d| {
+                    let d = d.to_lowercase();
+                    signs.iter().find(|(_, text)| text.contains(&d)).map(|(by, _)| *by)
+                });
                 let c = if ctx.in_use(&c.path) {
                     c.verdict(false, IN_USE)
-                } else if c.age < 7 * 86_400 {
-                    let r = format!("Used {} ago (kept for a week)", ago(c.age));
+                } else if let Some(by) = named {
+                    let r = format!("Fetched {} ago; {by}", ago(c.age));
+                    c.verdict(false, r)
+                } else if c.age < hold {
+                    let r = format!("Fetched {} ago (kept for {})", ago(c.age), human_age_long(hold));
                     c.kept_while_new(r)
                 } else {
-                    let r = format!("Not used for {}", ago(c.age));
+                    let r = format!("Fetched {} ago, and nothing mom can see runs it", ago(c.age));
                     c.verdict(true, r)
                 };
                 f.cands.push(c);
@@ -982,11 +1093,13 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                 if kind != "model" {
                     c.sub = c.sub.map(|s| format!("{s} ({kind})"));
                 }
+                // Nothing records when a model was last used (it's only read, never written), so
+                // its age says when it was downloaded, nothing more. The user picks.
                 let c = if ctx.in_use(&c.path) {
                     c.verdict(false, IN_USE)
                 } else {
-                    let r = format!("Downloaded {} ago", ago(c.age));
-                    c.verdict(true, r)
+                    let r = format!("Downloaded {} ago; tick it if you're done with it", ago(c.age));
+                    c.kept_while_new(r)
                 };
                 f.cands.push(c);
             }
@@ -1008,36 +1121,55 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
             }
             let mut f = Found::none();
             f.available = true;
-            f.exact = false; // df counts every unused image; prune only takes the untagged ones
-            let rows = crate::containers::docker_df().unwrap_or_default();
-            let mut total = 0;
-            let mut reclaim = 0;
-            for d in rows {
-                total += d.size;
-                let volumes = d.kind.eq_ignore_ascii_case("Local Volumes");
-                let name = match d.kind.to_ascii_lowercase().as_str() {
-                    "images" => "Unused images",
-                    "containers" => "Stopped containers",
-                    "local volumes" => "Volumes",
-                    "build cache" => "Build cache",
-                    _ => d.kind.as_str(),
-                }
-                .to_string();
-                let path = PathBuf::from(format!("docker:{}", d.kind.to_ascii_lowercase().replace(' ', "-")));
-                let t = Tally::of(if volumes { d.size } else { d.reclaimable }, d.count);
-                let mut c = Cand::new(path, name, &t, ctx.now);
+            let Some((images, stopped)) = crate::containers::docker_inventory() else {
+                f.exact = false;
+                f.tool = Some((0, 0));
+                f.note = Some("Docker didn't answer. Give it a moment and check again.".into());
+                return f;
+            };
+            let thing = |path: String, name: String, bytes: u64, kind: &'static str| {
+                let mut c = Cand::new(PathBuf::from(path), name, &Tally::of(bytes, 1), ctx.now);
                 c.age = 0;
-                c.sub = Some(plural(d.count, "item"));
-                if volumes {
-                    f.cands.push(c.verdict(false, "Volumes hold data; prune leaves them alone"));
+                c.kind = Some(kind);
+                c
+            };
+            for i in images {
+                let mut c = thing(format!("docker:image:{}", i.id), i.name.clone(), i.size, "images");
+                c.sub = Some(format!("Image, made {}", i.created));
+                f.cands.push(if i.used_running {
+                    c.verdict(false, format!("{} runs on it", i.used_by.join(", ")))
+                } else if !i.used_by.is_empty() {
+                    c.verdict(false, format!("Used by {} (stopped)", i.used_by.join(", ")))
+                } else if i.name == "<none>" {
+                    c.verdict(true, "An untagged leftover of an image that was rebuilt or pulled again")
                 } else {
-                    reclaim += d.reclaimable;
-                    if d.reclaimable > 0 {
-                        f.cands.push(c.verdict(true, "Nothing running uses it"));
-                    }
+                    c.kept_while_new("No container uses it. Pulled ones download again; ones built here need building again")
+                });
+            }
+            for s in stopped {
+                let mut c = thing(format!("docker:container:{}", s.id), s.name.clone(), 0, "stopped containers");
+                c.sub = Some(match &s.project {
+                    Some(p) => format!("{}, compose project {p}", s.status),
+                    None => format!("{}, from {}", s.status, s.image),
+                });
+                f.cands.push(c.kept_while_new(if s.project.is_some() {
+                    "Stopped. `docker compose up` makes it again; its volumes stay"
+                } else {
+                    "Stopped. Removing it loses anything saved inside it (not in a volume)"
+                }));
+            }
+            let df = crate::containers::docker_df().unwrap_or_default();
+            for d in df {
+                if d.kind.eq_ignore_ascii_case("Build Cache") && d.reclaimable > 0 {
+                    let mut c = thing("docker:build-cache".into(), "Build cache".into(), d.reclaimable, "build cache");
+                    c.sub = Some(format!("{} {}", d.count, if d.count == 1 { "entry" } else { "entries" }));
+                    f.cands.push(c.verdict(true, "Made again by the next build that needs it"));
+                } else if d.kind.eq_ignore_ascii_case("Local Volumes") && d.count > 0 {
+                    let mut c = thing("docker:volumes".into(), "Volumes".into(), d.size, "volumes");
+                    c.sub = Some(plural(d.count, "volume"));
+                    f.cands.push(c.verdict(false, "Where databases keep their data. Mom never touches them"));
                 }
             }
-            f.tool = Some((total, reclaim));
             f
         }
         "browser-cache" => browsers::find(ctx),
@@ -1131,6 +1263,47 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
 }
 
+/// The packages an npx folder holds ("@stripe/cli").
+fn npx_deps(dir: &Path) -> Vec<String> {
+    read_json(&dir.join("package.json"))
+        .and_then(|v| v.get("dependencies").and_then(|d| d.as_object()).map(|o| o.keys().cloned().collect()))
+        .unwrap_or_default()
+}
+
+/// Where someone runs npx packages: shell histories, and the MCP server set-ups of agents and
+/// editors. Each with how to say it, lowercased.
+fn npx_signs(paths: &Paths) -> Vec<(&'static str, String)> {
+    let read = |p: PathBuf| std::fs::read_to_string(p).map(|s| s.to_lowercase()).unwrap_or_default();
+    let mut out = Vec::new();
+    let history = paths.appdata.join("Microsoft").join("Windows").join("PowerShell").join("PSReadLine");
+    let mut shells: String = entries(&history).into_iter().filter(|p| name_of(p).ends_with("_history.txt")).map(read).collect();
+    for f in [".bash_history", ".zsh_history"] {
+        shells.push_str(&read(paths.home.join(f)));
+    }
+    out.push(("your shell history runs it", shells));
+    let mcp = [
+        paths.home.join(".claude.json"),
+        paths.home.join(".claude").join("settings.json"),
+        paths.home.join(".cursor").join("mcp.json"),
+        paths.home.join(".codex").join("config.toml"),
+        paths.home.join(".gemini").join("settings.json"),
+        paths.appdata.join("Claude").join("claude_desktop_config.json"),
+        paths.appdata.join("Code").join("User").join("mcp.json"),
+        paths.appdata.join("Code").join("User").join("settings.json"),
+        paths.appdata.join("Cursor").join("User").join("settings.json"),
+    ];
+    let mut servers: String = mcp.into_iter().map(read).collect();
+    // Plugins bring their own MCP servers (~/.claude/plugins/.../.mcp.json).
+    let plugins = paths.home.join(".claude").join("plugins");
+    for e in walkdir::WalkDir::new(&plugins).max_depth(6).into_iter().filter_map(Result::ok) {
+        if e.file_name() == ".mcp.json" || e.file_name() == "plugin.json" {
+            servers.push_str(&read(e.path().to_path_buf()));
+        }
+    }
+    out.push(("an MCP server is set up to run it", servers));
+    out
+}
+
 /// What an npx folder ran, from its package.json, with the version it got ("wrangler 4.42.0").
 fn npx_name(dir: &Path) -> String {
     let deps: Vec<String> = read_json(&dir.join("package.json"))
@@ -1222,6 +1395,11 @@ pub fn measure_all(ctx: &TrashCtx) -> Vec<Spot> {
     DEFS.iter().filter_map(|d| measure(d.id, ctx)).collect()
 }
 
+/// How many items a spot lists of each kind (the rest are summed up): enough for the widget to
+/// group them by app or game.
+const MAX_GOES: usize = 300;
+const MAX_STAYS: usize = 150;
+
 fn by_size(a: &Cand, b: &Cand) -> std::cmp::Ordering {
     b.bytes.cmp(&a.bytes).then_with(|| a.name.cmp(&b.name))
 }
@@ -1241,7 +1419,7 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
     let (n_go, n_stay) = (goes.len() as u64, stays.len() as u64);
     let new_bytes = stays.iter().filter(|c| c.optional).map(|c| c.bytes).sum();
     let new_items = stays.iter().filter(|c| c.optional).count() as u64;
-    let items = goes.into_iter().take(60).chain(stays.into_iter().take(40)).map(Cand::into_item).collect();
+    let items = goes.into_iter().take(MAX_GOES).chain(stays.into_iter().take(MAX_STAYS)).map(Cand::into_item).collect();
     Spot {
         id: def.id.into(),
         label: def.label.into(),
@@ -1371,10 +1549,13 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
                 )
             }
         }
-        "npx-cache" if n == 0 => nothing("every npx download was used in the last week."),
+        "npx-cache" if n == 0 => nothing(&format!(
+            "npx doesn't note when a package last ran, so mom keeps everything fetched in the last {kept}, and anything \
+             your shell history or an MCP server set-up names."
+        )),
         "npx-cache" => format!(
-            "Deletes {} that npx downloaded and nobody has run in a week, {forever}. If something needs one again, \
-             npx downloads it again (a few seconds).",
+            "Deletes {} that npx fetched over {kept} ago and that nothing mom can see runs (not your shell history, not an \
+             MCP server set-up), {forever}. If one is needed again, npx fetches it again in a few seconds.",
             count_size(n, "package folder", "package folders", bytes)
         ),
         "npm-cache" | "yarn-cache" | "bun-cache" => {
@@ -1411,15 +1592,15 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
              exactly what goes; your projects keep working, and pnpm downloads anything it needs again.",
             human_bytes(bytes)
         ),
-        "docker" if !ctx.docker_running => "Docker isn't running, so there's nothing to prune right now. When it is, this runs \
-             `docker system prune`: stopped containers, networks nothing uses, untagged images and build cache go; running \
-             containers, images in use and volumes stay."
+        "docker" if !ctx.docker_running => "Docker isn't running, so mom can't see what it keeps. Start Docker Desktop and \
+             check again: she'll list every image and stopped container, and what uses what."
             .to_string(),
+        "docker" if n == 0 => nothing("no build cache or untagged images. Tick images or stopped containers below if you're done with them."),
         "docker" => format!(
-            "Runs `docker system prune` (up to {}): removes stopped containers, networks nothing uses, untagged images \
-             and build cache. Running containers, images in use and volumes (where databases keep their data) aren't \
-             touched. Stopped containers are gone for good, with anything saved inside them.",
-            human_bytes(bytes)
+            "Has Docker remove {}: the build cache and untagged leftovers, plus any images and stopped containers you \
+             tick. Images a container uses can't be ticked, and volumes (where databases keep their data) are never \
+             touched. Images share layers, so a little less may come back.",
+            count_size(n, "thing", "things", bytes)
         ),
         "playwright-old" if n == 0 => nothing("only the newest build of each browser is installed."),
         "playwright-old" => format!(
@@ -1427,7 +1608,11 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
              browser tools keep working; `npx playwright install` brings an old one back if a project needs it.",
             count_size(n, "older browser build", "older browser builds", bytes)
         ),
-        "huggingface-cache" if n == 0 => nothing("no downloaded models."),
+        "huggingface-cache" if stays.is_empty() => nothing("no downloaded models."),
+        "huggingface-cache" if n == 0 => "Nothing is picked for you: nothing records when a model was last used, so mom can't \
+             tell the ones you use from the ones you don't. Tick the models you're done with; they're deleted for good, and \
+             download again if your code asks for them."
+            .to_string(),
         "huggingface-cache" => format!(
             "Deletes {} {forever}. Models can be very large and slow to download again, so untick any you still use. \
              Your code, and models you saved somewhere else, aren't touched.",
@@ -1535,9 +1720,14 @@ impl Pick {
     }
 }
 
+/// Items deleted together: many at once is much faster than one by one, and in batches the
+/// widget can show how it's going and stop between them.
+const BATCH_ITEMS: usize = 48;
+const BATCH_FILES: u64 = 4_000;
+
 /// Cleans a spot: what qualifies right now, as ticked in `pick` (by default, everything that
-/// goes). In-use things never go. Tool spots ignore `pick`. The Recycle Bin is emptied with
-/// Windows' own call unless `pick` changes the list, and then its items are deleted one by one.
+/// goes). In-use things never go. Tool spots ignore `pick`. Reports how it's going to
+/// `ctx.live`, and stops between items (or batches of small ones) when asked.
 pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     let mut r = CleanReport { id: id.to_string(), ..Default::default() };
     let Some(def) = def(id) else {
@@ -1553,7 +1743,7 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     }
     match def.action {
         "tool" => return run_tool(id, ctx, r),
-        "empty-bin" if pick.is_none() => return bin::empty(ctx, r),
+        _ if id == "docker" => return docker_clean(ctx, pick, r),
         _ => {}
     }
     let f = find(id, ctx);
@@ -1563,35 +1753,91 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         let taken: HashSet<String> = chosen.iter().map(|c| norm_path(&c.path.to_string_lossy())).collect();
         r.skipped += p.ticked.iter().filter(|t| !taken.contains(&norm_path(t))).count() as u64;
     }
+    let live = ctx.live;
+    if let Some(l) = live {
+        l.start(&chosen);
+    }
     if def.action == "move" {
         return move_chosen(&chosen, ctx, r);
     }
-    let gone: Vec<bool> = if def.action == "recycle" {
-        chosen.iter().map(|c| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok())).collect()
+    let stopped = || live.is_some_and(Live::stopped);
+    // One at a time, for the ways that can't go many at once.
+    let each = |remove: &dyn Fn(&Cand) -> bool| -> Vec<Option<bool>> {
+        chosen
+            .iter()
+            .map(|c| {
+                if stopped() {
+                    return None;
+                }
+                if let Some(l) = live {
+                    l.working_on(c);
+                }
+                Some(remove(c))
+            })
+            .collect()
+    };
+    let gone: Vec<Option<bool>> = if def.action == "recycle" {
+        each(&|c: &Cand| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok()))
     } else if elevated {
         // As administrator: only where nobody else could have swapped a folder for a link, and
         // one at a time, never following one.
-        chosen.iter().map(|c| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_ok() && remove_without_following(t))).collect()
+        each(&|c: &Cand| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_ok() && remove_without_following(t)))
     } else if needs_admin(id) {
         // As you: what's in folders anyone can change is yours to clean anyway. The rest waits
         // for the administrator run.
-        chosen.iter().map(|c| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_err() && remove_without_following(t))).collect()
+        each(&|c: &Cand| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_err() && remove_without_following(t)))
     } else {
-        // Everything at once (much faster than one by one), then sorted back out per item.
-        let targets: Vec<PathBuf> = chosen.iter().flat_map(|c| c.targets.iter().cloned()).collect();
-        let mut done = remove_all(&targets).into_iter();
-        chosen.iter().map(|c| c.targets.iter().map(|_| done.next().unwrap_or(false)).fold(true, |a, b| a & b)).collect()
-    };
-    for (c, ok) in chosen.iter().zip(gone) {
-        if ok {
-            r.freed += c.bytes;
-            r.deleted += 1;
-        } else {
-            // Something in it was in use; count what did go.
-            let left: u64 = tally_many(&c.targets, ENTRY_CAP, u64::MAX).iter().map(|t| t.bytes).sum();
-            r.freed += c.bytes.saturating_sub(left);
-            r.skipped += 1;
+        // In batches: a big folder on its own, small things many at a time.
+        let mut out: Vec<Option<bool>> = Vec::with_capacity(chosen.len());
+        let mut start = 0;
+        while start < chosen.len() {
+            let mut end = start;
+            let mut files = 0;
+            while end < chosen.len() && end - start < BATCH_ITEMS && (end == start || files + chosen[end].files <= BATCH_FILES) {
+                files += chosen[end].files;
+                end += 1;
+            }
+            if stopped() {
+                out.extend(std::iter::repeat_n(None, chosen.len() - start));
+                break;
+            }
+            if let Some(l) = live {
+                l.working_on(chosen[start]);
+            }
+            let targets: Vec<PathBuf> = chosen[start..end].iter().flat_map(|c| c.targets.iter().cloned()).collect();
+            let mut done = remove_all(&targets, live).into_iter();
+            for c in &chosen[start..end] {
+                out.push(Some(c.targets.iter().map(|_| done.next().unwrap_or(false)).fold(true, |a, b| a & b)));
+            }
+            start = end;
         }
+        out
+    };
+    let mut left_alone = 0u64;
+    for (c, ok) in chosen.iter().zip(gone) {
+        let freed = match ok {
+            None => {
+                left_alone += 1;
+                continue;
+            }
+            Some(true) => {
+                r.deleted += 1;
+                c.bytes
+            }
+            Some(false) => {
+                // Something in it was in use (or the clean was stopped halfway); count what did go.
+                let left: u64 = tally_many(&c.targets, ENTRY_CAP, u64::MAX).iter().map(|t| t.bytes).sum();
+                r.skipped += 1;
+                c.bytes.saturating_sub(left)
+            }
+        };
+        r.freed += freed;
+        if let Some(l) = live {
+            l.finished(c, ok == Some(true), freed);
+        }
+    }
+    if def.action == "empty-bin" {
+        bin::refresh_icon();
     }
     if id == "claude-temp" {
         // Leave no empty folders behind.
@@ -1604,6 +1850,71 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         }
     }
     r.message = cleaned_message(def, &r);
+    if left_alone > 0 {
+        r.message = format!("Stopped. {} {} left as they were.", r.message, plural(left_alone, "item"));
+    }
+    r
+}
+
+/// Cleans Docker: exactly the containers, images and build cache that are ticked (by default,
+/// just the build cache and untagged leftovers), each with Docker's own command.
+fn docker_clean(ctx: &TrashCtx, pick: Option<&Pick>, mut r: CleanReport) -> CleanReport {
+    if !ctx.docker_running {
+        r.message = "Docker isn't running, so there's nothing mom can ask it to remove.".into();
+        return r;
+    }
+    let f = find("docker", ctx);
+    let chosen = choose(&f, pick);
+    if let Some(l) = ctx.live {
+        l.start(&chosen);
+    }
+    let (mut containers, mut images, mut cache) = (vec![], vec![], false);
+    for c in &chosen {
+        let p = c.path.to_string_lossy();
+        if let Some(id) = p.strip_prefix("docker:container:") {
+            containers.push(id.to_string());
+        } else if let Some(id) = p.strip_prefix("docker:image:") {
+            images.push(id.to_string());
+        } else if p == "docker:build-cache" {
+            cache = true;
+        }
+    }
+    if chosen.is_empty() {
+        r.message = "Nothing ticked, so Docker was left alone.".into();
+        return r;
+    }
+    let mut why = None;
+    for (what, result) in crate::containers::docker_remove(&containers, &images, cache) {
+        let Some(c) = chosen.iter().find(|c| c.path.to_string_lossy().ends_with(&what) || (what == "build cache" && c.path.to_string_lossy() == "docker:build-cache")) else {
+            continue;
+        };
+        let ok = result.is_ok();
+        match result {
+            Ok(()) => {
+                r.deleted += 1;
+                r.freed += c.bytes;
+            }
+            Err(e) => {
+                r.skipped += 1;
+                why.get_or_insert(e);
+            }
+        }
+        if let Some(l) = ctx.live {
+            l.finished(c, ok, if ok { c.bytes } else { 0 });
+        }
+    }
+    r.message = if r.deleted == 0 {
+        format!("Docker didn't remove anything: {}", why.clone().unwrap_or_default())
+    } else {
+        format!(
+            "Docker removed {}, about {} (images share layers, so a little less may come back). Volumes are untouched.",
+            plural(r.deleted, "thing"),
+            human_bytes(r.freed)
+        )
+    };
+    if r.deleted > 0 && r.skipped > 0 {
+        r.message.push_str(&format!(" {} stayed: {}", plural(r.skipped, "thing"), why.unwrap_or_default()));
+    }
     r
 }
 
@@ -1639,16 +1950,29 @@ fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport) -> CleanRep
         return r;
     };
     let mut why = None;
+    let mut left_alone = 0;
     for c in chosen {
-        match crate::archive::move_out(ctx.paths, &c.path, &root, &c.name, &r.id) {
+        if ctx.live.is_some_and(Live::stopped) {
+            left_alone += 1;
+            continue;
+        }
+        if let Some(l) = ctx.live {
+            l.working_on(c);
+        }
+        let (ok, freed) = match crate::archive::move_out(ctx.paths, &c.path, &root, &c.name, &r.id) {
             Ok(m) => {
                 r.freed += m.bytes;
                 r.deleted += 1;
+                (true, m.bytes)
             }
             Err(e) => {
                 r.skipped += 1;
                 why.get_or_insert(e);
+                (false, 0)
             }
+        };
+        if let Some(l) = ctx.live {
+            l.finished(c, ok, freed);
         }
     }
     r.message = if r.deleted == 0 {
@@ -1663,6 +1987,9 @@ fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport) -> CleanRep
     };
     if r.deleted > 0 && r.skipped > 0 {
         r.message.push_str(&format!(" {} stayed: {}", plural(r.skipped, "folder"), why.unwrap_or_default()));
+    }
+    if left_alone > 0 {
+        r.message = format!("Stopped. {} {} left where they were.", r.message, plural(left_alone, "folder"));
     }
     r
 }
@@ -1727,8 +2054,6 @@ fn run_tool(id: &str, ctx: &TrashCtx, mut r: CleanReport) -> CleanReport {
             },
             None => Err("pnpm isn't on your PATH.".into()),
         },
-        "docker" if !ctx.docker_running => Err("Docker isn't running.".into()),
-        "docker" => crate::containers::docker_prune().map(|_| ()).map_err(|e| e.to_string()),
         _ => Err(format!("mom doesn't know how to clean {id}")),
     };
     match result {
@@ -1737,7 +2062,6 @@ fn run_tool(id: &str, ctx: &TrashCtx, mut r: CleanReport) -> CleanReport {
             r.deleted = u64::from(r.freed > 0);
             r.message = match (id, r.freed) {
                 (_, 0) => "Ran it. Nothing needed pruning; already spotless.".to_string(),
-                ("docker", f) => format!("Docker pruned {}. Volumes are untouched.", human_bytes(f)),
                 ("uv-cache", f) => format!("uv tidied its cache: {} back.", human_bytes(f)),
                 (_, f) => format!("pnpm pruned its store: {} back.", human_bytes(f)),
             };
@@ -1803,6 +2127,7 @@ mod tests {
             docker_running: false,
             now: now_secs(),
             elevated: false, // tests may well run as administrator (CI does)
+            live: None,
         }
     }
 
@@ -2050,6 +2375,77 @@ mod tests {
         let r = clean("crash-dumps", &ctx, Some(&Pick { ticked: vec![dump.path.clone()], ..Default::default() }));
         assert_eq!((r.deleted, r.freed), (1, 500));
         assert!(!paths.local_appdata.join("CrashDumps").join("app.exe.42.dmp").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn npx_downloads_wait_as_long_as_agent_leftovers_and_what_you_run_stays() {
+        let root = fixture("npx");
+        let paths = Paths::under(&root);
+        let npx = paths.local_appdata.join("npm-cache").join("_npx");
+        let package = |hash: &str, dep: &str, days: u64| {
+            let dir = npx.join(hash);
+            write(&dir.join("package.json"), 0, days);
+            std::fs::write(dir.join("package.json"), format!(r#"{{"dependencies":{{"{dep}":"*"}}}}"#)).unwrap();
+            touch_old(&dir.join("package.json"), days);
+            write(&dir.join("node_modules").join(dep).join("index.js"), 100, days);
+        };
+        package("aaa", "storefront-cli", 90); // old, and nothing runs it
+        package("bbb", "nimbus-lint", 20); // fetched recently: kept while new
+        package("ccc", "atlas-gen", 90); // old, but you run it
+        let history = paths.appdata.join("Microsoft").join("Windows").join("PowerShell").join("PSReadLine");
+        std::fs::create_dir_all(&history).unwrap();
+        std::fs::write(history.join("ConsoleHost_history.txt"), "git status\nnpx atlas-gen --watch\n").unwrap();
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("npx-cache", &ctx).unwrap();
+        let old = spot.items.iter().find(|i| i.path.ends_with("aaa")).unwrap();
+        let new = spot.items.iter().find(|i| i.path.ends_with("bbb")).unwrap();
+        let used = spot.items.iter().find(|i| i.path.ends_with("ccc")).unwrap();
+        assert!(old.goes && old.reason.starts_with("Fetched 90 days ago"), "{}", old.reason);
+        assert!(!new.goes && new.optional && new.reason.contains("kept for"), "{}", new.reason);
+        assert!(!used.goes && !used.optional && used.reason.contains("shell history"), "{}", used.reason);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn hugging_face_models_are_only_ever_picked_by_you() {
+        let root = fixture("hf");
+        let paths = Paths::under(&root);
+        let hub = paths.home.join(".cache").join("huggingface").join("hub");
+        write(&hub.join("models--nimbus--depth-small").join("blobs").join("a"), 5000, 400);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("huggingface-cache", &ctx).unwrap();
+        let model = item(&spot, "depth-small");
+        assert!(!model.goes && model.optional, "even a year-old model waits for a tick");
+        assert_eq!(clean("huggingface-cache", &ctx, None).deleted, 0);
+        assert!(spot.effect.contains("Nothing is picked for you"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_stopped_clean_leaves_the_rest_and_progress_says_what_went() {
+        let root = fixture("live");
+        let paths = Paths::under(&root);
+        for n in 0..5 {
+            write(&paths.temp.join(format!("old-{n}")).join("a.log"), 100, 30);
+        }
+        let cfg = TrashConfig::default();
+        let mut ctx = ctx(&paths, &cfg);
+        let live = Live::default();
+        ctx.live = Some(&live);
+        live.stop();
+        let r = clean("old-temp", &ctx, None);
+        assert_eq!(r.deleted, 0);
+        assert!(r.message.starts_with("Stopped."), "{}", r.message);
+        assert_eq!(entries(&paths.temp).len(), 5, "nothing went");
+        live.reset();
+        let r = clean("old-temp", &ctx, None);
+        assert_eq!(r.deleted, 5);
+        let now = live.now(0);
+        assert_eq!((now.done, now.total, now.freed, now.gone.len()), (5, 5, 500, 5));
+        assert_eq!(live.now(3).gone.len(), 2, "only what's new since the widget last asked");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

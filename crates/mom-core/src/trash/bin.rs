@@ -4,7 +4,7 @@
 //! files: `$R<id>.ext` is the thing itself and `$I<id>.ext` says where it came from, how big it
 //! was and when it was deleted.
 
-use super::{ago, entries, name_of, tally_many, Cand, CleanReport, Found, Tally, TrashCtx};
+use super::{ago, entries, name_of, tally_many, Cand, Found, Tally, TrashCtx};
 use crate::util::plural;
 use std::path::{Path, PathBuf};
 
@@ -122,49 +122,15 @@ fn bin_dirs() -> Vec<PathBuf> {
     out
 }
 
-/// Empties the whole bin with Windows' own call (no confirmation, no progress window, no sound).
-pub(super) fn empty(ctx: &TrashCtx, mut r: CleanReport) -> CleanReport {
-    let before = find(ctx);
-    let (n, bytes) = (before.cands.len() as u64, before.cands.iter().map(|c| c.bytes).sum::<u64>());
-    if n == 0 {
-        r.message = "The Recycle Bin is already empty.".into();
-        return r;
+/// Tells Explorer the bin changed, so its icon shows empty (or not) right away.
+pub(super) fn refresh_icon() {
+    #[cfg(windows)]
+    for dir in bin_dirs() {
+        use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_UPDATEDIR, SHCNF_PATHW};
+        let w: Vec<u16> = dir.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
+        // SAFETY: a NUL-terminated path that outlives the call; it only tells Explorer to look again.
+        unsafe { SHChangeNotify(SHCNE_UPDATEDIR as i32, SHCNF_PATHW, w.as_ptr().cast(), std::ptr::null()) };
     }
-    match empty_all() {
-        Ok(()) => {
-            let after = find(ctx);
-            let left = after.cands.len() as u64;
-            r.deleted = n.saturating_sub(left);
-            r.skipped = left.min(n);
-            r.freed = bytes.saturating_sub(after.cands.iter().map(|c| c.bytes).sum::<u64>());
-            r.message = format!("Emptied the Recycle Bin: {} gone for good.", crate::util::human_bytes(r.freed));
-            if left > 0 {
-                r.message.push_str(&format!(" {} couldn't be deleted (in use).", plural(left, "item")));
-            }
-        }
-        Err(e) => r.message = format!("Couldn't empty the Recycle Bin: {e}"),
-    }
-    r
-}
-
-#[cfg(windows)]
-fn empty_all() -> Result<(), String> {
-    use windows_sys::Win32::UI::Shell::{SHEmptyRecycleBinW, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI, SHERB_NOSOUND};
-    // SAFETY: null window and null root (every drive) are documented values.
-    let hr = unsafe {
-        SHEmptyRecycleBinW(std::ptr::null_mut(), std::ptr::null(), SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND)
-    };
-    const E_UNEXPECTED: i32 = 0x8000_FFFFu32 as i32; // what it says when the bin is already empty
-    if hr >= 0 || hr == E_UNEXPECTED {
-        Ok(())
-    } else {
-        Err(format!("Windows said no (0x{:08X})", hr as u32))
-    }
-}
-
-#[cfg(not(windows))]
-fn empty_all() -> Result<(), String> {
-    Ok(())
 }
 
 /// The current user's SID ("S-1-5-21-…-1001"), which names their folder in every bin.

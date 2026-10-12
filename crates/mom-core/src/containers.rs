@@ -193,37 +193,139 @@ pub fn parse_docker_df(text: &str) -> Vec<DiskUse> {
         .collect()
 }
 
-/// Bytes `docker system prune` could give back (dangling images, stopped containers, build cache).
-pub fn docker_reclaimable() -> Option<u64> {
-    Some(
-        docker_df()?
-            .iter()
-            .filter(|d| !d.kind.eq_ignore_ascii_case("Local Volumes")) // volumes hold data; prune leaves them alone
-            .map(|d| d.reclaimable)
-            .sum(),
-    )
-}
-
-/// "1.2GB" -> bytes.
+/// "1.2GB" -> bytes. Docker writes sizes in thousands ("kB", "MB", "GB"); "MiB" and friends
+/// are powers of two.
 pub fn parse_size(s: &str) -> u64 {
     let s = s.trim();
     let idx = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
     let (num, unit) = s.split_at(idx);
     let n: f64 = num.trim().parse().unwrap_or(0.0);
     let mult = match unit.trim().to_ascii_uppercase().as_str() {
-        "KB" | "K" | "KIB" => 1024.0,
-        "MB" | "M" | "MIB" => 1024.0 * 1024.0,
-        "GB" | "G" | "GIB" => 1024.0 * 1024.0 * 1024.0,
-        "TB" | "T" | "TIB" => 1024.0_f64.powi(4),
+        "KB" | "K" => 1e3,
+        "MB" | "M" => 1e6,
+        "GB" | "G" => 1e9,
+        "TB" | "T" => 1e12,
+        "KIB" => 1024.0,
+        "MIB" => 1024.0 * 1024.0,
+        "GIB" => 1024.0_f64.powi(3),
+        "TIB" => 1024.0_f64.powi(4),
         _ => 1.0,
     };
     (n * mult) as u64
 }
 
-pub fn docker_prune() -> anyhow::Result<String> {
-    let out = run("docker", &["system", "prune", "-f"], Duration::from_secs(300))?;
-    anyhow::ensure!(out.ok(), "docker system prune failed: {}", first_line(&out));
-    Ok(out.text().lines().last().unwrap_or("").to_string())
+/// An image Docker keeps, and which containers (running or not) use it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Image {
+    /// "sha256:...", as containers refer to it.
+    pub id: String,
+    /// "redis:7.4-alpine", or "<none>" for an untagged leftover.
+    pub name: String,
+    pub size: u64,
+    /// "2 weeks ago", as Docker says it.
+    pub created: String,
+    pub used_by: Vec<String>,
+    pub used_running: bool,
+}
+
+/// A container that isn't running.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stopped {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    /// "Exited (0) 2 weeks ago".
+    pub status: String,
+    /// The docker compose project it belongs to.
+    pub project: Option<String>,
+}
+
+/// Docker's images and stopped containers, with what uses what. None if Docker didn't answer.
+pub fn docker_inventory() -> Option<(Vec<Image>, Vec<Stopped>)> {
+    let images = run("docker", &["images", "--no-trunc", "--format", "{{json .}}"], Duration::from_secs(20)).ok()?;
+    let ps = run("docker", &["ps", "-a", "--no-trunc", "--format", "{{json .}}"], Duration::from_secs(20)).ok()?;
+    if !images.ok() || !ps.ok() {
+        return None;
+    }
+    let ids: Vec<String> = ps.text().lines().filter_map(|l| json_field(l, "ID")).collect();
+    let mut args = vec!["inspect", "--format", "{{.Id}}|{{.Image}}|{{.State.Running}}"];
+    args.extend(ids.iter().map(String::as_str));
+    let links = if ids.is_empty() { String::new() } else { run("docker", &args, Duration::from_secs(20)).ok().filter(|o| o.ok())?.text() };
+    Some(parse_inventory(&images.text(), &ps.text(), &links))
+}
+
+fn json_field(line: &str, key: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    v.get(key)?.as_str().map(str::to_string)
+}
+
+/// Puts `docker images`, `docker ps -a` (both as JSON lines) and `docker inspect`'s
+/// "container|image|running" lines together.
+pub fn parse_inventory(images: &str, ps: &str, links: &str) -> (Vec<Image>, Vec<Stopped>) {
+    let mut names = std::collections::HashMap::new();
+    let mut stopped = Vec::new();
+    for line in ps.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else { continue };
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        names.insert(s("ID"), s("Names"));
+        if s("State") != "running" {
+            let project = s("Labels").split(',').find_map(|l| l.strip_prefix("com.docker.compose.project=").map(str::to_string));
+            stopped.push(Stopped { id: s("ID"), name: s("Names"), image: s("Image"), status: s("Status"), project });
+        }
+    }
+    let mut out: Vec<Image> = Vec::new();
+    for line in images.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line.trim()) else { continue };
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let (repo, tag) = (s("Repository"), s("Tag"));
+        let name = if repo == "<none>" { "<none>".to_string() } else { format!("{repo}:{tag}") };
+        let id = s("ID");
+        // The same image under two tags is listed twice; keep one.
+        if let Some(seen) = out.iter_mut().find(|i| i.id == id) {
+            if seen.name == "<none>" {
+                seen.name = name;
+            }
+            continue;
+        }
+        out.push(Image { id, name, size: parse_size(&s("Size")), created: s("CreatedSince"), used_by: vec![], used_running: false });
+    }
+    for line in links.lines() {
+        let mut parts = line.trim().split('|');
+        let (Some(ctr), Some(image), Some(running)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        if let Some(i) = out.iter_mut().find(|i| i.id == image) {
+            i.used_by.push(names.get(ctr).cloned().unwrap_or_else(|| ctr.chars().take(12).collect()));
+            i.used_running |= running == "true";
+        }
+    }
+    (out, stopped)
+}
+
+/// What the build cache could give back, and how many entries it has.
+pub fn docker_build_cache() -> Option<(u64, u64)> {
+    docker_df()?.into_iter().find(|d| d.kind.eq_ignore_ascii_case("Build Cache")).map(|d| (d.reclaimable, d.count))
+}
+
+/// Removes exactly these containers and images, and the build cache if asked. Says how each went.
+pub fn docker_remove(containers: &[String], images: &[String], build_cache: bool) -> Vec<(String, Result<(), String>)> {
+    let mut done = Vec::new();
+    let mut step = |what: &str, args: &[&str]| {
+        let r = match run("docker", args, Duration::from_secs(300)) {
+            Ok(out) if out.ok() => Ok(()),
+            Ok(out) => Err(first_line(&out)),
+            Err(e) => Err(e.to_string()),
+        };
+        done.push((what.to_string(), r));
+    };
+    for c in containers {
+        step(c, &["rm", c]);
+    }
+    for i in images {
+        step(i, &["rmi", i]);
+    }
+    if build_cache {
+        step("build cache", &["builder", "prune", "-f"]);
+    }
+    done
 }
 
 pub fn wsl_running() -> Vec<Distro> {
@@ -347,8 +449,28 @@ mod tests {
 
     #[test]
     fn sizes() {
-        assert_eq!(parse_size("1.5GB"), 1_610_612_736);
-        assert_eq!(parse_size("512MB"), 536_870_912);
+        assert_eq!(parse_size("1.5GB"), 1_500_000_000, "Docker's GB are thousands");
+        assert_eq!(parse_size("512MB"), 512_000_000);
+        assert_eq!(parse_size("4.1kB"), 4_100);
+        assert_eq!(parse_size("2GiB"), 2_147_483_648);
         assert_eq!(parse_size("0B"), 0);
+    }
+
+    #[test]
+    fn docker_inventory_says_which_containers_use_which_image() {
+        let images = r#"{"ID":"sha256:aaa","Repository":"storefront-web","Tag":"dev","Size":"1.78GB","CreatedSince":"2 weeks ago"}
+{"ID":"sha256:bbb","Repository":"redis","Tag":"7","Size":"57.8MB","CreatedSince":"7 weeks ago"}
+{"ID":"sha256:bbb","Repository":"redis","Tag":"latest","Size":"57.8MB","CreatedSince":"7 weeks ago"}
+{"ID":"sha256:ccc","Repository":"<none>","Tag":"<none>","Size":"12MB","CreatedSince":"3 months ago"}"#;
+        let ps = r#"{"ID":"c1","Names":"nimbus-redis-1","Image":"redis:7","State":"exited","Status":"Exited (0) 2 weeks ago","Labels":"com.docker.compose.project=nimbus,x=y"}
+{"ID":"c2","Names":"atlas-api","Image":"storefront-web:dev","State":"running","Status":"Up 3 hours","Labels":""}"#;
+        let links = "c1|sha256:bbb|false\nc2|sha256:aaa|true\n";
+        let (imgs, stopped) = parse_inventory(images, ps, links);
+        assert_eq!(imgs.len(), 3, "one image under two tags counts once");
+        assert_eq!((imgs[0].used_by.clone(), imgs[0].used_running), (vec!["atlas-api".to_string()], true));
+        assert_eq!((imgs[1].used_by.clone(), imgs[1].used_running, imgs[1].size), (vec!["nimbus-redis-1".to_string()], false, 57_800_000));
+        assert!(imgs[2].used_by.is_empty() && imgs[2].name == "<none>");
+        assert_eq!(stopped.len(), 1);
+        assert_eq!((stopped[0].name.as_str(), stopped[0].project.as_deref()), ("nimbus-redis-1", Some("nimbus")));
     }
 }

@@ -192,8 +192,9 @@ pub(super) fn tally_many(paths: &[PathBuf], cap: u64, budget: u64) -> Vec<Tally>
 
 /// Deletes files and folders for real, many at once: the files on a pool of threads, then the
 /// folders from the deepest up. Links and junctions are removed, never followed. Says, for each
-/// path, whether it's completely gone (something in use stays behind).
-pub(super) fn remove_all(paths: &[PathBuf]) -> Vec<bool> {
+/// path, whether it's completely gone (something in use stays behind). Counts each file to
+/// `live` as it goes, and stops going deeper once `live` is told to stop.
+pub(super) fn remove_all(paths: &[PathBuf], live: Option<&super::Live>) -> Vec<bool> {
     let mut start = Vec::new();
     for p in paths {
         match std::fs::symlink_metadata(p) {
@@ -205,6 +206,9 @@ pub(super) fn remove_all(paths: &[PathBuf]) -> Vec<bool> {
     }
     let mut folders: Vec<(usize, PathBuf)> = start.clone();
     let found = in_parallel(start, |mine: &mut Vec<(usize, PathBuf)>, depth, dir, more| {
+        if live.is_some_and(super::Live::stopped) {
+            return;
+        }
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         for e in rd.flatten() {
             let Ok(ft) = e.file_type() else { continue };
@@ -215,6 +219,9 @@ pub(super) fn remove_all(paths: &[PathBuf]) -> Vec<bool> {
                 remove_link(&e.path());
             } else {
                 remove_file(&e.path());
+                if let Some(l) = live {
+                    l.file_gone();
+                }
             }
         }
     });
@@ -353,7 +360,7 @@ mod tests {
             .unwrap_or(false);
         #[cfg(unix)]
         let made = std::os::unix::fs::symlink(root.join("keep"), &link).is_ok();
-        let gone = remove_all(&[root.join("tree"), root.join("loose.log"), root.join("missing")]);
+        let gone = remove_all(&[root.join("tree"), root.join("loose.log"), root.join("missing")], None);
         assert_eq!(gone, vec![true, true, true]);
         assert!(made, "couldn't make a link to test with");
         assert!(root.join("keep").join("precious.txt").exists());

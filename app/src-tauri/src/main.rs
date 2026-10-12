@@ -38,6 +38,8 @@ struct Shared {
     snapshot: Mutex<Option<Snapshot>>,
     trash: Mutex<Vec<trash::Spot>>,
     trash_busy: AtomicBool,
+    /// The clean-up running now: how it's going, and its stop button.
+    cleaning: trash::Live,
     /// Docker, WSL and Hyper-V. Asking them can take many seconds, so it happens on its own thread.
     machines: Mutex<Machines>,
     machines_busy: AtomicBool,
@@ -536,6 +538,25 @@ fn measure_trash(app: AppHandle, s: State<'_, S>) {
     measure_trash_now(app, s.inner().clone(), None);
 }
 
+/// Measures one spot again (the refresh button on its sheet).
+#[tauri::command(async)]
+fn measure_spot(id: String, app: AppHandle, s: State<'_, S>) {
+    measure_trash_now(app, s.inner().clone(), Some(id));
+}
+
+/// How the clean-up running now is going: counts, the item at hand, and what's gone since
+/// `since` (what the widget already has).
+#[tauri::command(async)]
+fn clean_progress(since: usize, s: State<'_, S>) -> trash::LiveNow {
+    s.cleaning.now(since)
+}
+
+/// Stops the clean-up running now after what it's doing.
+#[tauri::command(async)]
+fn stop_clean(s: State<'_, S>) {
+    s.cleaning.stop();
+}
+
 #[tauri::command]
 async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: State<'_, S>) -> Res<trash::CleanReport> {
     let s = s.inner().clone();
@@ -546,7 +567,9 @@ async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: S
         }
         let cfg = s.cfg();
         let table = s.sampler.lk().sample();
-        let ctx = trash::TrashCtx::new(&s.paths, &cfg, &table);
+        let mut ctx = trash::TrashCtx::new(&s.paths, &cfg, &table);
+        s.cleaning.reset();
+        ctx.live = Some(&s.cleaning);
         let r = trash::clean(&id, &ctx, pick.as_ref());
         if r.freed > 0 {
             s.note(format!("Took out {} of trash ({id}).", human_bytes(r.freed)));
@@ -975,6 +998,7 @@ fn main() {
         snapshot: Mutex::new(None),
         trash: Mutex::new(saved_trash),
         trash_busy: AtomicBool::new(false),
+        cleaning: trash::Live::default(),
         machines: Mutex::new(Machines::default()),
         machines_busy: AtomicBool::new(false),
         machines_at: Mutex::new(None),
@@ -1015,6 +1039,9 @@ fn main() {
             delete_moved,
             uninstall_app,
             admin_check,
+            measure_spot,
+            clean_progress,
+            stop_clean,
             get_health,
             get_rooms,
             room_paths,
