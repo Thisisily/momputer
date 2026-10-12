@@ -74,6 +74,7 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
       <h3>A checkup for your PC</h3>
       <p>Free space on every drive as a dot meter that turns red when it's nearly full, how much memory is in use and by whom, how long since you restarted, whether Windows is waiting to finish an update, whether Storage Sense is on, and every app that starts with Windows.</p>
       <p>Each tip has a button straight to the right Windows Settings page. Apps you haven't opened in a year (judged by when Windows saw you start them and when their data last changed) are listed with an Uninstall button that opens their own uninstaller. Runtimes, drivers, terminal tools, wallets and messengers are never listed.</p>
+      <p><b>Windows settings</b> that drifted over the years: old speed-up tweaks that do nothing today (a fixed page file, XP-era memory values), services switched off, a screen running below its refresh rate, a proxy nobody answers, and leftovers pointing at things that are gone (PATH folders, variables, startup entries). Each says what it does to you now and how Windows ships it. Fixes to your own settings are backed up and can be undone; the ones that need an administrator put back Windows' default, and Windows asks first.</p>
     </td>
   </tr>
   <tr>
@@ -132,6 +133,7 @@ mom trash              what can go, and what each clean-up does (mom trash <id> 
 mom trash clean all    take out the safe trash (never the Recycle Bin or your own files)
 mom health             drives, memory, restarts, Storage Sense and startup apps
 mom files              copies of the same file, and big files nobody opened in a year (only looks)
+mom settings           Windows settings that drifted from the defaults (fix <id>, undo <id>)
 mom tidy <folder>      grade a folder and list what to fix (--apply, --prompt)
 mom undo               undo the last tidy-up
 mom rules              the house rules, and who knows them

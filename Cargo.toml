@@ -28,6 +28,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 clap = { version = "4", features = ["derive"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_NetworkManagement_IpHelper",
     "Win32_Networking_WinSock",
     "Win32_System_Threading",

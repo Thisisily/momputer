@@ -26,6 +26,7 @@ pub mod tidy;
 pub mod trash;
 pub mod util;
 pub mod voice;
+pub mod winsettings;
 
 use agents::AgentKind;
 use serde::Serialize;
