@@ -2551,7 +2551,7 @@ in ${x.cwd}`)}">
         <div>
           <div class="about-word dot">momputer</div>
           <div class="about-tag">A mom for your AI.</div>
-          <div class="about-meta">${state.version ? `<span class="about-ver num">v${esc(state.version)}</span>` : ""}<span>Free and open source</span></div>
+          <div class="about-meta">${state.version ? `<span class="about-ver num">v${esc(state.version)}</span>` : ""}<span>Free for personal use</span></div>
         </div>
       </div>
       <div class="about-note">
