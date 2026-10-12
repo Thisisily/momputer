@@ -64,6 +64,7 @@
     roomErrors: {}, // rooms mom can't tidy, and why (a drive, Windows, gone)
     knocked: false, // knocked on mom's door
     version: "",
+    tipCoin: "Solana", // which address the tip jar shows
     rules: null,
     rulesDraft: null,
     rulesEditing: false,
@@ -1528,7 +1529,7 @@
       : `<div class="door"><div class="door-sign dot open">come<br>in</div>
           <p>She'll let you help, just this once.${best ? ` Your best: ${mmss(best)}.` : ""}</p>
           <button class="primary" data-act="enter-room">Go in</button></div>`;
-    return `<div class="room-title"><h2>Mom's room</h2>${grade("A", 4)}<p class="said">My room? Of course it's spotless. I'm your mother. c:</p></div>
+    return `<div class="room-title"><h2>Mom's room</h2>${grade("A", 4)}<p class="said">My room? Of course it's spotless c:</p></div>
       <div class="moms-room">${body}</div>`;
   }
 
@@ -1638,6 +1639,7 @@
   function roomDone() {
     if (!playroom) return;
     playroom.done = true;
+    playroom.el.classList.add("finished");
     clearInterval(playroom.timer);
     const took = Math.max(1, Math.round((Date.now() - playroom.started) / 1000));
     const best = roomBest();
@@ -1650,7 +1652,8 @@
     playroom.el.querySelector(".pr-time").textContent = mmss(took);
     momSays("Spotless. Who are you and what have you done with my kid?", "kiss");
     const end = playroom.el.querySelector(".pr-end");
-    end.innerHTML = `<p class="pr-end-big dot num">${mmss(took)}</p>
+    end.innerHTML = `<div class="pr-end-leds" aria-hidden="true">${'<span class="led green"></span>'.repeat(6)}</div>
+      <p class="pr-end-big dot num">${mmss(took)}</p>
       <p>${record && best ? "A new best. I'm framing this." : record ? "Spotless, and in record time." : `Spotless. Your best is ${mmss(best)}.`}</p>
       <div class="button-row"><button class="primary" data-act="room-again">Again</button><button class="secondary" data-act="leave-room">Back to the widget</button></div>`;
     end.hidden = false;
@@ -1834,41 +1837,51 @@
   // ------------------------------------------------------------ about
 
   const TIPS = [
-    ["Solana", "5qT8edyi62wwLz9UBTiRVoN3S9UXLjbV2YVEu4GJH3zH"],
-    ["Zcash", "t1cYbXWEXXc6kZYR1JjkE2qRCEmzCpMA371"],
-    ["Ethereum", "0xfFa448F43896Cf8227aAceF3A72b80450e1fF86E"],
-    ["Bitcoin", "bc1qmnw03rsastc08g6zutgx2sdarzapz82q5nn2kd"],
+    ["Solana", "5qT8edyi62wwLz9UBTiRVoN3S9UXLjbV2YVEu4GJH3zH", "#9945ff"],
+    ["Zcash", "t1cYbXWEXXc6kZYR1JjkE2qRCEmzCpMA371", "#f4b728"],
+    ["Ethereum", "0xfFa448F43896Cf8227aAceF3A72b80450e1fF86E", "#627eea"],
+    ["Bitcoin", "bc1qmnw03rsastc08g6zutgx2sdarzapz82q5nn2kd", "#f7931a"],
   ];
   const LINKS = [
     ["Marsell", "getmarsell.com", "https://getmarsell.com"],
     ["Ilisium", "ilisium.xyz", "https://ilisium.xyz"],
-    ["momputer on GitHub", "Thisisily/momputer", "https://github.com/Thisisily/momputer"],
   ];
-  /** "5qT8ed…GJH3zH": enough to recognise an address at a glance. */
-  const shortAddr = (a) => (a.length > 18 ? `${a.slice(0, 7)}…${a.slice(-6)}` : a);
+  const REPO = "https://github.com/Thisisily/momputer";
 
   function renderAbout() {
-    const links = LINKS.map(
-      ([name, shown, url]) => `<button class="about-row" data-act="open-uri" data-url="${esc(url)}" id="ab-${hash(url)}">
-        <span class="about-name">${esc(name)}</span><span class="about-sub">${esc(shown)}</span>${ICON.out}</button>`
+    const face = window.momFace ? window.momFace.svg("delighted") : "";
+    const tiles = LINKS.map(
+      ([name, shown, url]) => `<button class="about-tile" data-act="open-uri" data-url="${esc(url)}" id="ab-${hash(url)}">
+        <span class="about-tile-name">${esc(name)}</span><span class="about-tile-sub">${esc(shown)}</span><span class="about-tile-go">${ICON.out}</span></button>`
     ).join("");
-    const tips = TIPS.map(
-      ([coin, addr]) => `<div class="about-row tip" id="tip-${hash(coin)}">
-        <span class="about-name">${esc(coin)}</span><span class="about-sub num" title="${esc(addr)}">${esc(shortAddr(addr))}</span>
-        <button class="mini-btn wide" data-act="copy-text" data-text="${esc(addr)}" data-what="${esc(coin)}">Copy</button></div>`
+    const [coin, addr] = TIPS.find(([c]) => c === state.tipCoin) || TIPS[0];
+    const coins = TIPS.map(
+      ([c, , colour]) => `<button class="seg-btn coin" data-act="tip-coin" data-coin="${esc(c)}" aria-pressed="${c === coin}" style="--coin:${colour}"><span class="coin-dot"></span>${esc(c)}</button>`
     ).join("");
     return `<div class="sheet-head"><h2 id="sheet-title" class="dot sheet-dot">about</h2>
         <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button></div>
-      <div class="about-hello">
+      <div class="about-hero glass">
+        <div class="about-face" aria-hidden="true">${face}</div>
+        <div class="about-word dot">momputer</div>
+        <div class="about-tag">A mom for your AI${state.version ? `<span class="about-ver num">v${esc(state.version)}</span>` : ""}</div>
+      </div>
+      <div class="about-note">
         <p class="about-lead">Hi, I'm Ilya Arbabi.</p>
         <p>My desktop was a mess, and every AI agent I worked with made it worse: dev servers left running, screenshots everywhere, folders called thing-v2-final. I needed something to keep it all in order, so I built my computer a mom.</p>
       </div>
       <h3 class="list-head">Also by me</h3>
-      <div class="items about-list">${links}</div>
+      <div class="about-tiles">${tiles}
+        <button class="about-tile wide" data-act="open-uri" data-url="${REPO}" id="ab-repo">
+          <span class="about-tile-name">momputer on GitHub</span><span class="about-tile-sub">Thisisily/momputer · issues and ideas welcome</span><span class="about-tile-go">${ICON.out}</span></button>
+      </div>
       <h3 class="list-head">Buy mom a coffee</h3>
-      <p class="list-hint">momputer is free and stays free. If she saved you an afternoon, a tip keeps her going.</p>
-      <div class="items about-list">${tips}</div>
-      <p class="about-foot">momputer${state.version ? ` ${esc(state.version)}` : ""} · MIT license · The links open in your browser; momputer itself never goes online.<br>
+      <div class="about-tip glass">
+        <div class="seg about-coins" role="group" aria-label="Which coin">${coins}</div>
+        <div class="about-addr num" id="tip-addr" title="${esc(coin)} address">${esc(addr)}</div>
+        <div class="about-tip-foot"><span>momputer is free and stays free. A tip keeps her going.</span>
+          <button class="primary" data-act="copy-text" data-text="${esc(addr)}" data-what="${esc(coin)}">Copy</button></div>
+      </div>
+      <p class="about-foot">MIT license · momputer itself never goes online; links open in your browser.<br>
         <span class="about-hint">There's one room in this house nobody tidies.</span></p>`;
   }
 
@@ -2203,6 +2216,10 @@
         break;
       case "open":
         act(invoke("open_url", { url: `http://localhost:${el.dataset.port}` }), () => null);
+        break;
+      case "tip-coin":
+        state.tipCoin = el.dataset.coin;
+        renderSheet();
         break;
       case "copy-text": {
         try {

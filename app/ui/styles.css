@@ -40,6 +40,12 @@
   --led-off: #cdcdcd;
   --glow: 45%;
   --scrim: rgba(0, 0, 0, 0.28);
+  /* Glass: a tinted, blurred pane with a bright top edge. */
+  --glass: rgba(255, 255, 255, 0.62);
+  --glass-line: rgba(0, 0, 0, 0.07);
+  --glass-hi: rgba(255, 255, 255, 0.95);
+  --glass-drop: 0 10px 30px rgba(0, 0, 0, 0.09);
+  --glass-drop-sm: 0 3px 10px rgba(0, 0, 0, 0.08);
 
   --font-ui: "Geist", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-display: "Geist", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
@@ -66,6 +72,11 @@
     --led-off: #3b3b3b;
     --glow: 75%;
     --scrim: rgba(0, 0, 0, 0.62);
+    --glass: rgba(255, 255, 255, 0.05);
+    --glass-line: rgba(255, 255, 255, 0.1);
+    --glass-hi: rgba(255, 255, 255, 0.16);
+    --glass-drop: 0 14px 40px rgba(0, 0, 0, 0.55);
+    --glass-drop-sm: 0 3px 12px rgba(0, 0, 0, 0.45);
     color-scheme: dark;
   }
 }
@@ -1442,44 +1453,61 @@ button.row-name:hover {
 
 /* ---------------------------------------------------------------- rooms */
 
+/* A grade: a little glass bead, lit from the top left, tinted by how it went from below. */
 .grade {
+  --tint: transparent;
   position: relative;
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  border: 1px solid var(--line-2);
   color: var(--ink);
+  background:
+    radial-gradient(85% 85% at 30% 22%, var(--glass-hi), transparent 55%),
+    radial-gradient(110% 90% at 50% 105%, var(--tint), transparent 70%),
+    var(--glass);
+  border: 1px solid var(--glass-line);
+  box-shadow: inset 0 1px 0 var(--glass-hi), inset 0 -6px 12px rgba(0, 0, 0, 0.06), var(--glass-drop-sm);
+  backdrop-filter: blur(10px) saturate(150%);
 }
 
 .grade.big {
-  width: 52px;
-  height: 52px;
+  width: 54px;
+  height: 54px;
 }
 
-/* The light sits on the ring at one o'clock, not in the box's corner. */
+.grade.g-A,
+.grade.g-B {
+  --tint: color-mix(in srgb, var(--green) 26%, transparent);
+}
+
+.grade.g-D,
+.grade.g-F {
+  --tint: color-mix(in srgb, var(--red) 24%, transparent);
+}
+
+/* The light sits on the rim at one o'clock. */
 .grade::after {
   content: "";
   position: absolute;
-  top: calc(14.6% - 3.5px);
-  right: calc(14.6% - 3.5px);
-  width: 7px;
-  height: 7px;
+  top: calc(14.6% - 3px);
+  right: calc(14.6% - 3px);
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--bg);
 }
 
 .grade.g-A::after,
 .grade.g-B::after {
   background: var(--green);
-  box-shadow: 0 0 0 2px var(--bg), 0 0 7px color-mix(in srgb, var(--green) var(--glow), transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--green) var(--glow), transparent);
 }
 
 .grade.g-D::after,
 .grade.g-F::after {
   background: var(--red);
-  box-shadow: 0 0 0 2px var(--bg), 0 0 7px color-mix(in srgb, var(--red) var(--glow), transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--red) var(--glow), transparent);
 }
 
 .room-row {
@@ -2613,47 +2641,107 @@ button.row-name:hover {
 
 /* ---------------------------------------------------------------- about */
 
-.about-hello {
-  margin: 0 4px 6px;
+.glass {
+  border: 1px solid var(--glass-line);
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-drop-sm);
+  backdrop-filter: blur(16px) saturate(150%);
+}
+
+.about-hero {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  margin: 0 0 18px;
+  padding: 20px 16px 18px;
+  border-radius: 26px;
+  overflow: hidden;
+  background:
+    radial-gradient(60% 70% at 12% 0%, color-mix(in srgb, var(--red) 16%, transparent), transparent 70%),
+    radial-gradient(60% 70% at 95% 100%, color-mix(in srgb, var(--green) 14%, transparent), transparent 70%),
+    var(--glass);
+}
+
+.about-face svg {
+  display: block;
+  width: 108px;
+  height: auto;
+}
+
+.about-word {
+  font-size: 32px;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.about-tag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.about-ver {
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: var(--card-2);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.about-note {
+  margin: 0 6px 6px;
   color: var(--ink-2);
   text-wrap: pretty;
 }
 
-.about-hello p {
+.about-note p {
   margin: 0 0 8px;
 }
 
 .about-lead {
   color: var(--ink);
-  font: 600 17px/1.3 var(--font-display);
+  font: 600 18px/1.3 var(--font-display);
 }
 
-.about-row {
+.about-tiles {
   display: grid;
-  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  width: 100%;
-  padding: 11px 0;
-  border-bottom: 1px solid var(--line);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.about-tile {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  padding: 13px 14px;
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--edge);
   text-align: left;
+  transition: box-shadow 140ms ease, transform 120ms ease;
 }
 
-.about-list > :last-child {
-  border-bottom: 0;
+.about-tile.wide {
+  grid-column: 1 / -1;
 }
 
-button.about-row:hover .about-name {
-  text-decoration: underline;
-  text-underline-offset: 3px;
+.about-tile:hover {
+  box-shadow: inset 0 0 0 1px var(--ink);
 }
 
-.about-name {
-  font-weight: 600;
-  white-space: nowrap;
+.about-tile:active {
+  transform: scale(0.98);
 }
 
-.about-sub {
+.about-tile-name {
+  font-weight: 700;
+  font-size: 13.5px;
+}
+
+.about-tile-sub {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2661,19 +2749,69 @@ button.about-row:hover .about-name {
   font-size: 12px;
 }
 
-.about-row.tip .about-sub {
-  font-family: var(--mono);
-  font-size: 11.5px;
+.about-tile-go {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  color: var(--ink-3);
 }
 
-.about-row > .ico {
-  color: var(--ink-3);
+.about-tip {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 22px;
+  background: var(--glass);
+}
+
+.about-coins {
+  justify-self: stretch;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.seg-btn.coin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 4px;
+}
+
+.coin-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--coin);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--coin) 60%, transparent);
+}
+
+.about-addr {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--card-2);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  word-break: break-all;
+  user-select: all;
+}
+
+.about-tip-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink-2);
+  font-size: 12px;
+  text-wrap: pretty;
 }
 
 .about-foot {
-  margin: 16px 4px 4px;
+  margin: 18px 6px 4px;
   color: var(--ink-3);
   font-size: 11.5px;
+  text-align: center;
   text-wrap: pretty;
 }
 
@@ -2809,6 +2947,13 @@ button.about-row:hover .about-name {
 
 .pr-foot {
   padding: 4px 12px 14px;
+  transition: opacity 300ms ease;
+}
+
+/* Done: the checklist steps aside for the score. */
+.playroom.finished .pr-foot {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .pr-hint {
@@ -2859,17 +3004,28 @@ button.about-row:hover .about-name {
 
 .pr-end {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 14px;
+  left: 14px;
+  right: 14px;
+  bottom: 16px;
   display: grid;
   justify-items: center;
   gap: 6px;
-  padding: 16px;
-  border-radius: 22px;
-  background: var(--card);
-  box-shadow: inset 0 0 0 1px var(--edge), 0 18px 40px rgba(0, 0, 0, 0.25);
+  padding: 18px 16px 16px;
+  border-radius: 26px;
+  overflow: hidden;
+  background:
+    radial-gradient(70% 60% at 50% 0%, color-mix(in srgb, var(--green) 14%, transparent), transparent 70%),
+    var(--glass);
+  border: 1px solid var(--glass-line);
+  box-shadow: inset 0 1px 0 var(--glass-hi), var(--glass-drop);
+  backdrop-filter: blur(20px) saturate(160%);
   text-align: center;
+}
+
+.pr-end-leds {
+  display: flex;
+  gap: 7px;
+  margin-bottom: 2px;
 }
 
 .pr-end[hidden] {

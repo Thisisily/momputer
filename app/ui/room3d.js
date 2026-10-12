@@ -287,14 +287,17 @@ export function play(host, on = {}) {
   box(0.42, 0.04, 0.48, 0x2f8f8a, 0, 0, 0, shirt);
   for (const s of [-1, 1]) box(0.22, 0.035, 0.14, 0x2f8f8a, s * 0.28, 0, -0.14, shirt).rotation.set(0, s * 0.5, 0);
   shirt.rotation.y = 0.5;
+  shirt.userData.span = 0.98; // across the sleeves
   const sock1 = group(1.9, 0.02, 1.35);
   box(0.08, 0.05, 0.26, C.white, 0, 0, 0, sock1);
   box(0.082, 0.052, 0.05, C.rugStripe, 0, 0, -0.1, sock1);
   sock1.rotation.y = -0.7;
+  sock1.userData.span = 0.27;
   const sock2 = group(0.45, 0.02, 2.05);
   box(0.08, 0.05, 0.26, C.white, 0, 0, 0, sock2);
   box(0.082, 0.052, 0.05, C.rugStripe, 0, 0, -0.1, sock2);
   sock2.rotation.y = 1.2;
+  sock2.userData.span = 0.27;
   const laundry = [shirt, sock1, sock2];
 
   // Mom's picture, on the floor until it's hung over the bed.
@@ -453,13 +456,15 @@ export function play(host, on = {}) {
       if (!piece || piece.userData.done) return;
       piece.userData.done = true;
       busy.add(piece);
+      // Bundled up to fit: no wider than the basket, lying nearly flat, below the rim.
       const n = laundry.filter((l) => l.userData.done).length - 1;
-      const into = new THREE.Vector3(basket.x + (n - 1) * 0.05, 0.12 + n * 0.07, basket.z + (n % 2 ? 0.04 : -0.04));
-      carry(piece, into, new THREE.Euler(0.3 * n, piece.rotation.y + 1.5, 0.2), 1.0, 0.6).then(() => {
+      const fit = Math.min(0.85, 0.34 / (piece.userData.span || 0.34));
+      const into = new THREE.Vector3(basket.x + [-0.04, 0.04, 0][n], 0.3 + n * 0.05, basket.z + [0.03, -0.03, 0.01][n]);
+      carry(piece, into, new THREE.Euler(0.06, piece.rotation.y + 1.2, 0.04), 1.0, 0.6).then(() => {
         busy.delete(piece);
         step("laundry");
       });
-      tween(piece.scale, { x: 0.75, y: 0.75, z: 0.75, duration: 0.6, delay: 0.2 });
+      tween(piece.scale, { x: fit, y: fit, z: fit, duration: 0.5, delay: 0.15 });
     },
     picture() {
       if (count.picture || busy.has("picture")) return;

@@ -433,7 +433,7 @@ pub fn moms_room(paths: &Paths) -> RoomReport {
         name: paths.mom.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| ".momputer".into()),
         grade: 'A',
         score: 0,
-        line: "My room? Of course it's spotless. I'm your mother. c:".into(),
+        line: "My room? Of course it's spotless c:".into(),
         entries: std::fs::read_dir(&paths.mom).map(|rd| rd.count()).unwrap_or(0),
         code_project: false,
         projects: 0,
