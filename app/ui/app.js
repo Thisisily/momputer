@@ -1454,7 +1454,7 @@
     if (r.codeProject) {
       html += section("code", "Careful", "", `<p class="empty">This folder has code in it. Moving things can break paths, so nothing is ticked. "Copy chores for an agent" lets an agent tidy and fix the paths.</p>`);
     }
-    const findings = r.findings.map((f) => `<div class="room-finding" id="f-${hash(f.title)}"><strong>${esc(f.title)}</strong><p>${esc(f.detail)}</p></div>`).join("");
+    const findings = r.findings.map((f) => `<div class="room-finding" id="f-${hash(f.title)}"><strong>${pathy(f.title)}</strong><p>${pathy(f.detail)}</p></div>`).join("");
     html += section("wrong", "What's wrong", "", findings || `<p class="empty">Nothing. Spotless.</p>`);
     if (r.actions.length) {
       const checks = r.actions

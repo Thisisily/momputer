@@ -412,6 +412,7 @@
       { kind: "family", title: "8 look-alike folders: radio-night-show-*", detail: "Versions and variants of the same thing. One folder, radio-night-show/, keeps them together.", paths: [], bytes: 0 },
       { kind: "family", title: "7 look-alike folders: podcast-*", detail: "Dated work logs. They belong together in Documents/podcast/.", paths: [], bytes: 0 },
       { kind: "screenshot-pile", title: "40 screenshots piled up in garden/shots/", detail: "2 MB of captures. Delete them once they've done their job (video uploaded, bug fixed).", paths: [], bytes: 2 * MB },
+      { kind: "screenshot-pile", title: "32 screenshots piled up in games/nimbus-drift/shots/runtime_qa_ee965b26_fixed_frames/", detail: "17 MB of captures. Delete them once they've done their job (video uploaded, bug fixed).", paths: [], bytes: 17 * MB },
       { kind: "crowded", title: "57 things at the top level", detail: "Past about 30, nobody can find anything. Group related folders.", paths: [], bytes: 0 },
     ],
     actions: [

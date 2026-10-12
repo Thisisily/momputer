@@ -1529,6 +1529,7 @@ button.row-name:hover {
 .room-finding {
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
 }
 
 .room-finding strong {
@@ -1571,9 +1572,12 @@ button.row-name:hover {
   font-size: 12px;
 }
 
-.check .path {
+/* A folder path in running text: small mono type that may break anywhere, so a long one
+   wraps instead of running off the edge. */
+.path {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: 0.88em;
+  font-weight: 500;
   color: var(--ink-2);
   word-break: break-all;
 }
