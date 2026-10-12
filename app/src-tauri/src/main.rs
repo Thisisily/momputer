@@ -884,6 +884,18 @@ async fn get_system(fresh: bool) -> Res<mom_core::system::System> {
     tauri::async_runtime::spawn_blocking(move || mom_core::system::get(fresh)).await.map_err(err)
 }
 
+/// Removes your own registry leftovers of one kind, keeping a copy.
+#[tauri::command(async)]
+fn fix_registry(id: String, s: State<'_, S>) -> Res<String> {
+    mom_core::system::fix_registry(&s.paths, &id)
+}
+
+/// Puts back what the last registry fix of that kind removed.
+#[tauri::command(async)]
+fn undo_registry(id: String, s: State<'_, S>) -> Res<String> {
+    mom_core::system::undo_registry(&s.paths, &id)
+}
+
 /// Where the Files scan looks: your usual folders, each drive, and folders you added.
 #[tauri::command(async)]
 fn files_places(s: State<'_, S>) -> Vec<mom_core::files::Place> {
@@ -1279,6 +1291,8 @@ fn main() {
             get_speed,
             get_programs,
             files_places,
+            fix_registry,
+            undo_registry,
             set_files_place,
             add_files_place,
             get_system,

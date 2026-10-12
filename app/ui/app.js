@@ -39,6 +39,9 @@
     progOrder: null, // the order rows are shown in, kept between refreshes so nothing moves under the pointer
     progOrderSort: null,
     filesPlaces: null, // where the Files scan looks (files_places)
+    regFixed: new Map(), // registry fixes done just now: id -> what they were, for Undo
+    regConfirm: null,
+    regBusy: null,
     progBusy: null, // { id, action } while mom does it
     system: null, // the PC, its protection, updates and registry (get_system)
     systemLoading: false,
@@ -545,6 +548,12 @@
       return `<button class="secondary" data-act="copy-fix" data-text="${esc(f.value)}" data-hint="${esc(f.hint || "Copied.")}">${ICON.copy}${esc(f.label)}</button>`;
     if (f.kind === "open") return `<button class="secondary" data-act="open-uri" data-url="${esc(f.value)}">${esc(f.label)}${ICON.out}</button>`;
     if (f.kind === "tab") return `<button class="secondary" data-act="go-tab" data-to="${esc(f.value)}">${esc(f.label)}</button>`;
+    if (f.kind === "regfix") {
+      const armed = state.regConfirm === f.value;
+      const busy = state.regBusy === f.value;
+      return `<div class="fix-stack"><button class="secondary${armed ? " sure" : ""}" data-act="reg-fix" data-id="${esc(f.value)}" ${busy ? "disabled" : ""}>${ICON.trash}${busy ? "Removing…" : armed ? "Sure? Remove" : esc(f.label)}</button>
+        ${f.hint ? `<span class="fix-warn"><span class="led green"></span>${esc(f.hint)}</span>` : ""}</div>`;
+    }
     if (f.kind === "end") {
       const armed = state.progConfirm === `${f.value}|end`;
       const busy = state.progBusy && state.progBusy.id === f.value;
@@ -1190,6 +1199,16 @@
     }
     const pc = sys.pc.map(([k, v]) => `<div class="pc-row"><span class="pc-key">${esc(k)}</span><span class="pc-val">${esc(v)}</span></div>`).join("");
     let html = section("pc", "This PC", "", `<div class="pc">${pc}</div>`);
+    if (state.regFixed.size) {
+      const rows = [...state.regFixed]
+        .map(
+          ([id, title]) => `<div class="item stays moved" id="rf-${hash(id)}"><span class="led green"></span>
+          <span class="item-main"><span class="item-name">${esc(title)}</span><span class="item-sub">Removed just now; mom kept a copy</span></span>
+          <span class="moved-acts"><button class="mini-btn wide" data-act="reg-undo" data-id="${esc(id)}">Undo</button></span></div>`
+        )
+        .join("");
+      html += section("reg-fixed", "Removed just now", "", `<div class="items">${rows}</div>`);
+    }
     const order = { warn: 0, tip: 1, ok: 2 };
     for (const [area, title] of SYSTEM_AREAS) {
       const list = sys.checks.filter((c) => c.area === area).sort((a, b) => (order[a.level] ?? 1) - (order[b.level] ?? 1));
@@ -1202,7 +1221,7 @@
           .map(
             (c) => `<div class="check-row${c.fix ? " stack" : ""}" id="sys-${hash(c.id)}" data-led="${c.level === "warn" ? "red" : c.level === "ok" ? "green" : "off"}">
           <div class="check-text"><strong>${esc(c.title)}</strong><span>${esc(c.detail)}</span></div>
-          ${c.fix ? fixButton(c.fix) : ""}
+          ${c.fix ? `<div class="fix-row">${fixButton(c.fix)}</div>` : ""}
         </div>`
           )
           .join("")
@@ -2784,6 +2803,46 @@
         state.progOrder = null;
         render();
         break;
+      case "reg-fix": {
+        const id = el.dataset.id;
+        if (state.regBusy) break;
+        if (state.regConfirm !== id) {
+          state.regConfirm = id;
+          render();
+          setTimeout(() => {
+            if (state.regConfirm === id) {
+              state.regConfirm = null;
+              render();
+            }
+          }, 6000);
+          break;
+        }
+        state.regConfirm = null;
+        state.regBusy = id;
+        render();
+        const c = state.system && state.system.checks.find((x) => x.id === id);
+        try {
+          toast(await invoke("fix_registry", { id }));
+          state.regFixed.set(id, c ? c.title : id);
+          react("proud");
+        } catch (e) {
+          toast(String(e), true);
+        }
+        state.regBusy = null;
+        await loadSystem(true);
+        break;
+      }
+      case "reg-undo": {
+        const id = el.dataset.id;
+        try {
+          toast(await invoke("undo_registry", { id }));
+          state.regFixed.delete(id);
+        } catch (e) {
+          toast(String(e), true);
+        }
+        await loadSystem(true);
+        break;
+      }
       case "files-place": {
         const x = state.filesPlaces && state.filesPlaces.find((y) => y.path === el.dataset.path);
         if (!x) break;
@@ -2847,7 +2906,7 @@
       case "copy-fix":
         try {
           await navigator.clipboard.writeText(el.dataset.text);
-          toast(`Copied ${el.dataset.text}. ${el.dataset.hint}`);
+          toast(`${el.dataset.text.length > 40 ? "Copied." : `Copied ${el.dataset.text}.`} ${el.dataset.hint}`);
         } catch {
           toast("Couldn't reach the clipboard.", true);
         }

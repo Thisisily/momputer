@@ -8,7 +8,7 @@
 
 use crate::speed::Fix;
 use crate::util::{human_bytes, now_secs, run};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use std::sync::Mutex;
@@ -739,24 +739,31 @@ fn expand_env(s: &str) -> String {
     out
 }
 
+/// Gone for sure: its drive is there, and it isn't. (On a drive that's unplugged it may well
+/// come back.)
 fn gone(path: &str) -> bool {
-    !Path::new(path).exists()
+    let p = Path::new(path);
+    let drive = path.get(..3).map(Path::new);
+    drive.is_some_and(Path::exists) && !p.exists()
 }
 
+/// A registry key that points at something gone: where it is, and what to call it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Leftover {
+    /// Yours (HKCU) or every user's (HKLM).
+    user: bool,
+    key: String,
+    shown: String,
+}
+
+/// The kinds of leftover, in the order they're shown: (id, the leftovers).
 #[cfg(windows)]
-fn registry() -> Vec<Check> {
+fn leftovers() -> Vec<(&'static str, Vec<Leftover>)> {
     use crate::health::reg::{dword_value, string_values, subkeys, Hive, Hive::CurrentUser as Cu, Hive::LocalMachine as Lm};
     let default = |hive: Hive, key: &str| string_values(hive, key).into_iter().find(|(n, _)| n.is_empty()).map(|(_, v)| v);
-    let mut out = Vec::new();
-    let show = |names: &[String]| {
-        let mut v: Vec<&String> = names.iter().collect();
-        v.sort();
-        v.dedup();
-        let shown: Vec<&str> = v.iter().take(4).map(|s| s.as_str()).collect();
-        format!("{}{}", shown.join(", "), if v.len() > 4 { format!(" and {} more", v.len() - 4) } else { String::new() })
-    };
+    let user = |h: Hive| matches!(h, Hive::CurrentUser);
 
-    // Right-click menu handlers whose library is gone: Explorer tries to load each one every time.
+    // Right-click menu handlers whose library is gone.
     let mut menus = Vec::new();
     for (hive, classes) in [(Cu, r"Software\Classes"), (Lm, r"SOFTWARE\Classes")] {
         for kind in ["*", "Directory", r"Directory\Background", "Folder", "AllFilesystemObjects", "Drive"] {
@@ -771,20 +778,10 @@ fn registry() -> Vec<Check> {
                     .find_map(|(h, c)| default(*h, &format!(r"{c}\CLSID\{clsid}\InprocServer32")))
                     .and_then(|v| target(&v));
                 if lib.as_deref().is_some_and(gone) {
-                    menus.push(name.trim_matches(['{', '}']).to_string());
+                    menus.push(Leftover { user: user(hive), key: format!(r"{list}\{name}"), shown: name.trim_matches(['{', '}']).to_string() });
                 }
             }
         }
-    }
-    if !menus.is_empty() {
-        out.push(check(
-            "broken-menus",
-            "Registry",
-            "tip",
-            format!("{} right-click menu {} point at programs that are gone", menus.len(), if menus.len() == 1 { "entry" } else { "entries" }),
-            format!("{}. Explorer looks for each one every time you right-click, which is why the menu can be slow to open. They're left by programs you uninstalled.", show(&menus)),
-            None,
-        ));
     }
 
     // Program shortcuts Windows keeps (App Paths) for programs that are gone.
@@ -792,22 +789,12 @@ fn registry() -> Vec<Check> {
     for (hive, key) in [(Cu, r"Software\Microsoft\Windows\CurrentVersion\App Paths"), (Lm, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths")] {
         for name in subkeys(hive, key) {
             if default(hive, &format!(r"{key}\{name}")).and_then(|v| target(&v)).is_some_and(|t| gone(&t)) {
-                paths.push(name);
+                paths.push(Leftover { user: user(hive), key: format!(r"{key}\{name}"), shown: name });
             }
         }
     }
-    if !paths.is_empty() {
-        out.push(check(
-            "broken-app-paths",
-            "Registry",
-            "tip",
-            format!("Windows still knows {} that {} gone", if paths.len() == 1 { "1 program".to_string() } else { format!("{} programs", paths.len()) }, if paths.len() == 1 { "is" } else { "are" }),
-            format!("{}. Typing {} in Run finds nothing. Harmless clutter from uninstalls.", show(&paths), if paths.len() == 1 { "its name" } else { "their names" }),
-            None,
-        ));
-    }
 
-    // Programs in the uninstall list whose uninstaller is gone: they can't be removed or repaired.
+    // Programs in the uninstall list whose uninstaller is gone.
     let mut uninstall = Vec::new();
     for (hive, key) in [
         (Cu, r"Software\Microsoft\Windows\CurrentVersion\Uninstall"),
@@ -823,67 +810,192 @@ fn registry() -> Vec<Check> {
             let get = |n: &str| values.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)).map(|(_, v)| v.clone());
             let Some(name) = get("DisplayName").filter(|n| !n.is_empty()) else { continue };
             let Some(cmd) = get("UninstallString") else { continue };
-            if cmd.to_ascii_lowercase().contains("msiexec") {
-                continue;
-            }
-            if target(&cmd).is_some_and(|t| gone(&t)) {
-                uninstall.push(name);
+            if !cmd.to_ascii_lowercase().contains("msiexec") && target(&cmd).is_some_and(|t| gone(&t)) {
+                uninstall.push(Leftover { user: user(hive), key: k, shown: name });
             }
         }
     }
-    if !uninstall.is_empty() {
-        out.push(check(
-            "broken-uninstall",
-            "Registry",
-            "tip",
-            format!("{} in Windows' app list can't be uninstalled", if uninstall.len() == 1 { "1 program".to_string() } else { format!("{} programs", uninstall.len()) }),
-            format!(
-                "{}. {} (it was deleted by hand, most likely), so Settings lists {} but can't remove {}.",
-                show(&uninstall),
-                if uninstall.len() == 1 { "Its uninstaller is gone" } else { "Their uninstallers are gone" },
-                if uninstall.len() == 1 { "it" } else { "them" },
-                if uninstall.len() == 1 { "it" } else { "them" }
-            ),
-            open("Installed apps", "ms-settings:appsfeatures"),
-        ));
-    }
 
-    // Services set to start whose program is gone: Windows tries, and fails, at every start.
+    // Services set to start whose program is gone.
     let mut services = Vec::new();
     let root = r"SYSTEM\CurrentControlSet\Services";
     for svc in subkeys(Lm, root) {
         let k = format!(r"{root}\{svc}");
         let kind = dword_value(Lm, &k, "Type").unwrap_or(0);
-        let start = dword_value(Lm, &k, "Start").unwrap_or(4);
-        if kind & 0x30 == 0 || start != 2 {
+        if kind & 0x30 == 0 || dword_value(Lm, &k, "Start") != Some(2) {
             continue;
         }
-        let image = string_values(Lm, &k).into_iter().find(|(n, _)| n.eq_ignore_ascii_case("ImagePath")).map(|(_, v)| v).unwrap_or_default();
-        if target(&image).is_some_and(|t| gone(&t)) {
-            let shown = string_values(Lm, &k).into_iter().find(|(n, _)| n.eq_ignore_ascii_case("DisplayName")).map(|(_, v)| v).filter(|v| !v.starts_with('@')).unwrap_or(svc);
-            services.push(shown);
+        let values = string_values(Lm, &k);
+        let get = |n: &str| values.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)).map(|(_, v)| v.clone());
+        if get("ImagePath").and_then(|i| target(&i)).is_some_and(|t| gone(&t)) {
+            let shown = get("DisplayName").filter(|v| !v.starts_with('@')).unwrap_or_else(|| svc.clone());
+            services.push(Leftover { user: false, key: svc, shown });
         }
     }
-    if !services.is_empty() {
-        out.push(check(
-            "broken-services",
-            "Registry",
-            "warn",
-            format!("{} {} to start with Windows, but {} gone", if services.len() == 1 { "1 service is".to_string() } else { format!("{} services are", services.len()) }, "set", if services.len() == 1 { "its program is" } else { "their programs are" }),
-            format!(
-                "{}. Windows tries to start {} at every boot, waits, and gives up, which slows starting up. Left by a program uninstalled the hard way.",
-                show(&services),
-                if services.len() == 1 { "it" } else { "each one" }
-            ),
-            None,
-        ));
+    vec![("menus", menus), ("app-paths", paths), ("uninstall", uninstall), ("services", services)]
+}
+
+#[cfg(not(windows))]
+fn leftovers() -> Vec<(&'static str, Vec<Leftover>)> {
+    vec![]
+}
+
+fn listing(list: &[Leftover]) -> String {
+    let mut v: Vec<&str> = list.iter().map(|l| l.shown.as_str()).collect();
+    v.sort_unstable();
+    v.dedup();
+    let more = if v.len() > 4 { format!(" and {} more", v.len() - 4) } else { String::new() };
+    format!("{}{more}", v.into_iter().take(4).collect::<Vec<_>>().join(", "))
+}
+
+/// The command that fixes every user's leftovers, for Terminal (Admin): each key saved to a .reg
+/// file first, then removed; services switched off (not removed), so they can be switched back.
+fn admin_command(kind: &str, list: &[Leftover]) -> String {
+    if kind == "services" {
+        return list.iter().map(|l| format!("sc.exe config \"{}\" start= disabled", l.key)).collect::<Vec<_>>().join("; ");
+    }
+    let mut parts = vec![r#"$b = "$env:USERPROFILE\.momputer\backups\registry"; New-Item -ItemType Directory -Force $b | Out-Null"#.to_string()];
+    for (i, l) in list.iter().enumerate() {
+        let key = format!(r"HKLM\{}", l.key);
+        parts.push(format!(r#"reg.exe export "{key}" "$b\{kind}-{i}.reg" /y; reg.exe delete "{key}" /f"#));
+    }
+    parts.join("; ")
+}
+
+fn registry() -> Vec<Check> {
+    let mut out = Vec::new();
+    for (kind, all) in leftovers() {
+        for user in [true, false] {
+            let list: Vec<Leftover> = all.iter().filter(|l| l.user == user).cloned().collect();
+            if list.is_empty() {
+                continue;
+            }
+            let n = list.len();
+            let one = n == 1;
+            let (title, detail, level) = match kind {
+                "menus" => (
+                    format!("{n} right-click menu {} {} at programs that are gone", if one { "entry" } else { "entries" }, if one { "points" } else { "point" }),
+                    format!("{}. Explorer still tries each one when you right-click. Left by programs you uninstalled.", listing(&list)),
+                    "tip",
+                ),
+                "app-paths" => (
+                    format!("Windows still knows {} that {} gone", if one { "1 program".to_string() } else { format!("{n} programs") }, if one { "is" } else { "are" }),
+                    format!("{}. Typing {} in Run finds nothing. Clutter from uninstalls.", listing(&list), if one { "its name" } else { "their names" }),
+                    "tip",
+                ),
+                "uninstall" => (
+                    format!("{} in Windows' app list can't be uninstalled", if one { "1 program".to_string() } else { format!("{n} programs") }),
+                    format!(
+                        "{}. {} (deleted by hand, most likely), so Settings lists {} but can't remove {}.",
+                        listing(&list),
+                        if one { "Its uninstaller is gone" } else { "Their uninstallers are gone" },
+                        if one { "it" } else { "them" },
+                        if one { "it" } else { "them" }
+                    ),
+                    "tip",
+                ),
+                _ => (
+                    format!("{} set to start with Windows, but {} gone", if one { "1 service is".to_string() } else { format!("{n} services are") }, if one { "its program is" } else { "their programs are" }),
+                    format!("{}. Windows tries to start {} at every boot, waits, and gives up, which slows starting up.", listing(&list), if one { "it" } else { "each one" }),
+                    "warn",
+                ),
+            };
+            let id = format!("registry-{kind}-{}", if user { "user" } else { "machine" });
+            let fix = if user {
+                Fix { label: if one { "Remove it".into() } else { "Remove them".into() }, kind: "regfix", value: id.clone(), hint: Some("Mom keeps a copy, and Undo puts it back.".into()) }
+            } else {
+                Fix {
+                    label: "Copy the fix".into(),
+                    kind: "copy",
+                    value: admin_command(kind, &list),
+                    hint: Some(if kind == "services" {
+                        "Paste it into Terminal (Admin). It switches the service off; nothing is deleted.".into()
+                    } else {
+                        "Paste it into Terminal (Admin). It saves a .reg copy of each entry in .momputer\\backups first.".into()
+                    }),
+                }
+            };
+            let detail = if user {
+                detail
+            } else {
+                format!("{detail} {} for every user, so only an administrator can change {}.", if one { "It's" } else { "They're" }, if one { "it" } else { "them" })
+            };
+            out.push(check(&id, "Registry", level, title, detail, Some(fix)));
+        }
     }
     out
 }
 
-#[cfg(not(windows))]
-fn registry() -> Vec<Check> {
-    vec![]
+/// What a registry fix saved before removing anything.
+#[derive(Serialize, Deserialize)]
+struct RegBackup {
+    id: String,
+    at: u64,
+    keys: Vec<(String, Vec<(String, crate::winsettings::keys::Raw)>)>,
+}
+
+/// The keys your own registry fixes may remove, and undo may put back.
+const USER_ROOTS: &[&str] = &[r"Software\Classes\", r"Software\Microsoft\Windows\CurrentVersion\App Paths\", r"Software\Microsoft\Windows\CurrentVersion\Uninstall\"];
+
+fn reg_backups(paths: &crate::paths::Paths) -> std::path::PathBuf {
+    paths.backups_dir().join("registry")
+}
+
+/// Removes your own registry leftovers of one kind ("registry-uninstall-user"), found again now,
+/// after saving each key's values. Never every user's: those need an administrator.
+pub fn fix_registry(paths: &crate::paths::Paths, id: &str) -> Result<String, String> {
+    use crate::winsettings::keys::{self, Hive};
+    let kind = id.strip_prefix("registry-").and_then(|k| k.strip_suffix("-user")).ok_or("Mom only removes your own leftovers.")?;
+    let list: Vec<Leftover> = leftovers().into_iter().find(|(k, _)| *k == kind).map(|(_, l)| l).unwrap_or_default().into_iter().filter(|l| l.user).collect();
+    if list.is_empty() {
+        return Err("Nothing left to remove: it's already clean.".into());
+    }
+    if list.iter().any(|l| !USER_ROOTS.iter().any(|r| l.key.starts_with(r))) {
+        return Err("That isn't a key mom removes.".into());
+    }
+    let backup = RegBackup { id: id.into(), at: now_secs(), keys: list.iter().map(|l| (l.key.clone(), keys::values(Hive::CurrentUser, &l.key))).collect() };
+    let file = reg_backups(paths).join(format!("{id}-{}.json", backup.at));
+    let json = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
+    crate::util::write_atomic(&file, &json).map_err(|e| format!("Mom couldn't save a copy first, so nothing changed ({e})."))?;
+    let mut removed = 0;
+    let mut kept = Vec::new();
+    for l in &list {
+        match keys::delete(Hive::CurrentUser, &l.key) {
+            Ok(()) => removed += 1,
+            Err(_) => kept.push(l.shown.clone()),
+        }
+    }
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    Ok(if kept.is_empty() {
+        format!("Removed {}. Undo puts {} back.", if removed == 1 { "it".to_string() } else { format!("all {removed}") }, if removed == 1 { "it" } else { "them" })
+    } else {
+        format!("Removed {removed}; {} stayed: {}.", kept.len(), kept.join(", "))
+    })
+}
+
+/// Puts back what the last `fix_registry(id)` removed.
+pub fn undo_registry(paths: &crate::paths::Paths, id: &str) -> Result<String, String> {
+    use crate::winsettings::keys::{self, Hive};
+    let prefix = format!("{id}-");
+    let latest = std::fs::read_dir(reg_backups(paths))
+        .map_err(|_| "There's nothing to undo.".to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .filter_map(|p| Some((p.file_stem()?.to_str()?.strip_prefix(&prefix)?.parse::<u64>().ok()?, p)))
+        .max_by_key(|(at, _)| *at)
+        .ok_or("There's nothing to undo.")?
+        .1;
+    let backup: RegBackup = serde_json::from_str(&std::fs::read_to_string(&latest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    if backup.id != id || backup.keys.iter().any(|(k, _)| !USER_ROOTS.iter().any(|r| k.starts_with(r))) {
+        return Err("That copy isn't one mom made, so she won't use it.".into());
+    }
+    for (key, values) in &backup.keys {
+        keys::restore(Hive::CurrentUser, key, values).map_err(|e| format!("Windows didn't let mom put it back ({e})."))?;
+    }
+    let _ = std::fs::rename(&latest, latest.with_extension("undone"));
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    Ok("Put back the way it was.".into())
 }
 
 #[cfg(test)]
@@ -966,6 +1078,19 @@ mod tests {
         assert_eq!(at(19045)[0].title, "Windows 10 Pro x (build 19045) doesn't get security updates any more");
         assert_eq!(day(0), "1 January 1970");
         assert_eq!(day(crate::speed::parse_time("2024-02-29T10:00:00Z").unwrap()), "29 February 2024");
+    }
+
+    #[test]
+    fn every_users_leftovers_come_as_a_safe_command() {
+        let svc = vec![Leftover { user: false, key: "asComSvc".into(), shown: "ASUS Com Service".into() }];
+        assert_eq!(admin_command("services", &svc), r#"sc.exe config "asComSvc" start= disabled"#);
+        let app = vec![Leftover { user: false, key: r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\devenv.exe".into(), shown: "devenv.exe".into() }];
+        let cmd = admin_command("app-paths", &app);
+        assert!(cmd.contains(r#"reg.exe export "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\devenv.exe""#), "{cmd}");
+        let export = cmd.find("reg.exe export").unwrap();
+        let delete = cmd.find("reg.exe delete").unwrap();
+        assert!(export < delete, "a copy is saved before anything is removed");
+        assert!(!gone(r"Q:\nowhere\x.exe"), "a drive that isn't there may come back");
     }
 
     #[test]

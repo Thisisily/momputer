@@ -77,6 +77,38 @@ pub(crate) fn check_with(m: &dyn Machine) -> Vec<Finding> {
     out
 }
 
+// ------------------------------------------------------------------ whole keys, for other parts of mom
+
+/// Reading, removing and putting back whole registry keys (for registry leftovers).
+pub(crate) mod keys {
+    pub(crate) use super::{Hive, Raw};
+
+    pub(crate) fn values(hive: Hive, key: &str) -> Vec<(String, Raw)> {
+        super::os::values(hive, key)
+    }
+
+    pub(crate) fn subkeys(hive: Hive, key: &str) -> Vec<String> {
+        super::os::subkeys(hive, key)
+    }
+
+    /// Removes a key with no keys inside it.
+    pub(crate) fn delete(hive: Hive, key: &str) -> Result<(), String> {
+        if !subkeys(hive, key).is_empty() {
+            return Err("it has keys inside it".into());
+        }
+        super::os::delete_key(hive, key)
+    }
+
+    /// Makes the key again, with these values.
+    pub(crate) fn restore(hive: Hive, key: &str, values: &[(String, Raw)]) -> Result<(), String> {
+        super::os::create_key(hive, key)?;
+        for (name, raw) in values {
+            super::os::set(hive, key, name, raw)?;
+        }
+        Ok(())
+    }
+}
+
 // ------------------------------------------------------------------ what mom reads
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1358,6 +1390,39 @@ mod os {
         }
     }
 
+    fn root(hive: Hive) -> windows_sys::Win32::System::Registry::HKEY {
+        match hive {
+            Hive::CurrentUser => HKEY_CURRENT_USER,
+            Hive::LocalMachine => HKEY_LOCAL_MACHINE,
+        }
+    }
+
+    /// Removes a key (one with no keys inside it).
+    pub fn delete_key(hive: Hive, key: &str) -> Result<(), String> {
+        use windows_sys::Win32::System::Registry::RegDeleteKeyExW;
+        let w = wide(key);
+        // SAFETY: `w` is NUL-terminated.
+        match unsafe { RegDeleteKeyExW(root(hive), w.as_ptr(), KEY_WOW64_64KEY, 0) } {
+            0 | ERROR_FILE_NOT_FOUND => Ok(()),
+            rc => Err(format!("error {rc}")),
+        }
+    }
+
+    /// Makes a key (and any missing above it).
+    pub fn create_key(hive: Hive, key: &str) -> Result<(), String> {
+        use windows_sys::Win32::System::Registry::{RegCreateKeyExW, REG_OPTION_NON_VOLATILE};
+        let w = wide(key);
+        let mut h: HKEY = std::ptr::null_mut();
+        // SAFETY: `w` is NUL-terminated; the handle is closed right after.
+        let rc = unsafe { RegCreateKeyExW(root(hive), w.as_ptr(), 0, std::ptr::null(), REG_OPTION_NON_VOLATILE, KEY_SET_VALUE | KEY_WOW64_64KEY, std::ptr::null(), &mut h, std::ptr::null_mut()) };
+        if rc != 0 {
+            return Err(format!("error {rc}"));
+        }
+        // SAFETY: we just opened it.
+        unsafe { RegCloseKey(h) };
+        Ok(())
+    }
+
     pub fn delete(hive: Hive, key: &str, name: &str) -> Result<(), String> {
         let k = match Key::open(hive, key, KEY_SET_VALUE) {
             Ok(k) => k,
@@ -1449,6 +1514,12 @@ mod os {
         Err("Only on Windows.".into())
     }
     pub fn delete(_: Hive, _: &str, _: &str) -> Result<(), String> {
+        Err("Only on Windows.".into())
+    }
+    pub fn delete_key(_: Hive, _: &str) -> Result<(), String> {
+        Err("Only on Windows.".into())
+    }
+    pub fn create_key(_: Hive, _: &str) -> Result<(), String> {
         Err("Only on Windows.".into())
     }
     pub fn displays() -> Vec<Display> {
