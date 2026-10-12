@@ -819,12 +819,12 @@
       ? `<button class="link-btn" data-act="${f.settings.startsWith("ms-settings:") ? "open-uri" : "open-program"}" data-url="${esc(f.settings)}">Open the setting${ICON.out}</button>`
       : "";
     const after = f.fix ? [f.fix.after, f.fix.admin ? "Windows asks first." : f.fix.undo ? "You can undo it." : ""].filter(Boolean).join(" ") : "";
-    return `<div class="finding" id="wf-${hash(f.id)}" data-level="${f.level}">
-        <div class="finding-title">${led ? `<span class="led ${led === "red" ? "red" : ""}"></span>` : ""}<strong>${esc(f.title)}</strong>${f.level === "info" ? `<span class="badge">your call</span>` : ""}</div>
-        <div class="finding-vals"><div><span>Now</span>${esc(f.now)}</div><div><span>Windows' default</span>${esc(f.default)}</div></div>
-        <p class="finding-why">${esc(f.why)}</p>
-        ${fix || open ? `<div class="finding-acts">${open || "<span></span>"}${fix}</div>` : ""}
-        ${after ? `<p class="finding-after">${esc(after)}</p>` : ""}
+    return `<div class="drift" id="wf-${hash(f.id)}" data-level="${f.level}">
+        <div class="drift-title">${led ? `<span class="led ${led === "red" ? "red" : ""}"></span>` : ""}<strong>${esc(f.title)}</strong>${f.level === "info" ? `<span class="badge">your call</span>` : ""}</div>
+        <div class="drift-vals"><div><span>Now</span>${esc(f.now)}</div><div><span>Windows' default</span>${esc(f.default)}</div></div>
+        <p class="drift-why">${esc(f.why)}</p>
+        ${fix || open ? `<div class="drift-acts">${open || "<span></span>"}${fix}</div>` : ""}
+        ${after ? `<p class="drift-after">${esc(after)}</p>` : ""}
       </div>`;
   }
 
@@ -966,8 +966,11 @@
     if (f.busy && prog) html += `<div class="progress solo"><div class="progress-bar unknown"><span></span></div></div>`;
     if (!r || f.busy) return html;
     const note = `<p class="group-note">A copy is only ever another file with exactly the same contents. Ticked ones go to the Recycle Bin, and mom never sends the last copy of anything.</p>`;
-    if (r.groups.length) html += section("copies", "Copies of the same file", `${plural(r.groups.length, "set")}`, copiesList(r) + note);
-    if (r.big.length) html += section("big", r.accessTimes ? "Big files nobody has opened in a year" : "Big files nobody has changed in a year", `${plural(r.big.length, "file")}`, bigList(r));
+    const extras = r.groups.flatMap((g) => g.files.filter((f) => f.path !== keptPath(g)).map((f) => f.path));
+    const allExtras = extras.every((x) => !state.filesUntick.has(x));
+    const allBig = r.big.every((b) => state.bigTicked.has(b.path));
+    if (r.groups.length) html += section("copies", "Copies of the same file", tickAllButton("files-pick-all", allExtras), copiesList(r) + note);
+    if (r.big.length) html += section("big", r.accessTimes ? "Big files nobody has opened in a year" : "Big files nobody has changed in a year", tickAllButton("big-pick-all", allBig), bigList(r));
     if (r.groups.length || r.big.length) {
       const c = filesChosen(r);
       const label = state.filesWorking ? "Moving…" : !c.paths.length ? "Nothing ticked" : state.filesConfirm ? `Sure? Press again to move ${plural(c.paths.length, "file")}` : `Move ${plural(c.paths.length, "file")} (${bytes(c.size)}) to the Recycle Bin`;
@@ -1007,6 +1010,10 @@
     }
     renderSheet();
   }
+
+  /** House rule for the whole widget: every list you can tick has one of these. */
+  const tickAllButton = (act, allOn, attrs = "", disabled = false) =>
+    `<button class="link-btn" data-act="${act}" ${attrs} ${disabled ? "disabled" : ""}>${allOn ? "Untick all" : "Tick all"}</button>`;
 
   // What's ticked in a clean-up's two lists. Goes starts all ticked and Stays all unticked, and
   // "Tick all" / "Untick all" flip a whole list, so they also cover the smaller items that
@@ -1286,8 +1293,7 @@
     const unlisted = Math.max(0, (s.reclaimableItems || 0) - p.goes.length);
     const keptUnlisted = Math.max(0, (s.keptItems || 0) - stays.length);
     const newUnlisted = Math.max(0, (s.newItems || 0) - p.fresh.length);
-    const allButton = (list, items, base) =>
-      picking && items.length ? `<button class="link-btn" data-act="pick-all" data-list="${list}" ${state.cleaning ? "disabled" : ""}>${allTicked(pk, base, items) ? "Untick all" : "Tick all"}</button>` : "";
+    const allButton = (list, items, base) => (picking && items.length ? tickAllButton("pick-all", allTicked(pk, base, items), `data-list="${list}"`, !!state.cleaning) : "");
     const hint =
       (p.fresh.length === stays.length ? "These are" : "The ones with a box are") +
       (s.action === "recycle"
@@ -1427,6 +1433,15 @@
     return html + section("rooms", "Rooms", "", rows);
   }
 
+  /** A plan's title without the size on the end ("(13 MB)"): the size has its own column. */
+  const sizeless = (t) => t.replace(/\s*\([\d.,]+\s?(?:bytes|[KMGT]?B)\)$/, "");
+  /** Text with folder paths set apart, so a long one wraps instead of running off the edge. */
+  const pathy = (t) =>
+    esc(t)
+      .split(" ")
+      .map((w) => (/[\\/]/.test(w) && w.length > 1 ? `<span class="path">${w}</span>` : w))
+      .join(" ");
+
   const grade = (g, pitch) =>
     `<span class="grade g-${esc(g)}${pitch > 3 ? " big" : ""}" aria-label="grade ${esc(g)}"><span class="dot">${esc(g)}</span></span>`;
 
@@ -1439,16 +1454,16 @@
     if (r.codeProject) {
       html += section("code", "Careful", "", `<p class="empty">This folder has code in it. Moving things can break paths, so nothing is ticked. "Copy chores for an agent" lets an agent tidy and fix the paths.</p>`);
     }
-    const findings = r.findings.map((f) => `<div class="finding" id="f-${hash(f.title)}"><strong>${esc(f.title)}</strong><p>${esc(f.detail)}</p></div>`).join("");
+    const findings = r.findings.map((f) => `<div class="room-finding" id="f-${hash(f.title)}"><strong>${esc(f.title)}</strong><p>${esc(f.detail)}</p></div>`).join("");
     html += section("wrong", "What's wrong", "", findings || `<p class="empty">Nothing. Spotless.</p>`);
     if (r.actions.length) {
       const checks = r.actions
         .map(
           (a) => `<label class="check" id="a-${hash(a.id)}"><input type="checkbox" data-act="toggle-action" data-aid="${esc(a.id)}" ${sel.has(a.id) ? "checked" : ""}>
-            <span>${esc(a.title)}<small>${esc(a.reason)}</small></span><span class="num">${a.bytes ? bytes(a.bytes) : ""}</span></label>`
+            <span class="check-main">${pathy(sizeless(a.title))}<small>${esc(a.reason)}</small></span><span class="num">${a.bytes ? bytes(a.bytes) : ""}</span></label>`
         )
         .join("");
-      html += section("plan", "Mom's plan", "", checks);
+      html += section("plan", "Mom's plan", tickAllButton("room-pick-all", r.actions.every((a) => sel.has(a.id))), checks);
     }
     html += `<div class="button-row">
       <button class="primary" data-act="apply-room" ${!sel.size || state.roomBusy ? "disabled" : ""}>Do the checked ones${sel.size ? ` (${sel.size})` : ""}</button>
@@ -2267,6 +2282,31 @@
         state.roomOpen = null;
         render();
         break;
+      case "room-pick-all": {
+        const r = state.rooms[state.roomOpen];
+        if (!r) return;
+        const sel = state.roomSel[state.roomOpen] || new Set();
+        state.roomSel[state.roomOpen] = r.actions.every((a) => sel.has(a.id)) ? new Set() : new Set(r.actions.map((a) => a.id));
+        render();
+        break;
+      }
+      case "files-pick-all": {
+        const r = state.files && state.files.report;
+        if (!r) return;
+        const extras = r.groups.flatMap((g) => g.files.filter((f) => f.path !== keptPath(g)).map((f) => f.path));
+        state.filesUntick = extras.every((x) => !state.filesUntick.has(x)) ? new Set(extras) : new Set();
+        state.filesConfirm = false;
+        render();
+        break;
+      }
+      case "big-pick-all": {
+        const r = state.files && state.files.report;
+        if (!r) return;
+        state.bigTicked = r.big.every((b) => state.bigTicked.has(b.path)) ? new Set() : new Set(r.big.map((b) => b.path));
+        state.filesConfirm = false;
+        render();
+        break;
+      }
       case "toggle-action": {
         const sel = state.roomSel[state.roomOpen] || (state.roomSel[state.roomOpen] = new Set());
         el.checked ? sel.add(el.dataset.aid) : sel.delete(el.dataset.aid);

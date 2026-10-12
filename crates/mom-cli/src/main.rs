@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use mom_core::agents::{AgentKind, AgentProc};
 use mom_core::scan::{Group, Status};
-use mom_core::util::{ellipsize, human_age, human_bytes};
+use mom_core::util::{ellipsize, human_age, human_bytes, plural};
 use mom_core::{hooks, kill, rules, tidy, trash, winsettings, Config, Paths, Snapshot};
 use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
@@ -303,8 +303,8 @@ fn print_snapshot(st: &Style, snap: &Snapshot, all: bool) {
         println!(
             "\n  {}",
             st.dim(&format!(
-                "+ {} agent helper(s) ({}) and {} of yours. `mom ps --all` to see them.",
-                helpers.len(),
+                "+ {} ({}) and {} of yours. `mom ps --all` to see them.",
+                plural(helpers.len() as u64, "agent helper"),
                 human_bytes(snap.summary.helper_mem),
                 yours.len()
             ))
@@ -517,7 +517,7 @@ fn run(cli: Cli) -> Result<i32> {
                         println!("    {}", st.dim(&format!("scheduled: {} ({}{next})", a.name, a.schedule)));
                     }
                     if t.subagents > 0 {
-                        println!("    {}", st.dim(&format!("{} sub-agent(s) busy", t.subagents)));
+                        println!("    {}", st.dim(&format!("{} busy", plural(t.subagents as u64, "sub-agent"))));
                     }
                     println!("    {}", st.dim(&t.link));
                 }
@@ -1155,7 +1155,7 @@ fn stop(st: &Style, cfg: &Config, targets: Vec<String>, yes: bool, dry_run: bool
     }
     let risky = chosen.iter().any(|g| matches!(g.status, Status::Running | Status::Yours | Status::Helper | Status::Forgotten));
     let needs_ok = !yes && !agent_asking && (risky || chosen.len() > 1);
-    if needs_ok && !confirm(&format!("Stop {} thing(s)?", chosen.len())) {
+    if needs_ok && !confirm(&format!("Stop {}?", plural(chosen.len() as u64, "thing"))) {
         if !std::io::stdin().is_terminal() {
             eprintln!("mom: not a terminal, so pass --yes to confirm.");
             return Ok(1);

@@ -109,13 +109,15 @@ pub fn cleaned(freed: u64) -> String {
     }
 }
 
-pub fn room(grade: char) -> &'static str {
+/// What mom says about a room. Even an F gets help, not a telling-off.
+pub fn room(grade: char, name: &str) -> String {
+    let this = if name.eq_ignore_ascii_case("desktop") { "this desktop" } else { "this folder" };
     match grade {
-        'A' => "Spotless. Who are you and what have you done with my kid?",
-        'B' => "Not bad. Make your bed.",
-        'C' => "I can see the floor. Barely.",
-        'D' => "This room is a disaster. We're cleaning it before dinner.",
-        _ => "I'm not cleaning this. You are.",
+        'A' => "Spotless. Who are you and what have you done with my kid?".into(),
+        'B' => "Not bad at all. Just a few things to put away.".into(),
+        'C' => "I can see the floor. Let's find the rest of it.".into(),
+        'D' => format!("Bit of a mess. We'll have {this} sorted before dinner c:"),
+        _ => format!("Let's clean {this} together c:"),
     }
 }
 

@@ -6,7 +6,7 @@
 //! outright (they're empty).
 
 use crate::config::TidyConfig;
-use crate::util::{human_bytes, now_secs};
+use crate::util::{human_bytes, now_secs, plural};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -343,7 +343,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
         let bytes = paths.iter().map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)).sum();
         findings.push(Finding {
             kind: FindingKind::LooseReports,
-            title: format!("{} report file(s) lying around the top level", loose.len()),
+            title: format!("{} lying around the top level", plural(loose.len() as u64, "report file")),
             detail: format!("Reports, plans and logs belong in {reports_name}/."),
             paths: paths.clone(),
             bytes,
@@ -353,7 +353,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
             op: Op::Move,
             targets: paths,
             to: Some(s(&reports_dir)),
-            title: format!("Move {} report file(s) into {reports_name}/", loose.len()),
+            title: format!("Move {} into {reports_name}/", plural(loose.len() as u64, "report file")),
             reason: "Reports go in one clearly named place.".into(),
             bytes,
             selected: !code_project,
@@ -399,7 +399,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
                 op: Op::Move,
                 targets: movers.clone(),
                 to: Some(s(&target)),
-                title: format!("Group {} folder(s) into {shown}/", movers.len()),
+                title: format!("Group {} into {shown}/", plural(movers.len() as u64, "folder")),
                 reason: "One thing, one folder.".into(),
                 bytes,
                 selected: !code_project,
@@ -418,7 +418,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
             let bytes = reports.iter().map(|d| profiles[d].bytes).sum();
             findings.push(Finding {
                 kind: FindingKind::DatedFolders,
-                title: format!("{} dated report folder(s) at the top level", reports.len()),
+                title: format!("{} at the top level", plural(reports.len() as u64, "dated report folder")),
                 detail: format!("Write-ups named after the day they were made. They go in {reports_name}/."),
                 paths: paths.clone(),
                 bytes,
@@ -428,7 +428,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
                 op: Op::Move,
                 targets: paths,
                 to: Some(s(&reports_dir)),
-                title: format!("Move {} dated report folder(s) into {reports_name}/", reports.len()),
+                title: format!("Move {} into {reports_name}/", plural(reports.len() as u64, "dated report folder")),
                 reason: "Reports go in one place, not scattered by date.".into(),
                 bytes,
                 selected: !code_project,
@@ -437,7 +437,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
         if !content.is_empty() {
             findings.push(Finding {
                 kind: FindingKind::DatedFolders,
-                title: format!("{} dated folder(s) with real content", content.len()),
+                title: format!("{} with real content", plural(content.len() as u64, "dated folder")),
                 detail: "Named by date instead of by what they are. Worth renaming or merging into the project they belong to.".into(),
                 paths: content.iter().map(|d| s(&room.join(d))).collect(),
                 bytes: content.iter().map(|d| profiles[d].bytes).sum(),
@@ -534,7 +534,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
         let bytes = outer.iter().map(|a| a.1).sum();
         findings.push(Finding {
             kind: FindingKind::TempDebris,
-            title: format!("{} test/cache folder(s) left behind", outer.len()),
+            title: format!("{} left behind", plural(outer.len() as u64, "test or cache folder")),
             detail: "test-results, playwright reports, coverage and Python caches. All regenerate.".into(),
             paths: outer.iter().map(|a| s(&a.0)).collect(),
             bytes,
@@ -544,7 +544,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
             op: Op::Recycle,
             targets: outer.iter().map(|a| s(&a.0)).collect(),
             to: None,
-            title: format!("Recycle {} test/cache folder(s) ({})", outer.len(), human_bytes(bytes)),
+            title: format!("Recycle {} ({})", plural(outer.len() as u64, "test or cache folder"), human_bytes(bytes)),
             reason: "Generated output, safe to regenerate.".into(),
             bytes,
             selected: true,
@@ -554,7 +554,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
         let bytes = debris.iter().map(|d| d.1).sum();
         findings.push(Finding {
             kind: FindingKind::TempDebris,
-            title: format!("{} temp file(s)", debris.len()),
+            title: plural(debris.len() as u64, "temp file"),
             detail: "*.tmp, ~$ lock files, .DS_Store, Thumbs.db, nohup.out.".into(),
             paths: debris.iter().map(|d| s(&d.0)).collect(),
             bytes,
@@ -564,7 +564,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
             op: Op::Recycle,
             targets: debris.iter().map(|d| s(&d.0)).collect(),
             to: None,
-            title: format!("Recycle {} temp file(s)", debris.len()),
+            title: format!("Recycle {}", plural(debris.len() as u64, "temp file")),
             reason: "Temp files are temporary.".into(),
             bytes,
             selected: true,
@@ -577,7 +577,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
             op: Op::Recycle,
             targets: maybe_debris.iter().map(|d| s(&d.0)).collect(),
             to: None,
-            title: format!("Recycle {} backup/old log file(s)", maybe_debris.len()),
+            title: format!("Recycle {}", plural(maybe_debris.len() as u64, "backup or old log file")),
             reason: "*.bak files and week-old logs. Probably safe, but have a look.".into(),
             bytes,
             selected: false,
@@ -587,7 +587,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
     if !empties.is_empty() {
         findings.push(Finding {
             kind: FindingKind::EmptyFolders,
-            title: format!("{} empty folder(s)", empties.len()),
+            title: plural(empties.len() as u64, "empty folder"),
             detail: "Shells left after files were moved or deleted. They make a room look full when it isn't.".into(),
             paths: empties.iter().map(|p| s(p)).collect(),
             bytes: 0,
@@ -597,7 +597,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
             op: Op::RemoveEmpty,
             targets: empties.iter().map(|p| s(p)).collect(),
             to: None,
-            title: format!("Remove {} empty folder(s)", empties.len()),
+            title: format!("Remove {}", plural(empties.len() as u64, "empty folder")),
             reason: "Leave no empty folders behind.".into(),
             bytes: 0,
             selected: !code_project,
@@ -634,12 +634,13 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
         26..=50 => 'D',
         _ => 'F',
     };
+    let name = room.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| s(room));
     Ok(RoomReport {
         path: s(room),
-        name: room.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| s(room)),
+        line: crate::voice::room(grade, &name),
+        name,
         grade,
         score,
-        line: crate::voice::room(grade).to_string(),
         entries,
         code_project,
         findings,
@@ -840,13 +841,13 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
     }
     let mut parts = Vec::new();
     if r.moved > 0 {
-        parts.push(format!("put away {} thing(s)", r.moved));
+        parts.push(format!("put away {}", plural(r.moved as u64, "thing")));
     }
     if r.recycled > 0 {
         parts.push(format!("recycled {}", r.recycled));
     }
     if r.removed > 0 {
-        parts.push(format!("removed {} empty folder(s)", r.removed));
+        parts.push(format!("removed {}", plural(r.removed as u64, "empty folder")));
     }
     r.message = if parts.is_empty() {
         "Nothing to do.".to_string()
@@ -926,9 +927,9 @@ pub fn undo_last(journal_dir: &Path) -> UndoReport {
     }
     let _ = std::fs::rename(&file, file.with_extension("undone.json"));
     r.message = if r.failed.is_empty() {
-        format!("Put back {} thing(s), exactly as they were.", r.restored)
+        format!("Put back {}, exactly as they were.", plural(r.restored as u64, "thing"))
     } else {
-        format!("Put back {} thing(s); {} couldn't be restored.", r.restored, r.failed.len())
+        format!("Put back {}; {} couldn't be restored.", plural(r.restored as u64, "thing"), r.failed.len())
     };
     r
 }
@@ -951,7 +952,8 @@ fn restore_from_recycle_bin(entries: &[&JournalEntry], since: u64) -> (u32, Vec<
     let n = matches.len() as u32;
     let mut failed = Vec::new();
     if n < entries.len() as u32 {
-        failed.push(format!("{} recycled item(s) weren't found in the Recycle Bin", entries.len() as u32 - n));
+        let missing = entries.len() as u64 - n as u64;
+        failed.push(format!("{} {} found in the Recycle Bin", plural(missing, "recycled item"), if missing == 1 { "wasn't" } else { "weren't" }));
     }
     match os_limited::restore_all(matches) {
         Ok(()) => (n, failed),
@@ -964,7 +966,7 @@ fn restore_from_recycle_bin(entries: &[&JournalEntry], since: u64) -> (u32, Vec<
 
 #[cfg(not(any(windows, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
 fn restore_from_recycle_bin(entries: &[&JournalEntry], _since: u64) -> (u32, Vec<String>) {
-    (0, vec![format!("{} item(s) are in the Trash; restore them from there", entries.len())])
+    (0, vec![format!("{} in the Trash; restore {} from there", plural(entries.len() as u64, "item"), if entries.len() == 1 { "it" } else { "them" })])
 }
 
 /// A message to paste to an agent so it tidies up (and fixes any paths that referenced the mess).

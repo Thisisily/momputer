@@ -165,9 +165,13 @@ textarea:focus-visible,
   font-family: var(--font-dot) !important;
 }
 
+/* Doto leaves room on the right of every letter; nudge it back so it sits in the middle. */
 .grade .dot {
+  display: block;
   font-size: 22px;
   font-weight: 900;
+  line-height: 1;
+  transform: translate(0.07em, 0.02em);
 }
 
 .grade.big .dot {
@@ -534,8 +538,14 @@ textarea:focus-visible,
   scrollbar-color: var(--line-2) transparent;
 }
 
-.section + .section {
+.section + .section,
+:is(.md, .rules-editor, .button-row) + .section {
   margin-top: 16px;
+}
+
+.md + .section,
+.md + .button-row + .section {
+  margin-top: 22px;
 }
 
 .section-head {
@@ -1448,26 +1458,28 @@ button.row-name:hover {
   height: 52px;
 }
 
+/* The light sits on the ring at one o'clock, not in the box's corner. */
 .grade::after {
   content: "";
   position: absolute;
-  top: 1px;
-  right: 1px;
-  width: 6px;
-  height: 6px;
+  top: calc(14.6% - 3.5px);
+  right: calc(14.6% - 3.5px);
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--bg);
 }
 
 .grade.g-A::after,
 .grade.g-B::after {
   background: var(--green);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--green) var(--glow), transparent);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 7px color-mix(in srgb, var(--green) var(--glow), transparent);
 }
 
 .grade.g-D::after,
 .grade.g-F::after {
   background: var(--red);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--red) var(--glow), transparent);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 7px color-mix(in srgb, var(--red) var(--glow), transparent);
 }
 
 .room-row {
@@ -1514,17 +1526,17 @@ button.row-name:hover {
   color: var(--ink-2);
 }
 
-.finding {
+.room-finding {
   padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
 
-.finding strong {
+.room-finding strong {
   display: block;
   font-weight: 600;
 }
 
-.finding p {
+.room-finding p {
   margin: 2px 0 0;
   color: var(--ink-2);
   font-size: 12px;
@@ -1547,15 +1559,29 @@ button.row-name:hover {
   accent-color: var(--ink);
 }
 
+.check-main {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .check small {
   display: block;
+  margin-top: 2px;
   color: var(--ink-2);
   font-size: 12px;
+}
+
+.check .path {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  word-break: break-all;
 }
 
 .check .num {
   color: var(--ink-3);
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .button-row {
@@ -1588,7 +1614,7 @@ button.row-name:hover {
 }
 
 .md {
-  padding: 16px 18px 6px;
+  padding: 16px 18px 8px;
   border-radius: 20px;
   background: var(--card);
   box-shadow: inset 0 0 0 1px var(--edge);
@@ -2468,34 +2494,34 @@ button.row-name:hover {
 
 /* ---------------------------------------------------------------- upkeep: Windows */
 
-.finding {
+.drift {
   padding: 12px 0;
   border-bottom: 1px solid var(--line);
 }
 
-.finding:last-child {
+.drift:last-child {
   border-bottom: 0;
 }
 
-.finding-title {
+.drift-title {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
 }
 
-.finding-title .badge {
+.drift-title .badge {
   margin-left: auto;
 }
 
-.finding-vals {
+.drift-vals {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
   margin: 8px 0 6px;
 }
 
-.finding-vals > div {
+.drift-vals > div {
   display: grid;
   gap: 1px;
   padding: 7px 9px;
@@ -2505,7 +2531,7 @@ button.row-name:hover {
   overflow-wrap: anywhere;
 }
 
-.finding-vals span {
+.drift-vals span {
   color: var(--ink-3);
   font-size: 10.5px;
   font-weight: 700;
@@ -2513,14 +2539,14 @@ button.row-name:hover {
   letter-spacing: 0.04em;
 }
 
-.finding-why {
+.drift-why {
   margin: 0;
   color: var(--ink-2);
   font-size: 12.5px;
   text-wrap: pretty;
 }
 
-.finding-acts {
+.drift-acts {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -2528,7 +2554,7 @@ button.row-name:hover {
   margin-top: 9px;
 }
 
-.finding-after {
+.drift-after {
   margin: 6px 0 0;
   color: var(--ink-3);
   font-size: 11.5px;
