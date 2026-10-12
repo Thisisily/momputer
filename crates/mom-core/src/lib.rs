@@ -7,6 +7,7 @@
 
 pub mod agents;
 pub mod archive;
+pub mod browsers;
 pub mod classify;
 pub mod codex;
 pub mod config;

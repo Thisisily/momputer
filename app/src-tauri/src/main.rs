@@ -884,6 +884,19 @@ async fn get_system(fresh: bool) -> Res<mom_core::system::System> {
     tauri::async_runtime::spawn_blocking(move || mom_core::system::get(fresh)).await.map_err(err)
 }
 
+/// Your browsers, their profiles and every extension. A few seconds the first time; kept five
+/// minutes unless `fresh`.
+#[tauri::command]
+async fn get_browsers(fresh: bool, s: State<'_, S>) -> Res<Vec<mom_core::browsers::Browser>> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let table = s.sampler.lk().sample();
+        mom_core::browsers::list(&table, fresh)
+    })
+    .await
+    .map_err(err)
+}
+
 /// Removes your own registry leftovers of one kind, keeping a copy.
 #[tauri::command(async)]
 fn fix_registry(id: String, s: State<'_, S>) -> Res<String> {
@@ -1291,6 +1304,7 @@ fn main() {
             get_speed,
             get_programs,
             files_places,
+            get_browsers,
             fix_registry,
             undo_registry,
             set_files_place,

@@ -295,6 +295,12 @@ const RENDER_MIN_AGE: u64 = 86_400;
 /// Stop counting a single folder after this many entries (and say the size is a floor).
 const ENTRY_CAP: u64 = 2_000_000;
 
+/// How much each path holds, and when anything in it last changed: (bytes, newest mtime). Many
+/// at once on the walker pool, for other parts of mom (browser profiles, say).
+pub(crate) fn sizes(paths: &[PathBuf]) -> Vec<(u64, u64)> {
+    tally_many(paths, ENTRY_CAP, u64::MAX).into_iter().map(|t| (t.bytes, t.newest)).collect()
+}
+
 struct Def {
     id: &'static str,
     label: &'static str,

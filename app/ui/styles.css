@@ -1089,6 +1089,57 @@ button.row-name:hover {
   overflow-wrap: anywhere;
 }
 
+/* Browsers: a profile opens to its storage, notes and extensions. */
+.browser-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 0 8px;
+}
+
+.row.ext {
+  padding: 9px 0;
+}
+
+.row.ext.is-off .row-name,
+.row.ext.is-off .row-meta {
+  opacity: 0.55;
+}
+
+.row.ext .row-name {
+  font-size: 13px;
+}
+
+.row.prof .row-chev .ico {
+  transition: transform 200ms ease;
+}
+
+.row.prof.is-open .row-chev .ico {
+  transform: rotate(90deg);
+}
+
+.sub-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 12px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.notes .check-row {
+  padding: 8px 0 8px 17px;
+}
+
+.notes .check-row::before {
+  top: 15px;
+}
+
+.ext-list .row:last-child {
+  border-bottom: 0;
+}
+
 /* A finding's buttons, side by side. */
 .fix-row {
   display: flex;

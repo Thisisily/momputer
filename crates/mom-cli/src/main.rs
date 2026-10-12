@@ -93,6 +93,12 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Your browsers, their profiles and every extension: what each can do, and whether it's used.
+    /// Only looks.
+    Browsers {
+        #[arg(long)]
+        json: bool,
+    },
     /// Every program running, as one line each (all of Chrome's processes together): CPU,
     /// memory, graphics card and windows. Only looks.
     Programs {
@@ -440,6 +446,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Speed { .. })
         | Some(Cmd::Programs { .. })
         | Some(Cmd::Pc { .. })
+        | Some(Cmd::Browsers { .. })
         | Some(Cmd::Files { .. })
         | Some(Cmd::Integrations { .. })
         | Some(Cmd::Config)
@@ -780,6 +787,27 @@ fn run(cli: Cli) -> Result<i32> {
                 print_json(&sp)?;
             } else {
                 print_speed(&st, &sp);
+            }
+        }
+        Some(Cmd::Browsers { json }) => {
+            let table = mom_core::procs::Sampler::new().sample();
+            let list = mom_core::browsers::list(&table, true);
+            if json {
+                print_json(&list)?;
+            } else {
+                for b in &list {
+                    let state = if b.open { format!("open for {}, {} processes, {}", human_age(b.open_secs), b.processes, human_bytes(b.mem)) } else { "closed".into() };
+                    println!("{}  {}", st.bold(&b.name.to_uppercase()), st.dim(&state));
+                    for p in &b.profiles {
+                        let on = p.extensions.iter().filter(|e| e.on).count();
+                        let used = p.last_used.map(|t| format!("used {} ago", human_age(mom_core::util::now_secs().saturating_sub(t)))).unwrap_or_default();
+                        println!("  {}  {}", st.bold(&p.name), st.dim(&format!("{} · {} · {on} of {} extensions on · cache {} · history {}", used, human_bytes(p.size), p.extensions.len(), human_bytes(p.cache), human_bytes(p.history))));
+                        for n in &p.notes {
+                            println!("    {} {}", st.yellow("~"), n.text);
+                        }
+                    }
+                    println!();
+                }
             }
         }
         Some(Cmd::Pc { json }) => {

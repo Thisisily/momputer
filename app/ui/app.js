@@ -39,6 +39,11 @@
     progOrder: null, // the order rows are shown in, kept between refreshes so nothing moves under the pointer
     progOrderSort: null,
     filesPlaces: null, // where the Files scan looks (files_places)
+    browsers: null, // browsers, profiles and extensions (get_browsers)
+    browsersAt: 0,
+    browsersLoading: false,
+    browserOpen: null, // "browser|profile" open to its extensions
+    extOff: new Set(), // profiles whose switched-off extensions are shown
     regFixed: new Map(), // registry fixes done just now: id -> what they were, for Undo
     regConfirm: null,
     regBusy: null,
@@ -513,6 +518,7 @@
     ["speed", "Speed"],
     ["programs", "Programs"],
     ["startup", "Startup"],
+    ["browsers", "Browsers"],
   ];
 
   function runningTabs() {
@@ -524,7 +530,7 @@
   }
 
   function renderRunning() {
-    const view = { speed: renderSpeed, programs: renderPrograms, startup: renderStartup }[state.runningTab] || renderAgents;
+    const view = { speed: renderSpeed, programs: renderPrograms, startup: renderStartup, browsers: renderBrowsers }[state.runningTab] || renderAgents;
     return runningTabs() + view();
   }
 
@@ -537,6 +543,7 @@
       if (Date.now() - state.programsAt > 3000) loadPrograms();
     }
     if (tab === "startup" && Date.now() - state.startupAt > 15000) loadStartup();
+    if (tab === "browsers" && Date.now() - state.browsersAt > 60000) loadBrowsers();
   }
 
   // ------------------------------------------------------------ running: speed
@@ -784,6 +791,99 @@
     await loadPrograms();
     if (action === "restart") setTimeout(() => loadSpeed(true), 4000);
     render();
+  }
+
+  // ------------------------------------------------------------ running: browsers
+
+  const agoText = (t) => {
+    if (!t) return "";
+    const s = Math.max(0, Math.floor(Date.now() / 1000) - t);
+    return s < 86400 ? "today" : `${ageLong(s)} ago`;
+  };
+
+  function extRow(b, e) {
+    const saved = e.lastSaved ? `saved something ${agoText(e.lastSaved)}` : "has never saved anything";
+    const meta = [e.can[0] || "Asks for nothing special", e.on ? saved : "switched off", e.added ? `added ${agoText(e.added)}` : ""].filter(Boolean);
+    const led = !e.on ? "off" : e.everywhere ? "red" : e.lastSaved ? "green" : "off";
+    return `<div class="row ext${e.on ? "" : " is-off"}" id="ex-${hash(b.id + e.id)}" data-led="${led}" title="${esc(e.description || e.name)}">
+      <span class="row-name">${esc(e.name)}${e.kind ? ` <span class="badge">${esc(e.kind)}</span>` : ""}${e.app ? ` <span class="badge look">Chrome app</span>` : ""}</span>
+      <div class="row-meta"><span class="why">${esc(meta.join(" · "))}</span></div>
+      <div class="row-nums num">${e.size ? bytes(e.size) : ""}</div>
+      <div class="row-nums2"></div>
+      <div class="row-act"><button class="mini-btn wide" data-act="copy-fix" data-text="${esc(e.page)}" data-hint="${esc(`Paste it into ${b.name}'s address bar: its page has Remove and an on/off switch.`)}" title="Copy its page in ${esc(b.name)}">${ICON.copy}Link</button></div>
+    </div>`;
+  }
+
+  function profileDetail(b, p) {
+    const key = `${b.id}|${p.dir}`;
+    const on = p.extensions.filter((e) => e.on);
+    const off = p.extensions.filter((e) => !e.on);
+    const cookies = p.cookies != null ? `${p.cookies.toLocaleString("en-US")} from ${plural(p.cookieSites || 0, "site")}` : `${bytes(p.cookiesBytes)} (counted when ${b.name} is closed)`;
+    const stats = [
+      ["Everything", bytes(p.size)],
+      ["Cache", `${bytes(p.cache)} · rebuilds itself`],
+      ["History", bytes(p.history)],
+      ["Cookies", cookies],
+    ]
+      .map(([k, v]) => `<div class="pc-row"><span class="pc-key">${esc(k)}</span><span class="pc-val num">${esc(v)}</span></div>`)
+      .join("");
+    const notes = p.notes
+      .map((n) => `<div class="check-row" data-led="${n.level === "warn" ? "red" : "off"}"><div class="check-text"><span>${esc(n.text)}</span></div></div>`)
+      .join("");
+    const exts = on.map((e) => extRow(b, e)).join("");
+    const offRows = state.extOff.has(key) ? off.map((e) => extRow(b, e)).join("") : "";
+    return `<div class="pc">${stats}</div>
+      ${notes ? `<div class="notes">${notes}</div>` : ""}
+      ${p.extensions.length ? `<h4 class="sub-head">Extensions <span class="dim num">${on.length} on${off.length ? `, ${off.length} off` : ""}</span></h4><div class="ext-list">${exts}${offRows}</div>` : ""}
+      ${off.length ? `<button class="quiet-toggle" data-act="ext-off" data-key="${esc(key)}">${state.extOff.has(key) ? "Hide the ones switched off" : `Show the ${off.length} switched off`}</button>` : ""}
+      <div class="detail-actions"><button class="link-btn" data-act="reveal-path" data-path="${esc(p.path)}">${ICON.folder}Show folder</button></div>`;
+  }
+
+  function profileRow(b, p) {
+    const key = `${b.id}|${p.dir}`;
+    const open = state.browserOpen === key;
+    const on = p.extensions.filter((e) => e.on).length;
+    const meta = [p.lastUsed ? `used ${agoText(p.lastUsed)}` : "", p.extensions.length ? `${on} of ${plural(p.extensions.length, "extension")} on` : "no extensions"].filter(Boolean);
+    const idle = p.lastUsed && Date.now() / 1000 - p.lastUsed > 180 * 86400;
+    return `<div class="row prof${open ? " is-open" : ""}" id="pr-${hash(key)}" data-led="${p.notes.length ? "red" : idle ? "off" : "green"}">
+      <button class="row-name" data-act="profile-open" data-key="${esc(key)}" aria-expanded="${open}">${esc(p.name)}</button>
+      <div class="row-meta"><span class="why">${esc(meta.join(" · "))}${p.notes.length ? ` · <span class="hot">${plural(p.notes.length, "note")}</span>` : ""}</span></div>
+      <div class="row-nums num">${bytes(p.size)}</div>
+      <div class="row-nums2 num">${bytes(p.cache)} cache</div>
+      <div class="row-act"><span class="row-chev">${ICON.chevron}</span></div>
+      <div class="row-detail">${open ? profileDetail(b, p) : ""}</div>
+    </div>`;
+  }
+
+  function renderBrowsers() {
+    const list = state.browsers;
+    const again = `<button class="secondary" data-act="browsers-again" ${state.browsersLoading ? "disabled" : ""}>${state.browsersLoading ? '<span class="led green blink"></span>Looking' : "Look again"}</button>`;
+    if (!list) return `<div class="lead"><div class="lead-text"><p>Looking at your browsers, their profiles and every extension…</p></div>${again}</div>`;
+    if (!list.length) return `<div class="lead"><div class="lead-text"><p>No Chrome, Edge, Brave or Vivaldi here.</p></div>${again}</div>`;
+    const profiles = list.reduce((a, b) => a + b.profiles.length, 0);
+    const exts = list.reduce((a, b) => a + b.profiles.reduce((x, p) => x + p.extensions.filter((e) => e.on).length, 0), 0);
+    let html = `<div class="lead"><div class="lead-text"><div class="big"><span class="dot free-num">${exts}</span></div><p>${exts === 1 ? "extension is" : "extensions are"} on across ${plural(profiles, "profile")} in ${plural(list.length, "browser")}. Open a profile to see what each one does.</p></div>${again}</div>`;
+    for (const b of list) {
+      const state_ = b.open ? `open for ${ageLong(b.openSecs)} · ${plural(b.processes, "process", "processes")} · ${bytes(b.mem)}` : "closed";
+      const buttons = `<div class="browser-acts">${b.open ? `<button class="secondary" data-act="copy-fix" data-text="${esc(b.restart)}" data-hint="${esc(`Paste it into ${b.name}'s address bar. Your tabs come back.`)}">${ICON.refresh}Copy ${esc(b.restart)}</button>` : ""}
+        <button class="secondary" data-act="copy-fix" data-text="${esc(b.extensionsPage)}" data-hint="${esc(`Paste it into ${b.name}'s address bar.`)}">${ICON.copy}Copy ${esc(b.extensionsPage)}</button></div>`;
+      html += section(`br-${b.id}`, b.name, `<span class="led ${b.open ? "green" : ""}"></span> ${esc(state_)}`, buttons + b.profiles.map((p) => profileRow(b, p)).join(""));
+    }
+    return html;
+  }
+
+  async function loadBrowsers(fresh = false) {
+    if (state.browsersLoading) return;
+    state.browsersLoading = true;
+    if (state.tab === "running" && state.runningTab === "browsers") render();
+    try {
+      state.browsers = await invoke("get_browsers", { fresh });
+      state.browsersAt = Date.now();
+    } catch (e) {
+      console.warn("no browsers", e);
+    }
+    state.browsersLoading = false;
+    if (state.tab === "running" && state.runningTab === "browsers") render();
   }
 
   // ------------------------------------------------------------ running: startup
@@ -2793,6 +2893,18 @@
         openRunningTab(el.dataset.tab);
         $("#page").scrollTop = 0;
         render();
+        break;
+      case "profile-open":
+        state.browserOpen = state.browserOpen === el.dataset.key ? null : el.dataset.key;
+        render();
+        break;
+      case "ext-off":
+        if (state.extOff.has(el.dataset.key)) state.extOff.delete(el.dataset.key);
+        else state.extOff.add(el.dataset.key);
+        render();
+        break;
+      case "browsers-again":
+        loadBrowsers(true);
         break;
       case "prog-expand":
         state.progOpen = state.progOpen === el.dataset.id ? null : el.dataset.id;

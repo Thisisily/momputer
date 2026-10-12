@@ -459,6 +459,44 @@
     { path: "D:\\", name: "D: (Games)", kind: "drive", on: false, total: 2000 * GB, free: 640 * GB },
     { path: "F:\\", name: "F: (Backup)", kind: "drive", on: true, total: 4000 * GB, free: 1900 * GB },
   ];
+  // Browsers: profiles and their extensions (made-up profile names).
+  const ext = (name, kind, on, can, saved, extra = {}) => ({
+    id: name.toLowerCase().replace(/[^a-z]/g, "").padEnd(32, "a").slice(0, 32), name, description: extra.description || "", version: "1.0", on, app: !!extra.app, kind,
+    can, everywhere: can[0] === "Reads and changes every site you visit", added: now - (extra.addedDays || 400) * 86400, lastSaved: saved == null ? null : now - saved * 86400,
+    size: (extra.mb || 4) * MB, page: "chrome://extensions/?id=x",
+  });
+  const everywhere = "Reads and changes every site you visit";
+  const browsers = [
+    {
+      id: "chrome", name: "Chrome", open: true, openSecs: 2 * 86400 + 3 * 3600, processes: 78, mem: 13 * GB, restart: "chrome://restart", extensionsPage: "chrome://extensions",
+      profiles: [
+        { dir: "Default", path: "C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\User Data\\Default", name: "Personal", lastUsed: now - 3000, size: 13.4 * GB, cache: 1.9 * GB, history: 123 * MB, cookiesBytes: 2.1 * MB, cookies: null, cookieSites: null,
+          notes: [
+            { level: "tip", text: "15 Chrome apps AudioSauna, Beatlab, Coggle, Desmos and 11 more: Chrome stopped running Chrome apps on Windows, so they just sit there." },
+            { level: "tip", text: "2 ad blockers do the same job twice: AdBlock, AdBlocker Ultimate. One is enough, and each slows every page." },
+            { level: "tip", text: "18 extensions can read and change every site you visit, your bank's included. Keep the ones you trust and use." },
+          ],
+          extensions: [
+            ext("AdBlock", "Ad blocker", true, [everywhere, "Blocks or changes what pages load"], 0, { mb: 22 }),
+            ext("AdBlocker Ultimate", "Ad blocker", true, [everywhere, "Blocks or changes what pages load"], 0, { mb: 9 }),
+            ext("Grammarly", "AI assistant", true, [everywhere, "Sees your open tabs and their addresses"], 0, { mb: 31 }),
+            ext("Phantom", "Crypto wallet", true, [everywhere], 0, { mb: 48 }),
+            ext("VPN for Chrome", "VPN", true, ["Sends your browsing through its own servers", everywhere], 0, { mb: 6 }),
+            ext("Desmos Graphing Calculator", null, true, [], null, { app: true, mb: 1 }),
+            ext("Sketchpad", null, true, [], null, { app: true, mb: 2 }),
+            ext("Nami", "Crypto wallet", true, [everywhere], 321, { mb: 12 }),
+            ext("Toby: Tab Manager", "Tab manager", false, ["Sees your open tabs and their addresses"], null, { mb: 3 }),
+          ] },
+        { dir: "Profile 3", path: "C:\\x", name: "Work", lastUsed: now - 3 * 86400, size: 6.9 * GB, cache: 5.5 * GB, history: 96 * MB, cookiesBytes: 1.2 * MB, cookies: null, cookieSites: null, notes: [],
+          extensions: [ext("Claude", "AI assistant", true, [everywhere], 0, { mb: 12 })] },
+        { dir: "Profile 7", path: "C:\\x", name: "Your Chrome (Profile 7)", lastUsed: now - 214 * 86400, size: 536 * MB, cache: 493 * MB, history: 320 * 1024, cookiesBytes: 400 * 1024, cookies: null, cookieSites: null, notes: [{ level: "tip", text: "Not used in 214 days. If it's an old profile, removing it frees its space." }], extensions: [] },
+      ],
+    },
+    {
+      id: "brave", name: "Brave", open: false, openSecs: 0, processes: 0, mem: 0, restart: "brave://restart", extensionsPage: "brave://extensions",
+      profiles: [{ dir: "Default", path: "C:\\x", name: "Profile 1", lastUsed: now - 246 * 86400, size: 145 * MB, cache: 69 * MB, history: 192 * 1024, cookiesBytes: 300 * 1024, cookies: 412, cookieSites: 63, notes: [], extensions: [ext("uBlock Origin", "Ad blocker", true, [everywhere], 240)] }],
+    },
+  ];
   const startup = [
     { id: "run-user:RazerAppEngine", name: "Razer Synapse", entry: "RazerAppEngine", command: '"C:\\Program Files\\Razer\\RazerAppEngine\\RazerAppEngine.exe" --autostart', exe: "C:\\Program Files\\Razer\\RazerAppEngine\\RazerAppEngine.exe", location: "Run (you)", enabled: true, yours: true, running: true, mem: 509 * MB, cpu: 0.6, keep: null },
     { id: "run-user:Steam", name: "Steam", entry: "Steam", command: '"C:\\Program Files (x86)\\Steam\\steam.exe" -silent', exe: "C:\\Program Files (x86)\\Steam\\steam.exe", location: "Run (you)", enabled: true, yours: true, running: true, mem: 874 * MB, cpu: 0.3, keep: null },
@@ -699,6 +737,7 @@
     files_places: () => JSON.parse(JSON.stringify(places)),
     set_files_place: ({ path, on }) => ((places.find((x) => x.path === path).on = on), JSON.parse(JSON.stringify(places))),
     add_files_place: async () => (await wait(300), places.push({ path: "E:\\Photos", name: "Photos", kind: "added", on: true, total: 0, free: 0 }), JSON.parse(JSON.stringify(places))),
+    get_browsers: async () => (await wait(700), JSON.parse(JSON.stringify(browsers))),
     get_programs: async () => (await wait(250), JSON.parse(JSON.stringify(programs))),
     program_action: async ({ id, action }) => {
       await wait(action === "restart" ? 1800 : 700);
