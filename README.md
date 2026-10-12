@@ -266,6 +266,7 @@ Privacy policy: This program will not transfer any information to other networke
 - [idiomorph](https://github.com/bigskysoftware/idiomorph) (0BSD), so lists update in place.
 - [Geist](https://vercel.com/font) and [Doto](https://github.com/oliverlalan/Doto) fonts, under the SIL Open Font License.
 - [Lucide](https://lucide.dev) icons (ISC).
+- [three.js](https://threejs.org) (MIT), for something you'll have to find.
 
 ## Made by
 

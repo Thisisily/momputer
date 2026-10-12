@@ -63,7 +63,6 @@
     roomBusy: false,
     roomErrors: {}, // rooms mom can't tidy, and why (a drive, Windows, gone)
     knocked: false, // knocked on mom's door
-    game: null, // Lights out, in mom's room
     version: "",
     rules: null,
     rulesDraft: null,
@@ -1498,142 +1497,177 @@
 
   // ------------------------------------------------------------ mom's room (an easter egg)
   //
-  // Point mom at her own folder and she won't have it tidied. Knock, though, and she lets you in,
-  // as long as you help with the lights your agents left on.
+  // Point mom at her own folder and she won't have it tidied. Knock, though, and she lets you in
+  // to tidy it with her: a little 3D room (room3d.js), six chores, about a minute.
 
-  const GAME_SECS = 30;
-  const LIGHTS = 12;
-  const LEFTOVERS = ["vite", "bun dev", "next dev", "tail -f", "node", "headless", "jest --watch", "ngrok", "http.server", "tsc -w", "uvicorn", "storybook", "watch", "cargo run"];
-  const BEST_KEY = "mom.lightsOutBest";
-  function bestScore() {
+  const ROOM_BEST = "mom.roomBest";
+  function roomBest() {
     try {
-      return Number(localStorage.getItem(BEST_KEY)) || 0;
+      return Number(localStorage.getItem(ROOM_BEST)) || 0;
     } catch {
       return 0;
     }
   }
-  const GAME_LINES = {
-    A: "Spotless. Who are you and what have you done with my kid?",
-    B: "Not bad at all. Only a couple left on.",
-    C: "I can see the floor. Barely.",
-    D: "Bit of a mess. We'll practise before dinner c:",
-    F: "Let's do this one together c:",
+  const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  const CHORE_LINES = {
+    books: "Alphabetical? Never mind. It'll do.",
+    bed: "Hospital corners. I raised you right.",
+    coffee: "Oh, you shouldn't have. c:",
+    laundry: "In the basket, not next to it. Good.",
+    picture: "Is that me? What a lovely frame.",
+    curtains: "Let the light in. Much better.",
   };
-  let gameTimer = null;
+  let playroom = null; // { el, game, chores, started, timer, done }
 
   function momsRoom() {
-    const g = state.game;
-    let body;
-    if (!state.knocked) {
-      body = `<div class="door"><div class="door-sign dot">knock<br>first</div>
+    const best = roomBest();
+    const body = !state.knocked
+      ? `<div class="door"><div class="door-sign dot">knock<br>first</div>
           <p>This is mom's room: her settings, her journal and the house rules. Nobody tidies mom's room.</p>
-          <button class="primary" data-act="knock">Knock</button></div>`;
-    } else if (!g) {
-      const best = bestScore();
-      body = `<div class="game-intro"><h3 class="dot game-title">lights out</h3>
-          <p>Your agents left the lights on again. Tap each one off before it stays on. You've got ${GAME_SECS} seconds, and they get quicker.</p>
-          ${best ? `<p class="dim num">Your best: ${best}</p>` : ""}
-          <button class="primary" data-act="game-start">Start</button></div>`;
-    } else if (g.phase === "over") {
-      const total = g.hits + g.missed;
-      const ratio = total ? g.hits / total : 0;
-      const letter = ratio >= 0.95 ? "A" : ratio >= 0.85 ? "B" : ratio >= 0.7 ? "C" : ratio >= 0.5 ? "D" : "F";
-      body = `<div class="game-over">${grade(letter, 4)}<p class="said">${esc(GAME_LINES[letter])}</p>
-          <p class="num">${plural(g.hits, "light")} turned off, ${g.missed} left on.${g.best ? " A new best!" : ` Your best: ${bestScore()}.`}</p>
-          <div class="button-row"><button class="primary" data-act="game-start">Again</button><button class="secondary" data-act="close-room">Leave mom's room</button></div></div>`;
-    } else {
-      const left = Math.max(0, Math.ceil((g.ends - Date.now()) / 1000));
-      const cells = g.cells
-        .map(
-          (c, i) => `<button class="light${c.on ? " on" : ""}${c.hit ? " hit" : ""}" data-act="light" data-i="${i}" aria-label="${c.on ? `Turn off ${esc(c.label)}` : "Dark"}">
-            <span class="led${c.on ? " red" : ""}"></span><span class="light-label">${c.on ? esc(c.label) : ""}</span></button>`
-        )
-        .join("");
-      body = `<div class="game-head num"><span><strong>${g.hits}</strong> off</span><span class="game-clock">${left}s</span><span><strong>${g.missed}</strong> left on</span></div>
-        <div class="lights">${cells}</div>`;
+          <button class="primary" data-act="knock">Knock</button></div>`
+      : `<div class="door"><div class="door-sign dot open">come<br>in</div>
+          <p>She'll let you help, just this once.${best ? ` Your best: ${mmss(best)}.` : ""}</p>
+          <button class="primary" data-act="enter-room">Go in</button></div>`;
+    return `<div class="room-title"><h2>Mom's room</h2>${grade("A", 4)}<p class="said">My room? Of course it's spotless. I'm your mother. c:</p></div>
+      <div class="moms-room">${body}</div>`;
+  }
+
+  /** The playroom: a card over the whole widget with the room in it. */
+  async function enterRoom() {
+    if (playroom) return;
+    const el = document.createElement("div");
+    el.className = "playroom";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-label", "Mom's room");
+    el.innerHTML = `<div class="pr-head">
+        <span class="pr-mom" aria-hidden="true">${window.momFace ? window.momFace.svg("look") : ""}</span>
+        <div class="pr-title"><strong class="dot">mom's room</strong><span class="pr-said" aria-live="polite">Help me tidy up, sweetie.</span></div>
+        <span class="pr-time dot num">0:00</span>
+        <button class="icon-btn" data-act="leave-room" aria-label="Leave mom's room">${ICON.close}</button>
+      </div>
+      <div class="pr-stage"><span class="pr-point" hidden></span></div>
+      <div class="pr-foot"><p class="pr-hint">Opening the door…</p><div class="pr-chores"></div></div>
+      <div class="pr-end" hidden></div>`;
+    document.body.appendChild(el);
+    playroom = { el, started: Date.now(), done: false };
+    if (moving()) G.fromTo(el, { opacity: 0, scale: 0.97 }, { opacity: 1, scale: 1, duration: 0.35, ease: "power2.out" });
+    let room;
+    try {
+      room = await import("./room3d.js");
+    } catch (e) {
+      console.error("mom's room", e);
     }
-    const playing = g && g.phase === "on";
-    return `<div class="room-title"><h2>Mom's room</h2>${grade("A", 4)}${playing ? "" : `<p class="said">My room? Of course it's spotless. I'm your mother. c:</p>`}</div>
-      <div class="moms-room" id="moms-room">${body}</div>`;
-  }
-
-  function drawGame() {
-    if (state.tab === "rooms" && state.roomOpen && (state.rooms[state.roomOpen] || {}).moms) render();
-  }
-
-  function startGame() {
-    clearInterval(gameTimer);
-    const now = Date.now();
-    state.game = { phase: "on", ends: now + GAME_SECS * 1000, hits: 0, missed: 0, streak: 0, next: now + 500, cells: Array.from({ length: LIGHTS }, () => ({ on: false, label: "", until: 0, hit: 0 })) };
-    gameTimer = setInterval(tickGame, 100);
-    drawGame();
-    const board = $("#moms-room");
-    if (board) board.scrollIntoView({ block: "nearest", behavior: calm() ? "auto" : "smooth" });
-  }
-
-  function tickGame() {
-    const g = state.game;
-    if (!g || g.phase !== "on") return clearInterval(gameTimer);
-    // Wandered off (another tab, out of the room, window hidden): the game waits at the door.
-    if (document.hidden || state.tab !== "rooms" || !state.roomOpen) {
-      clearInterval(gameTimer);
-      state.game = null;
+    if (!playroom || playroom.el !== el) return;
+    const game = room && room.play(el.querySelector(".pr-stage"), { chore: choreDone, done: roomDone });
+    if (!game) {
+      leaveRoom();
+      toast("Mom's room needs 3D graphics, and this PC won't draw them right now.", true);
       return;
     }
-    const now = Date.now();
-    const t = 1 - Math.max(0, g.ends - now) / (GAME_SECS * 1000); // 0 at the start, 1 at the end
-    for (const c of g.cells) {
-      if (c.on && now > c.until) {
-        c.on = false;
-        g.missed++;
-        g.streak = 0;
-        if (g.missed % 3 === 0) react("shocked", 900);
-      }
-      if (c.hit && now > c.hit) c.hit = 0;
-    }
-    if (now >= g.next && now < g.ends) {
-      const dark = g.cells.map((c, i) => (c.on || c.hit ? -1 : i)).filter((i) => i >= 0);
-      if (dark.length) {
-        const c = g.cells[dark[Math.floor(Math.random() * dark.length)]];
-        c.on = true;
-        c.label = LEFTOVERS[Math.floor(Math.random() * LEFTOVERS.length)];
-        c.until = now + 1800 - 900 * t;
-      }
-      g.next = now + 760 - 440 * t;
-    }
-    if (now >= g.ends) return endGame();
-    drawGame();
+    Object.assign(playroom, { game, chores: room.CHORES, started: Date.now(), touched: Date.now(), timer: setInterval(drawClock, 250) });
+    // Nothing tapped for a while: a ring points at the next thing to tidy.
+    el.addEventListener("pointerdown", () => {
+      if (!playroom) return;
+      playroom.touched = Date.now();
+      el.querySelector(".pr-point").hidden = true;
+    });
+    el.addEventListener("pointerover", (e) => {
+      const chip = e.target.closest("[data-chore]");
+      if (chip && playroom && playroom.game) playroom.game.highlight(chip.dataset.chore, true);
+    });
+    el.addEventListener("pointerout", (e) => {
+      const chip = e.target.closest("[data-chore]");
+      if (chip && playroom && playroom.game) playroom.game.highlight(chip.dataset.chore, false);
+    });
+    el.querySelector(".pr-chores").innerHTML = room.CHORES.map(
+      (c) => `<button class="pr-chore" data-act="pr-chore" data-chore="${c.id}" aria-label="${esc(c.label)}"><span class="led"></span><span class="pr-label">${esc(c.label)}</span><span class="pr-n num"></span></button>`
+    ).join("");
+    drawChores();
   }
 
-  function hitLight(i) {
-    const g = state.game;
-    const c = g && g.phase === "on" ? g.cells[i] : null;
-    if (!c || !c.on) return;
-    c.on = false;
-    c.hit = Date.now() + 260;
-    g.hits++;
-    g.streak++;
-    if (g.streak % 8 === 0) react("delighted", 1100);
-    drawGame();
+  function drawClock() {
+    if (!playroom || playroom.done) return;
+    const t = playroom.el.querySelector(".pr-time");
+    if (t) t.textContent = mmss((Date.now() - playroom.started) / 1000);
+    const ring = playroom.el.querySelector(".pr-point");
+    if (Date.now() - playroom.touched > 6000 && ring.hidden) {
+      const n = playroom.game.count();
+      const next = playroom.chores.find((c) => n[c.id] < c.of);
+      const at = next && playroom.game.spot(next.id);
+      if (at) {
+        ring.style.left = `${at.x}px`;
+        ring.style.top = `${at.y}px`;
+        ring.hidden = false;
+      }
+    }
   }
 
-  function endGame() {
-    const g = state.game;
-    clearInterval(gameTimer);
-    for (const c of g.cells) {
-      if (c.on) g.missed++;
-      c.on = false;
+  function drawChores() {
+    if (!playroom || !playroom.game) return;
+    const n = playroom.game.count();
+    let next = null;
+    for (const c of playroom.chores) {
+      const chip = playroom.el.querySelector(`[data-chore="${c.id}"]`);
+      const done = n[c.id] >= c.of;
+      if (!done && !next) next = c;
+      chip.classList.toggle("done", done);
+      chip.querySelector(".led").className = `led${done ? " green" : ""}`;
+      chip.querySelector(".pr-n").textContent = c.of > 1 ? `${n[c.id]}/${c.of}` : "";
+      chip.disabled = done;
     }
-    g.phase = "over";
-    g.best = g.hits > bestScore();
-    if (g.best) {
+    playroom.el.querySelector(".pr-hint").textContent = next ? next.hint : "All done. Look at that.";
+  }
+
+  function momSays(text, mood) {
+    if (!playroom) return;
+    playroom.el.querySelector(".pr-said").textContent = text;
+    const face = playroom.el.querySelector(".pr-mom");
+    if (face && window.momFace && mood) {
+      face.innerHTML = window.momFace.svg(mood);
+      clearTimeout(playroom.faceTimer);
+      playroom.faceTimer = setTimeout(() => playroom && !playroom.done && (face.innerHTML = window.momFace.svg("look")), 1800);
+    }
+  }
+
+  function choreDone(id, n, of) {
+    drawChores();
+    if (n >= of) momSays(CHORE_LINES[id] || "Good.", "delighted");
+    else if (n === 1) momSays("Keep going, sweetie.", "wink");
+  }
+
+  function roomDone() {
+    if (!playroom) return;
+    playroom.done = true;
+    clearInterval(playroom.timer);
+    const took = Math.max(1, Math.round((Date.now() - playroom.started) / 1000));
+    const best = roomBest();
+    const record = !best || took < best;
+    if (record) {
       try {
-        localStorage.setItem(BEST_KEY, String(g.hits));
+        localStorage.setItem(ROOM_BEST, String(took));
       } catch {}
     }
-    const total = g.hits + g.missed;
-    react(total && g.hits / total >= 0.85 ? "kiss" : total && g.hits / total >= 0.5 ? "wink" : "dizzy", 3000);
-    drawGame();
+    playroom.el.querySelector(".pr-time").textContent = mmss(took);
+    momSays("Spotless. Who are you and what have you done with my kid?", "kiss");
+    const end = playroom.el.querySelector(".pr-end");
+    end.innerHTML = `<p class="pr-end-big dot num">${mmss(took)}</p>
+      <p>${record && best ? "A new best. I'm framing this." : record ? "Spotless, and in record time." : `Spotless. Your best is ${mmss(best)}.`}</p>
+      <div class="button-row"><button class="primary" data-act="room-again">Again</button><button class="secondary" data-act="leave-room">Back to the widget</button></div>`;
+    end.hidden = false;
+    if (moving()) G.fromTo(end, { y: 30, opacity: 0 }, { y: 0, opacity: 1, duration: 0.45, ease: "back.out(1.6)" });
+    react("kiss", 3200);
+  }
+
+  function leaveRoom() {
+    if (!playroom) return;
+    const { el, game, timer, faceTimer } = playroom;
+    playroom = null;
+    clearInterval(timer);
+    clearTimeout(faceTimer);
+    if (game) game.close();
+    if (moving()) G.to(el, { opacity: 0, duration: 0.2, onComplete: () => el.remove() });
+    else el.remove();
+    render();
   }
 
   async function loadRooms() {
@@ -2491,30 +2525,34 @@
       }
       case "knock":
         state.knocked = true;
-        state.game = null;
         react("shocked", 1100);
+        render();
         setTimeout(() => {
           react("wink", 2600);
-          say("Oh, it's you. Come in, but you're helping with the lights.", 3800);
+          say("Oh, it's you. Come in, but you're helping.", 3800);
+          enterRoom();
         }, 1150);
-        render();
         break;
-      case "game-start":
-        startGame();
+      case "enter-room":
+        enterRoom();
         break;
-      case "light":
-        if (e.detail === 0) hitLight(Number(el.dataset.i)); // the keyboard; a tap is caught on pointerdown
+      case "leave-room":
+        leaveRoom();
+        break;
+      case "room-again":
+        leaveRoom();
+        enterRoom();
+        break;
+      case "pr-chore":
+        if (playroom && playroom.game) playroom.game.act(el.dataset.chore);
         break;
       case "open-room":
         state.knocked = false;
-        state.game = null;
         state.roomOpen = el.dataset.room;
         render();
         if (!state.rooms[state.roomOpen]) inspectRoom(state.roomOpen);
         break;
       case "close-room":
-        clearInterval(gameTimer);
-        state.game = null;
         state.roomOpen = null;
         render();
         break;
@@ -2631,21 +2669,13 @@
     }
   });
 
-  // Lights go off the moment they're touched, not when the click lands (they move fast).
-  document.addEventListener("pointerdown", (e) => {
-    const light = e.target.closest("[data-act=light]");
-    if (light) {
-      e.preventDefault();
-      hitLight(Number(light.dataset.i));
-    }
-  });
-
   document.addEventListener("keydown", (e) => {
     if ((e.key === "Enter" || e.key === " ") && e.target.matches("[role=button]")) {
       e.preventDefault();
       e.target.click();
     }
-    if (e.key === "Escape" && state.sheet) closeSheet();
+    if (e.key === "Escape" && playroom) leaveRoom();
+    else if (e.key === "Escape" && state.sheet) closeSheet();
   });
 
   document.addEventListener("input", (e) => {
@@ -2716,7 +2746,7 @@
   const CONTROLS = "button, a, input, textarea, select, label, [role=button], [data-act], .md, .sheet-panel, .page";
   document.addEventListener("mousedown", (e) => {
     if (e.button !== 0 || !appWindow || e.target.closest("#face") || e.target.closest(CONTROLS)) return;
-    if (!e.target.closest(".titlebar, .note, .tabs")) return;
+    if (!e.target.closest(".titlebar, .note, .tabs, .pr-head")) return;
     e.preventDefault();
     appWindow.startDragging().catch(() => {});
   });
