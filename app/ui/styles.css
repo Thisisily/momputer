@@ -1020,6 +1020,75 @@ button.row-name:hover {
   border-bottom: 1px solid var(--line);
 }
 
+/* Programs: every button on a line of its own under the name. */
+.row.prog {
+  grid-template-areas:
+    "name nums act"
+    "meta nums2 act"
+    "btns btns btns"
+    "detail detail detail";
+}
+
+.row-btns {
+  grid-area: btns;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.row-btns .secondary {
+  height: 26px;
+  padding: 0 11px;
+  font-size: 12px;
+}
+
+.row-btns .secondary .ico {
+  width: 12px;
+  height: 12px;
+}
+
+.row-btns .link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 4px;
+  font-size: 12px;
+}
+
+.row-btns .link-btn .ico {
+  width: 12px;
+  height: 12px;
+}
+
+/* This PC: what it's made of, a line each. */
+.pc {
+  display: grid;
+  padding: 4px 0;
+}
+
+.pc-row {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+
+.pc-row:last-child {
+  border-bottom: 0;
+}
+
+.pc-key {
+  color: var(--ink-3);
+}
+
+.pc-val {
+  overflow-wrap: anywhere;
+}
+
 /* A restart that ends agent work says so before the second press. */
 .fix-stack {
   display: grid;

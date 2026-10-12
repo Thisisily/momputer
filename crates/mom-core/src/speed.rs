@@ -70,6 +70,9 @@ pub struct Gpu {
     /// Watts.
     pub power_limit: Option<f32>,
     pub default_power_limit: Option<f32>,
+    /// PCI Express lanes it uses now, and the most it can.
+    pub link_width: Option<u32>,
+    pub link_width_max: Option<u32>,
 }
 
 /// Looks the machine over. The event logs, installed tools and graphics card are read at most
@@ -91,6 +94,12 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
     findings.extend(tuners(&slow.tuners, table, slow.gpu.as_ref(), trouble));
     findings.extend(extras(table, now));
     findings.extend(slow.extensions.as_ref().and_then(too_many_extensions));
+    // From the Windows checkup (gathered on its own thread): what holds the PC back.
+    if let Some(sys) = crate::system::cached() {
+        for c in sys.checks.into_iter().filter(|c| c.level != "ok" && (matches!(c.area, "Performance" | "Hardware") || c.id == "two-antivirus" || c.id == "broken-services")) {
+            findings.push(Finding { id: c.id, level: c.level, title: c.title, detail: c.detail, fix: c.fix });
+        }
+    }
     let starting = crate::health::startup_apps(paths).iter().filter(|a| a.enabled).count();
     if starting >= 12 {
         findings.push(Finding {
@@ -305,7 +314,7 @@ fn memory_full(programs: &[Program]) -> Option<Finding> {
 }
 
 /// Where to get a graphics driver, by who made the card.
-fn driver_page(card: &str) -> Option<Fix> {
+pub(crate) fn driver_page(card: &str) -> Option<Fix> {
     let c = card.to_ascii_lowercase();
     let (who, url) = if c.contains("nvidia") || c.contains("geforce") || c.contains("rtx") || c.contains("gtx") || c.starts_with("nvlddmkm") {
         ("NVIDIA", "https://www.nvidia.com/en-us/drivers/")
@@ -403,7 +412,7 @@ fn parse_events(xml: &str) -> Vec<Event> {
 }
 
 /// "2026-10-05T03:39:17.1234567Z" -> unix seconds.
-fn parse_time(s: &str) -> Option<u64> {
+pub(crate) fn parse_time(s: &str) -> Option<u64> {
     let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
     let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
     let (hh, mm, ss) = (num(11..13)?, num(14..16)?, num(17..19)?);
@@ -664,6 +673,11 @@ static SLOW: Mutex<Option<Slow>> = Mutex::new(None);
 /// How long the event log, the installed tools and the graphics card are trusted.
 const SLOW_FOR: u64 = 300;
 
+/// The graphics card, as last read (at most five minutes ago).
+pub(crate) fn gpu_now() -> Option<Gpu> {
+    slow_facts(now_secs()).gpu
+}
+
 /// Forgets the slow facts, so the next look reads the event log and the rest again.
 pub fn forget() {
     *SLOW.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -779,7 +793,7 @@ fn too_many_extensions(e: &(String, usize, Vec<String>)) -> Option<Finding> {
 fn read_gpu() -> Option<Gpu> {
     let o = run(
         "nvidia-smi",
-        &["--query-gpu=name,temperature.gpu,utilization.gpu,power.limit,power.default_limit", "--format=csv,noheader,nounits"],
+        &["--query-gpu=name,temperature.gpu,utilization.gpu,power.limit,power.default_limit,pcie.link.width.current,pcie.link.width.max", "--format=csv,noheader,nounits"],
         Duration::from_secs(5),
     )
     .ok()
@@ -797,6 +811,8 @@ fn parse_gpu(text: &str) -> Option<Gpu> {
         busy: f.get(2).and_then(|v| v.parse().ok()),
         power_limit: f.get(3).and_then(|v| v.parse().ok()),
         default_power_limit: f.get(4).and_then(|v| v.parse().ok()),
+        link_width: f.get(5).and_then(|v| v.parse().ok()),
+        link_width_max: f.get(6).and_then(|v| v.parse().ok()),
     })
 }
 
@@ -894,7 +910,7 @@ mod tests {
     #[test]
     fn tuners_say_whether_they_overclock_now() {
         let table = ProcTable::from_procs(vec![fake(1, 0, "explorer.exe", "explorer", 1)], 999);
-        let gpu = Gpu { name: "RTX 2070 SUPER".into(), temp: Some(41), busy: Some(3), power_limit: Some(215.0), default_power_limit: Some(215.0) };
+        let gpu = Gpu { name: "RTX 2070 SUPER".into(), temp: Some(41), busy: Some(3), power_limit: Some(215.0), default_power_limit: Some(215.0), link_width: Some(16), link_width_max: Some(16) };
         let idle = tuners(&["GPU Tweak III".into()], &table, Some(&gpu), false).unwrap();
         assert_eq!(idle.level, "ok");
         assert_eq!(idle.title, "GPU Tweak III is installed, not running");

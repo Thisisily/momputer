@@ -662,6 +662,28 @@
     },
     uninstall_app: async () => (await wait(200), "Atlas Recorder's uninstaller is open. Follow it to the end."),
     get_health: async () => (await wait(150), JSON.parse(JSON.stringify(health))),
+    get_system: async () => (
+      await wait(900),
+      {
+        at: Math.floor(Date.now() / 1000),
+        pc: [
+          ["Processor", "AMD Ryzen 7 3800X 8-Core Processor, 8 cores, 16 threads"],
+          ["Memory", "64 GB: 4 × 16 GB at 2666 MT/s"],
+          ["Graphics", "NVIDIA GeForce RTX 2070 SUPER, driver from 2026, 41 °C"],
+          ["Disks", "Samsung SSD 970 EVO Plus 1TB (932 GB, NVMe SSD, Windows) · WDC WD10EZEX (932 GB, hard disk)"],
+          ["Board", "ASUS TUF B450-PLUS GAMING, BIOS 4604 from 2024"],
+          ["Windows", "Windows 11 Pro 25H2 (build 26200)"],
+        ],
+        checks: [
+          { id: "antivirus", area: "Security", level: "ok", title: "Microsoft Defender protects this PC", detail: "Real-time protection is on and its virus list is up to date.", fix: null },
+          { id: "av-leftover-bitdefender", area: "Security", level: "tip", title: "Bitdefender's antivirus is gone, but its helpers aren't", detail: "Bitdefender Agent still runs at every start, with nothing left for it to look after. Uninstall it from Installed apps.", fix: { label: "Installed apps", kind: "open", value: "ms-settings:appsfeatures", hint: null } },
+          { id: "windows-support", area: "Updates", level: "ok", title: "Windows 11 Pro 25H2 (build 26200) gets security updates", detail: "Until 12 October 2027.", fix: null },
+          { id: "memory-speed", area: "Hardware", level: "warn", title: "Your memory runs at 2666 MT/s, but it's made for 3600", detail: "Crucial BL16G36C16U4BL sticks run at the safe standard speed until their profile is switched on in the BIOS (it's called D.O.C.P.). On a Ryzen, part of the processor runs at memory speed too, so it's real speed. It's one setting and costs nothing. With 4 sticks, if 3600 isn't stable, the next step down is.", fix: null },
+          { id: "broken-services", area: "Registry", level: "warn", title: "1 service is set to start with Windows, but its program is gone", detail: "ASUS Com Service. Windows tries to start it at every boot, waits, and gives up, which slows starting up. Left by a program uninstalled the hard way.", fix: null },
+          { id: "broken-uninstall", area: "Registry", level: "tip", title: "1 program in Windows' app list can't be uninstalled", detail: "Anaconda3 2020.02. Its uninstaller is gone (it was deleted by hand, most likely), so Settings lists it but can't remove it.", fix: { label: "Installed apps", kind: "open", value: "ms-settings:appsfeatures", hint: null } },
+        ],
+      }
+    ),
     get_programs: async () => (await wait(250), JSON.parse(JSON.stringify(programs))),
     program_action: async ({ id, action }) => {
       await wait(action === "restart" ? 1800 : 700);

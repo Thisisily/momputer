@@ -86,6 +86,13 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// What the PC is made of, and whether it's protected, up to date and running at its best
+    /// (memory at its rated speed, Windows on an SSD), plus registry entries that point at
+    /// nothing. Only looks.
+    Pc {
+        #[arg(long)]
+        json: bool,
+    },
     /// Every program running, as one line each (all of Chrome's processes together): CPU,
     /// memory, graphics card and windows. Only looks.
     Programs {
@@ -432,6 +439,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Health { .. })
         | Some(Cmd::Speed { .. })
         | Some(Cmd::Programs { .. })
+        | Some(Cmd::Pc { .. })
         | Some(Cmd::Files { .. })
         | Some(Cmd::Integrations { .. })
         | Some(Cmd::Config)
@@ -772,6 +780,32 @@ fn run(cli: Cli) -> Result<i32> {
                 print_json(&sp)?;
             } else {
                 print_speed(&st, &sp);
+            }
+        }
+        Some(Cmd::Pc { json }) => {
+            let sys = mom_core::system::get(true);
+            if json {
+                print_json(&sys)?;
+            } else {
+                println!("{}", st.bold("THIS PC"));
+                for (k, v) in &sys.pc {
+                    println!("  {}{}", pad(k, 12), v);
+                }
+                for area in ["Security", "Updates", "Hardware", "Performance", "Registry"] {
+                    let list: Vec<_> = sys.checks.iter().filter(|c| c.area == area).collect();
+                    if list.is_empty() {
+                        continue;
+                    }
+                    println!("\n{}", st.bold(&area.to_uppercase()));
+                    for c in list {
+                        let mark = match c.level {
+                            "warn" => st.red("!"),
+                            "tip" => st.yellow("~"),
+                            _ => st.green("✓"),
+                        };
+                        println!("  {mark} {}  {}", st.bold(&c.title), st.dim(&c.detail));
+                    }
+                }
             }
         }
         Some(Cmd::Programs { all, json }) => {

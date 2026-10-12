@@ -25,6 +25,7 @@ pub mod rules;
 pub mod scan;
 pub mod speed;
 pub mod startup;
+pub mod system;
 pub mod tidy;
 pub mod trash;
 pub mod util;

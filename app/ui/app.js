@@ -37,6 +37,8 @@
     progOpen: null, // the program whose details are open
     progConfirm: null, // "id|action" waiting for its second press
     progBusy: null, // { id, action } while mom does it
+    system: null, // the PC, its protection, updates and registry (get_system)
+    systemLoading: false,
     startup: null, // what starts with Windows (get_startup)
     startupAt: 0,
     startupBusy: null,
@@ -632,12 +634,15 @@
     name: (a, b) => a.name.localeCompare(b.name),
   };
 
+  const ACTION_ICON = { restart: "refresh", quit: "close", end: "stop" };
+
   /** The button for one of a program's actions; restart and end ask "Sure?" first. */
-  function progButton(p, action, cls = "stop") {
+  function progButton(p, action) {
     const busy = state.progBusy && state.progBusy.id === p.id;
     const armed = state.progConfirm === `${p.id}|${action}`;
-    const label = busy && state.progBusy.action === action ? ACTION[action][1] : armed ? "Sure?" : ACTION[action][0];
-    return `<button class="${cls}${armed ? " confirm" : ""}" data-act="prog-act" data-id="${esc(p.id)}" data-action="${action}" data-sure="${action === "quit" ? "" : "1"}" ${busy ? "disabled" : ""}>${label}</button>`;
+    const label = busy && state.progBusy.action === action ? ACTION[action][1] : armed ? `Sure? ${ACTION[action][0]}` : ACTION[action][0];
+    const title = { restart: `Close ${p.name} and start it again`, quit: `Ask ${p.name} to close, like its X button`, end: `Stop ${p.name} at once; anything unsaved is lost` }[action];
+    return `<button class="secondary${armed ? " sure" : ""}" data-act="prog-act" data-id="${esc(p.id)}" data-action="${action}" data-sure="${action === "quit" ? "" : "1"}" title="${esc(title)}" ${busy ? "disabled" : ""}>${ICON[ACTION_ICON[action]]}${label}</button>`;
   }
 
   function progDetail(p) {
@@ -653,9 +658,7 @@
         <dt>Running</dt><dd class="num">${plural(p.count, "process", "processes")} since ${esc(clock(p.started))}${p.avgSecs ? `, ${p.avgCpu.toFixed(1)}% of the processor over the last ${esc(ageLong(p.avgSecs))}` : ""}</dd>
         ${rows || `<dt>Hands off</dt><dd>${esc(HANDS_OFF[p.kind] || "Mom leaves this one alone.")}</dd>`}
       </dl>
-      <div class="detail-actions">${p.can.slice(1).map((a) => progButton(p, a, "secondary")).join("")}${
-        p.exe ? `<button class="link-btn" data-act="reveal-path" data-path="${esc(p.exe)}">Show folder</button>` : ""
-      }</div>`;
+`;
   }
 
   function progRow(p) {
@@ -666,12 +669,14 @@
     if (p.windows) bits.push(plural(p.windows, "window"));
     if (p.gpu >= 1) bits.push(`graphics card ${Math.round(p.gpu)}%`);
     if (p.inside) bits.push(`${p.inside} inside`);
-    return `<div class="row${open ? " is-open" : ""}" id="pg-${hash(p.id)}" data-led="${cpu >= 10 ? "red" : p.kind === "app" ? "green" : "off"}">
+    const buttons = p.can.map((a) => progButton(p, a)).join("") + (p.exe && p.can.length ? `<button class="link-btn" data-act="reveal-path" data-path="${esc(p.exe)}">${ICON.folder}Show folder</button>` : "");
+    return `<div class="row prog${open ? " is-open" : ""}" id="pg-${hash(p.id)}" data-led="${cpu >= 10 ? "red" : p.kind === "app" ? "green" : "off"}">
       <button class="row-name" data-act="prog-expand" data-id="${esc(p.id)}" aria-expanded="${open}" title="${esc(p.exe || p.name)}">${esc(p.name)}</button>
       <div class="row-meta"><span class="why">${esc(bits.filter(Boolean).join(" · "))}</span></div>
       <div class="row-nums num">${bytes(p.mem)}</div>
       <div class="row-nums2 num">${cpu >= 0.1 ? `<span class="${cpu >= 10 ? "hot" : ""}">${cpu < 10 ? cpu.toFixed(1) : Math.round(cpu)}%</span>` : ""}</div>
-      <div class="row-act">${p.can.length ? progButton(p, p.can[0]) : ""}</div>
+      <div class="row-act"></div>
+      ${buttons ? `<div class="row-btns">${buttons}</div>` : ""}
       <div class="row-detail">${open ? progDetail(p) : ""}</div>
     </div>`;
   }
@@ -1133,6 +1138,56 @@
       </div>`;
   }
 
+  const SYSTEM_AREAS = [
+    ["Security", "Protection"],
+    ["Updates", "Updates"],
+    ["Hardware", "Hardware"],
+    ["Performance", "Performance"],
+    ["Registry", "Registry leftovers"],
+  ];
+
+  /** What the PC is, and each area of the checkup with a button where there's something to do. */
+  function renderSystem() {
+    const sys = state.system;
+    if (!sys) {
+      return section("pc", "This PC", "", `<p class="empty">${state.systemLoading ? '<span class="led green blink"></span> Looking at its hardware, protection and updates…' : "One moment…"}</p>`);
+    }
+    const pc = sys.pc.map(([k, v]) => `<div class="pc-row"><span class="pc-key">${esc(k)}</span><span class="pc-val">${esc(v)}</span></div>`).join("");
+    let html = section("pc", "This PC", "", `<div class="pc">${pc}</div>`);
+    const order = { warn: 0, tip: 1, ok: 2 };
+    for (const [area, title] of SYSTEM_AREAS) {
+      const list = sys.checks.filter((c) => c.area === area).sort((a, b) => (order[a.level] ?? 1) - (order[b.level] ?? 1));
+      if (!list.length) continue;
+      html += section(
+        `sys-${area.toLowerCase()}`,
+        title,
+        "",
+        list
+          .map(
+            (c) => `<div class="check-row${c.fix ? " stack" : ""}" id="sys-${hash(c.id)}" data-led="${c.level === "warn" ? "red" : c.level === "ok" ? "green" : "off"}">
+          <div class="check-text"><strong>${esc(c.title)}</strong><span>${esc(c.detail)}</span></div>
+          ${c.fix ? fixButton(c.fix) : ""}
+        </div>`
+          )
+          .join("")
+      );
+    }
+    return html;
+  }
+
+  async function loadSystem(fresh = false) {
+    if (state.systemLoading) return;
+    state.systemLoading = true;
+    if (state.tab === "upkeep" && state.upkeepTab === "windows") render();
+    try {
+      state.system = await invoke("get_system", { fresh });
+    } catch (e) {
+      console.warn("no system checkup", e);
+    }
+    state.systemLoading = false;
+    if (state.tab === "upkeep" && state.upkeepTab === "windows") render();
+  }
+
   function renderWindows() {
     const w = state.winsettings;
     let html;
@@ -1161,12 +1216,14 @@
           .join("");
         html += section("win-fixed", "Put back just now", "", `<div class="items">${rows}</div>`);
       }
+      html += renderSystem();
       const areas = [...AREAS, ...new Set(w.map((f) => f.area).filter((a) => !AREAS.includes(a)))];
       for (const area of areas) {
         const list = w.filter((f) => f.area === area);
-        if (list.length) html += section(`win-${area.toLowerCase()}`, area, "", list.map(findingCard).join(""));
+        if (list.length) html += section(`win-${area.toLowerCase()}`, `Settings: ${area}`, "", list.map(findingCard).join(""));
       }
     }
+    if (!w) html += renderSystem();
     html += renderChecks();
     html += `<p class="foot">Mom only changes a setting when you press its button. Your own settings come with an undo; the ones for the whole PC need an administrator, so Windows asks first.</p>`;
     return html;
@@ -2430,7 +2487,10 @@
 
   /** What a tab of Upkeep needs the first time it's shown. */
   function openUpkeepTab(tab) {
-    if (tab === "windows") loadWinsettings();
+    if (tab === "windows") {
+      loadWinsettings();
+      if (!state.system) loadSystem();
+    }
     if (tab === "files" && !state.files) loadFiles();
   }
 
@@ -2776,6 +2836,7 @@
         break;
       case "win-refresh":
         loadWinsettings(true);
+        loadSystem(true);
         break;
       case "win-fix": {
         const id = el.dataset.id;

@@ -877,6 +877,13 @@ async fn get_speed(fresh: bool, s: State<'_, S>) -> Res<mom_core::speed::Speed> 
     .map_err(err)
 }
 
+/// The rest of the Windows checkup: hardware, security, updates, registry. Several seconds the
+/// first time (or with `fresh`); kept for half an hour.
+#[tauri::command]
+async fn get_system(fresh: bool) -> Res<mom_core::system::System> {
+    tauri::async_runtime::spawn_blocking(move || mom_core::system::get(fresh)).await.map_err(err)
+}
+
 /// Every program running, as one line each.
 #[tauri::command]
 async fn get_programs(s: State<'_, S>) -> Res<Vec<mom_core::programs::Program>> {
@@ -1143,7 +1150,7 @@ fn open_url(url: String, app: AppHandle) -> Res<()> {
     // Where to get a graphics driver, from Speed; and Windows Security.
     let driver_page = ["https://www.nvidia.com/en-us/drivers/", "https://www.amd.com/en/support/download/drivers.html", "https://www.intel.com/content/www/us/en/support/detect.html"]
         .contains(&url.as_str());
-    let security = url == "windowsdefender:";
+    let security = url == "windowsdefender:" || url == "windowsdefender://network/";
     // The author's other projects, from the About sheet.
     let author = ["https://getmarsell.com", "https://ilisium.xyz"].iter().any(|site| url == *site || url.starts_with(&format!("{site}/")));
     if !(local || codex_thread || settings_page || author || driver_page || security || url.starts_with("https://github.com/")) {
@@ -1243,6 +1250,7 @@ fn main() {
             get_health,
             get_speed,
             get_programs,
+            get_system,
             program_action,
             get_startup,
             set_startup,

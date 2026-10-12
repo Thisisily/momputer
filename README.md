@@ -77,6 +77,7 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
       <h3>A checkup for your PC</h3>
       <p>Free space on every drive as a dot meter that turns red when it's nearly full, how much memory is in use and by whom, how long since you restarted, whether Windows is waiting to finish an update, whether Storage Sense is on, and every app that starts with Windows.</p>
       <p>Each tip has a button straight to the right Windows Settings page. Apps you haven't opened in a year (judged by when Windows saw you start them and when their data last changed) are listed with an Uninstall button that opens their own uninstaller. Runtimes, drivers, terminal tools, wallets and messengers are never listed.</p>
+      <p><b>This PC</b>: what it's made of, and whether it runs at its best and is looked after. Memory running below the speed it's made for (read from the sticks' part numbers, with what the BIOS setting is called on your board), sticks sharing one channel, Windows on a hard disk, a disk that says it's failing, a graphics card in a slow slot, an old BIOS. Which antivirus really protects you (from Defender itself, not Security Center's old records), two scanning at once, half-uninstalled ones still running their services, the firewall, memory integrity and Secure Boot. Whether your Windows version still gets security updates, updates paused or switched off by a tweak, when the last one installed, a restart waiting, an old graphics driver. And registry leftovers: right-click menu entries for programs that are gone (they slow the menu), services set to start whose program is gone (they slow starting up), apps Settings can't uninstall, and program shortcuts to nothing.</p>
       <p><b>Windows settings</b> that drifted over the years: old speed-up tweaks that do nothing today (a fixed page file, XP-era memory values), services switched off, a screen running below its refresh rate, a proxy nobody answers, and leftovers pointing at things that are gone (PATH folders, variables, startup entries). Each says what it does to you now and how Windows ships it. Fixes to your own settings are backed up and can be undone; the ones that need an administrator put back Windows' default, and Windows asks first.</p>
     </td>
   </tr>
@@ -138,6 +139,7 @@ mom trash clean all    take out the safe trash (never the Recycle Bin or your ow
 mom health             drives, memory, restarts, Storage Sense and startup apps
 mom speed              what's slowing the PC down, and what's busy right now
 mom programs           every program running, one line each (only looks)
+mom pc                 what the PC is, and its protection, updates, hardware and registry leftovers
 mom files              copies of the same file, and big files nobody opened in a year (only looks)
 mom settings           Windows settings that drifted from the defaults (fix <id>, undo <id>)
 mom tidy <folder>      grade a folder and list what to fix (--apply, --prompt)

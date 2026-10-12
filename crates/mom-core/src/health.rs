@@ -429,6 +429,11 @@ pub fn startup_apps(paths: &Paths) -> Vec<StartupApp> {
     out
 }
 
+/// Windows is waiting for a restart to finish installing something.
+pub(crate) fn reboot_pending() -> bool {
+    os::reboot_pending()
+}
+
 /// Reading the registry, for other parts of mom (installed programs, say).
 #[cfg(windows)]
 pub(crate) mod reg {
