@@ -35,7 +35,7 @@
     "category": "Utility",
     "shortDescription": "A mom for your AI",
     "longDescription": "Shows every runtime your AI agents left running, who started it, and cleans up after them.",
-    "copyright": "MIT",
+    "copyright": "Copyright (c) 2026 Ilya Arbabi",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

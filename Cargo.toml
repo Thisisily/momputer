@@ -6,7 +6,7 @@ default-members = ["crates/mom-core", "crates/mom-cli"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "PolyForm-Noncommercial-1.0.0"
 authors = ["momputer contributors"]
 repository = "https://github.com/Thisisily/momputer"
 rust-version = "1.90"

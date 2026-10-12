@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>momputer: a mom for your AI</title>
+  <meta name="description" content="A little Windows widget that finds the dev servers, watchers and junk files Claude Code, Codex and friends leave behind, and cleans up after them. Download it and install it in three steps.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#ececec" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="momputer: a mom for your AI">
+  <meta property="og:description" content="She finds what Claude Code, Codex and friends leave running, tells you who left it, and cleans up after them. For Windows 10 and 11.">
+  <meta property="og:image" content="https://thisisily.github.io/momputer/og.png">
+  <meta property="og:image:alt" content="Mom, a cartoon granny with her hair in a bun and giant round glasses, next to the dot-matrix word momputer">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Doto:ROND,wght@100,700..900&family=Geist:wght@400..700&family=Geist+Mono:wght@400..600&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#install">Skip to how to install</a>
+
+  <header class="bar wrap">
+    <a class="brand" href="./" aria-label="momputer home">
+      <span class="led green" aria-hidden="true"></span>
+      <span class="wordmark dot">momputer</span>
+    </a>
+    <nav class="nav" aria-label="On this page">
+      <a href="#install" class="wide-only">Install</a>
+      <a href="#faq" class="wide-only">Questions</a>
+      <a href="https://github.com/Thisisily/momputer" class="gh">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.17c-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+        <span>GitHub</span>
+      </a>
+    </nav>
+  </header>
+
+  <main class="wrap">
+    <section class="hero card" aria-labelledby="title">
+      <div class="hero-text">
+        <div class="hello">
+          <div class="screen"><img src="mom.svg" width="112" height="112" alt="Mom: a cartoon granny with her hair in a bun and giant round glasses, smiling"></div>
+          <p class="wordmark-big dot" aria-hidden="true">momputer</p>
+        </div>
+        <h1 id="title">A mom for your AI.</h1>
+        <p class="lead">A little Windows widget that finds the dev servers, watchers and junk files Claude Code, Codex and friends leave behind, tells you who left them, and cleans up after them.</p>
+
+        <div class="get">
+          <a class="primary" id="dl" href="https://github.com/Thisisily/momputer/releases/latest">
+            <span class="led" id="dl-led" aria-hidden="true"></span>
+            <span id="dl-label">Download for Windows</span>
+          </a>
+          <p class="meta" id="dl-meta" aria-live="polite">Windows 10 and 11, 64-bit</p>
+          <p class="meta" id="dl-alt" hidden></p>
+          <p class="hint" id="not-windows" hidden>momputer is for Windows PCs. Open this page on yours to download it.</p>
+        </div>
+
+        <ul class="lights" aria-label="In short">
+          <li><span class="led green" aria-hidden="true"></span>Free for personal use</li>
+          <li><span class="led green" aria-hidden="true"></span>Never goes online</li>
+          <li><span class="led green" aria-hidden="true"></span>Asks before it cleans</li>
+        </ul>
+      </div>
+
+      <figure class="shot">
+        <img src="screenshot.png" width="840" height="1520" alt="The widget: mom saying 8 leftovers, were you raised in a barn?, a Clean up 8 leftovers button, and the programs Claude left running, each with a red light and a Stop button">
+      </figure>
+    </section>
+
+    <section class="section" id="install" aria-labelledby="install-title">
+      <div class="section-head">
+        <h2 id="install-title">How to install</h2>
+        <p>Three steps, about a minute.</p>
+      </div>
+      <ol class="steps">
+        <li class="card step">
+          <span class="step-num dot" aria-hidden="true">1</span>
+          <h3>Download</h3>
+          <p>Press <b>Download for Windows</b> above. If you end up on GitHub's releases page, open <b>Assets</b> and pick the file ending in <code>-setup.exe</code>.</p>
+          <p class="small">If your browser says the file isn't commonly downloaded, that's only because it's new: choose <b>Keep</b>.</p>
+        </li>
+        <li class="card step">
+          <span class="step-num dot" aria-hidden="true">2</span>
+          <h3>Open it</h3>
+          <p>Double-click the file in your Downloads. momputer isn't code-signed yet, so Windows may say <b>"Windows protected your PC"</b>. Click <b>More info</b>, then <b>Run anyway</b>.</p>
+          <div class="mock" aria-hidden="true">
+            <p class="mock-title">Windows protected your PC</p>
+            <p class="mock-text">Microsoft Defender SmartScreen prevented an unrecognized app from starting.</p>
+            <p class="mock-link"><span class="led red"></span><u>More info</u></p>
+            <div class="mock-buttons">
+              <span class="mock-btn on"><span class="led red"></span>Run anyway</span>
+              <span class="mock-btn">Don't run</span>
+            </div>
+          </div>
+          <p>Then Windows asks whether it may make changes: choose <b>Yes</b>. momputer installs for everyone on the PC, in Program Files.</p>
+        </li>
+        <li class="card step">
+          <span class="step-num dot" aria-hidden="true">3</span>
+          <h3>Say hi to mom</h3>
+          <p>She lives in the tray, by the clock. If you don't see her, click the little <b>^</b> arrow there.</p>
+          <p><b>Click</b> her to open the widget. <b>Right-click</b> her for "Clean up leftovers". Closing the widget just tucks it away; she keeps watching.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section card verify" id="verify" aria-labelledby="verify-title">
+      <div class="verify-head">
+        <h2 id="verify-title">Check the download</h2>
+        <span class="tag">optional</span>
+      </div>
+      <p>Every release comes with <a id="sums" href="https://github.com/Thisisily/momputer/releases/latest"><code>SHA256SUMS.txt</code></a>, a fingerprint for each file. To check yours, open PowerShell (Start, type <b>PowerShell</b>) and run:</p>
+      <div class="code">
+        <pre><code id="hash-cmd">Get-FileHash "$HOME\Downloads\momputer_*-setup.exe"</code></pre>
+        <button class="copy" type="button" id="copy" data-for="hash-cmd">Copy</button>
+      </div>
+      <p id="hash-says">The <b>Hash</b> it prints should match the line for that file in <code>SHA256SUMS.txt</code>. Capital or small letters don't matter.</p>
+    </section>
+
+    <section class="section" id="faq" aria-labelledby="faq-title">
+      <div class="section-head">
+        <h2 id="faq-title">Questions</h2>
+      </div>
+      <div class="faq">
+        <details class="card">
+          <summary>Is it free?</summary>
+          <p>Yes, for personal use: at home, for hobby projects, if you're a student, at a nonprofit, and for research. If you use it for work at a company, you need a commercial license: <a href="https://github.com/Thisisily/momputer/issues/new?template=commercial-license.yml">open an issue with the Commercial license template</a> and we'll sort it out.</p>
+          <p class="small">The license is <a href="https://github.com/Thisisily/momputer/blob/main/LICENSE">PolyForm Noncommercial 1.0.0</a>.</p>
+        </details>
+        <details class="card">
+          <summary>Does it need administrator rights?</summary>
+          <p>Only to install, once. momputer installs for everyone on the PC, in Program Files, so Windows asks.</p>
+          <p>Mom herself never runs as administrator. A few clean-ups need one (like Windows Update's leftover downloads); when you press their button, Windows asks you first.</p>
+        </details>
+        <details class="card">
+          <summary>Does it send anything anywhere?</summary>
+          <p>No. momputer has no network code. Links in the widget open in your browser.</p>
+        </details>
+        <details class="card">
+          <summary>How do I uninstall it?</summary>
+          <p>Open <b>Settings</b>, then <b>Apps</b>, then <b>Installed apps</b> (on Windows 10: <b>Apps &amp; features</b>). Find momputer and choose <b>Uninstall</b>.</p>
+          <p>If you switched on the Claude Code or Codex check-ins under <b>House rules</b>, switch them off first, so mom's hooks come back out of their settings. Mom's own folder, <code>.momputer</code> in your user folder, keeps her settings and backups; delete it if you want those gone too.</p>
+        </details>
+        <details class="card">
+          <summary>Where's the source code?</summary>
+          <p>All of it is on GitHub: <a href="https://github.com/Thisisily/momputer">github.com/Thisisily/momputer</a>. The README explains how mom works and how to build momputer yourself.</p>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot wrap">
+    <div class="foot-mom"><img src="mom.svg" width="40" height="40" alt=""></div>
+    <p>momputer is made by <a href="https://github.com/Thisisily">Ilya Arbabi</a>. Source, issues and releases are on <a href="https://github.com/Thisisily/momputer">GitHub</a>.</p>
+    <p class="small">Free for personal use under <a href="https://github.com/Thisisily/momputer/blob/main/LICENSE">PolyForm Noncommercial 1.0.0</a>. Set in Geist and Doto (SIL Open Font License).</p>
+  </footer>
+
+  <script src="install.js"></script>
+</body>
+</html>

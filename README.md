@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Rust-1.90%2B-000?style=flat-square&logo=rust&logoColor=white" alt="Rust 1.90 or newer">
   <img src="https://img.shields.io/badge/Tauri-2-000?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2">
   <img src="https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Cursor%20%C2%B7%20Gemini%20%C2%B7%20Copilot-000?style=flat-square" alt="Works with Claude Code, Codex, Cursor, Gemini and Copilot">
-  <img src="https://img.shields.io/badge/license-MIT-000?style=flat-square" alt="MIT license">
+  <a href="#license"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-000?style=flat-square" alt="PolyForm Noncommercial license"></a>
   <a href="https://github.com/Thisisily/momputer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Thisisily/momputer/ci.yml?branch=main&style=flat-square&label=build&labelColor=000&color=2fe07a" alt="Build status"></a>
 </p>
 
@@ -101,7 +101,7 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
 
 ## Install
 
-Run the installer from [Releases](https://github.com/Thisisily/momputer/releases). It installs for all users, in Program Files, so Windows asks for an administrator once, and the clean-ups that need an administrator only work from a copy installed this way. Releases are built by GitHub Actions; signing through [SignPath Foundation](#code-signing-policy) is being set up, and until it is, Windows will warn that the installer is from an unknown publisher.
+Run the installer from [Releases](https://github.com/Thisisily/momputer/releases). It installs for all users, in Program Files, so Windows asks for an administrator once, and the clean-ups that need an administrator only work from a copy installed this way. Releases are built by GitHub Actions and aren't code-signed yet, so Windows warns that the installer is from an unknown publisher: choose **More info**, then **Run anyway**.
 
 Or build it from source:
 
@@ -247,14 +247,9 @@ tempMinAgeDays = 7            # other temp files
 
 `cargo test` runs the core tests, including one that rebuilds a real cluttered folder and checks mom grades it F, tidies it, and puts everything back.
 
-## Code signing policy
+## Code signing
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
-
-- Committers and reviewers: [Thisisily](https://github.com/Thisisily)
-- Approvers: [Thisisily](https://github.com/Thisisily)
-
-Every release is built from this repository by GitHub Actions ([`release.yml`](.github/workflows/release.yml)) and signed only after an approver approves it in SignPath. What gets signed is `momputer.exe`, `mom.exe` and the two installers, all built from the source here ([artifact configurations](.signpath/artifact-configurations)). How it's set up: [docs/signing.md](docs/signing.md).
+Releases aren't code-signed yet. Every release is built from this repository by GitHub Actions ([`release.yml`](.github/workflows/release.yml)), and the workflow is ready to sign `momputer.exe`, `mom.exe` and the two installers through SignPath once a certificate is set up ([docs/signing.md](docs/signing.md)).
 
 Privacy policy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
@@ -279,7 +274,7 @@ Privacy policy: This program will not transfer any information to other networke
 
 momputer is made by Ilya Arbabi. My desktop was a mess, and every AI agent I worked with made it worse, so I built my computer a mom. Also by me: [Marsell](https://getmarsell.com) and [Ilisium](https://ilisium.xyz).
 
-momputer is free. If she saved you an afternoon, you can buy mom a coffee:
+momputer is free for personal use. If she saved you an afternoon, you can buy mom a coffee:
 
 | | |
 |---|---|
@@ -290,6 +285,8 @@ momputer is free. If she saved you an afternoon, you can buy mom a coffee:
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+momputer is free for personal use: at home, for hobby projects, if you're a student, at a nonprofit, and for research. That's the [PolyForm Noncommercial License 1.0.0](LICENSE), which has the details.
 
-The Marsell and Ilisium logos on the About page belong to those projects and aren't covered by the MIT license.
+If you use it for work at a company, you need a commercial license. [Open an issue with the Commercial license template](https://github.com/Thisisily/momputer/issues/new?template=commercial-license.yml), say a little about how you'd use it, and we'll sort it out.
+
+The Marsell and Ilisium logos on the About page belong to those projects and aren't covered by this license.

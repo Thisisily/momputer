@@ -2564,10 +2564,10 @@ in ${x.cwd}`)}">
       <div class="about-tip">
         <div class="seg about-coins" role="group" aria-label="Which coin">${coins}</div>
         <div class="about-addr num" id="tip-addr" title="${esc(coin)} address">${mark(coin, "coin-ico")}<span>${esc(addr)}</span></div>
-        <div class="about-tip-foot"><span>momputer is free and stays free. A tip keeps her going.</span>
+        <div class="about-tip-foot"><span>momputer is free for personal use, and stays that way. A tip keeps her going.</span>
           <button class="primary" data-act="copy-text" data-text="${esc(addr)}" data-what="${esc(coin)}">Copy</button></div>
       </div>
-      <p class="about-foot">MIT license · momputer itself never goes online; links open in your browser.<br>
+      <p class="about-foot">Free for personal use (PolyForm Noncommercial) · momputer itself never goes online; links open in your browser.<br>
         <span class="about-hint">There's one room in this house nobody tidies.</span></p>`;
   }
 

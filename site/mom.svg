@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs><clipPath id="screen"><circle cx="512" cy="512" r="512"/></clipPath></defs>
+  <circle cx="512" cy="512" r="512" fill="#fff"/>
+  <g clip-path="url(#screen)"><svg x="-58" y="96" width="1140" height="810" viewBox="0 -12 304 216" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+      <radialGradient id="mom-iris" cx="42%" cy="38%" r="68%">
+        <stop offset="0" stop-color="#5a5a5a"/><stop offset=".55" stop-color="#262626"/><stop offset="1" stop-color="#050505"/>
+      </radialGradient>
+    </defs>
+      <g class="fx"><g class="squash"><g class="breath"><g class="bun">
+      <circle cx="152" cy="22" r="29" fill="#fff" stroke="#000" stroke-width="5"/>
+      <path  d="M136 9 Q151 0 166 7" fill="none" stroke="#cfcfcf" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path  d="M131 23 Q149 12 171 18" fill="none" stroke="#cfcfcf" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </g><g class="hair">
+      <path d="M40 134 C22 100 30 60 72 44 C100 33 126 30 152 30 C178 30 204 33 232 44 C274 60 282 100 264 134 C246 104 200 70 152 64 C104 70 58 104 40 134 Z"
+        fill="#fff" stroke="#000" stroke-width="5" stroke-linejoin="round"/>
+      <path  d="M124 40 C98 47 68 66 53 98" fill="none" stroke="#cfcfcf" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path  d="M115 60 C96 68 78 84 69 106" fill="none" stroke="#cfcfcf" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path  d="M180 40 C206 47 236 66 251 98" fill="none" stroke="#cfcfcf" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path  d="M189 60 C208 68 226 84 235 106" fill="none" stroke="#cfcfcf" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <path  d="M144 32 C164 42 164 56 152 64" fill="none" stroke="#000" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    </g><g class="turn"><g transform="translate(0 4)"><g class="cheeks">
+      <ellipse class="blush" cx="60" cy="174" rx="16" ry="9.5" fill="#f6a98c"/>
+      <ellipse class="blush" cx="244" cy="174" rx="16" ry="9.5" fill="#f6a98c"/>
+      <path  d="M80 185 l-3 8 M87 185 l-3 8" fill="none" stroke="#000" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path  d="M221 185 l-3 8 M228 185 l-3 8" fill="none" stroke="#000" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </g><g class="glasses">
+      <circle cx="90" cy="134" r="41" fill="#fff" stroke="#000" stroke-width="5"/>
+      <circle cx="214" cy="134" r="41" fill="#fff" stroke="#000" stroke-width="5"/>
+      <path  d="M131 128 Q152 117 173 128" fill="none" stroke="#000" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path class="glint" d="M62 112 Q70 102 82 99" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity="0"/>
+      <path class="glint" d="M186 112 Q194 102 206 99" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity="0"/>
+    </g><g class="expr"><g transform="translate(90 131)"><g class="look"><g class="eye open"><circle r="20" fill="url(#mom-iris)" stroke="#000" stroke-width="2.5"/>
+      <circle cx="7" cy="-7.5" r="6.5" fill="#fff"/>
+      <circle cx="-6.5" cy="7" r="2.8" fill="#fff"/></g></g></g><g transform="translate(214 131)"><g class="look"><g class="eye open"><circle r="20" fill="url(#mom-iris)" stroke="#000" stroke-width="2.5"/>
+      <circle cx="7" cy="-7.5" r="6.5" fill="#fff"/>
+      <circle cx="-6.5" cy="7" r="2.8" fill="#fff"/></g></g></g><g transform="translate(0 5)"><path class="mouth-line" d="M137 149 C137 172 167 172 167 149" fill="none" stroke="#000" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></g></g></g></g></g></g></g>
+    </svg></g>
+</svg>

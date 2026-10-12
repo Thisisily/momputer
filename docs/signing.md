@@ -1,6 +1,8 @@
 # Signing releases
 
-momputer's releases are signed through [SignPath Foundation](https://signpath.org), which signs open-source projects for free. The certificate belongs to SignPath Foundation, so Windows shows "SignPath Foundation" as the publisher. This page covers how it's set up and how to cut a release.
+momputer's release workflow signs through [SignPath](https://about.signpath.io). This page covers how it's set up and how to cut a release.
+
+> **The certificate isn't sorted yet.** SignPath Foundation's free certificates are only for projects under an OSI-approved open-source license with no commercial dual-licensing. momputer is under PolyForm Noncommercial with commercial licenses for companies, so it doesn't qualify. The steps below still work with a certificate from a paid SignPath plan; the parts about applying to SignPath Foundation don't apply.
 
 ## Why it matters
 

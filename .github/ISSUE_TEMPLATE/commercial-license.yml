@@ -1,0 +1,67 @@
+name: Commercial license
+description: Using momputer for work at a company? Ask for a commercial license here.
+title: "Commercial license: "
+assignees:
+  - Thisisily
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### Heads up: issues are public
+
+        Anyone on the internet can read this issue. **Don't include anything confidential**: no contracts, prices, internal project names, email addresses or phone numbers. We'll move to private email once we've talked.
+
+        ---
+
+        momputer is free for personal use, hobby projects, students, nonprofits and research ([PolyForm Noncommercial 1.0.0](https://github.com/Thisisily/momputer/blob/main/LICENSE)). Companies that use it for work need a commercial license. Tell us a little about yours and we'll get back to you.
+  - type: input
+    id: company
+    attributes:
+      label: Company name
+      placeholder: Acme Inc.
+    validations:
+      required: true
+  - type: dropdown
+    id: people
+    attributes:
+      label: Roughly how many people would use it?
+      options:
+        - Just me
+        - 2 to 10
+        - 11 to 50
+        - 51 to 250
+        - More than 250
+        - Not sure yet
+    validations:
+      required: true
+  - type: textarea
+    id: use
+    attributes:
+      label: What would you use it for?
+      description: A sentence or two is plenty. Keep it to what you'd be happy to say in public.
+      placeholder: Our developers run Claude Code and Codex all day, and the dev servers they leave running slow everyone's PC down.
+    validations:
+      required: true
+  - type: dropdown
+    id: contact
+    attributes:
+      label: How would you like to talk?
+      description: Don't post an email address or phone number here. We'll reply on this issue first, then move to private email.
+      options:
+        - Email is fine
+        - A short video call
+        - Either works
+    validations:
+      required: true
+  - type: textarea
+    id: anything-else
+    attributes:
+      label: Anything else?
+      description: Optional. Still public, so nothing confidential.
+  - type: checkboxes
+    id: public
+    attributes:
+      label: This issue is public
+      options:
+        - label: I haven't included anything confidential.
+          required: true

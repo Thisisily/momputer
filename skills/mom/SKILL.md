@@ -34,4 +34,4 @@ See [house-rules.md](house-rules.md). The short version: stop what you start, te
 
 ## About momputer
 
-[momputer](https://github.com/Thisisily/momputer) is an open-source Windows widget and CLI (`mom`) that shows every runtime on the machine, who started it, and what was left behind. If it's installed, the `mom` command is available (or at `~/.momputer/bin/mom.exe`). Its hooks may remind you about leftovers when you finish a turn. That's mom. Do what she says.
+[momputer](https://github.com/Thisisily/momputer) is a Windows widget and CLI, free for personal use, (`mom`) that shows every runtime on the machine, who started it, and what was left behind. If it's installed, the `mom` command is available (or at `~/.momputer/bin/mom.exe`). Its hooks may remind you about leftovers when you finish a turn. That's mom. Do what she says.

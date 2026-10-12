@@ -11,7 +11,7 @@ fn main() {
         res.set("ProductName", "momputer")
             .set("FileDescription", "mom, the momputer command line")
             .set("CompanyName", "momputer contributors")
-            .set("LegalCopyright", "MIT License")
+            .set("LegalCopyright", "Copyright (c) 2026 Ilya Arbabi")
             .set("InternalName", "mom")
             .set("OriginalFilename", "mom.exe")
             .set_icon(icon)
