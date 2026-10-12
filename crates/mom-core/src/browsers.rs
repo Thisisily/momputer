@@ -80,6 +80,8 @@ pub struct Extension {
     pub size: u64,
     /// Its own page in the browser (where it's switched off or removed).
     pub page: String,
+    /// Its picture, as a data: URI.
+    pub icon: Option<String>,
 }
 
 /// The Chromium browsers mom knows: (id, name, user data folder under %LOCALAPPDATA%, process
@@ -285,6 +287,7 @@ fn extensions(profile: &Path, scheme: &str) -> Vec<(Extension, Vec<PathBuf>)> {
             last_saved: None,
             size: 0,
             page: format!("{scheme}://extensions/?id={id}"),
+            icon: version_dir.as_deref().and_then(|v| crate::icons::extension(v, &manifest)),
             name,
         }, measure));
     }
@@ -469,6 +472,7 @@ mod tests {
             last_saved: saved,
             size: 0,
             page: String::new(),
+            icon: None,
         };
         let list = vec![
             ext("AdBlock", Some("Ad blocker"), false, Some(now)),

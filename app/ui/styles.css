@@ -3606,6 +3606,78 @@ button.row-name:hover {
   letter-spacing: -0.005em;
 }
 
+/* A command, as typed. */
+.cmd {
+  font-family: var(--mono);
+  font-size: 0.94em;
+  letter-spacing: -0.01em;
+  color: var(--ink-2);
+}
+
+/* When something happened, on a line of the last two weeks. */
+.timeline {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  height: auto;
+  margin-top: 12px;
+  overflow: visible;
+}
+
+.tl-base {
+  stroke: var(--line-2);
+  stroke-width: 1;
+}
+
+.tl-tick {
+  stroke: var(--line-2);
+  stroke-width: 1;
+}
+
+.tl-crash {
+  fill: var(--red);
+  stroke: var(--card);
+  stroke-width: 1.5;
+}
+
+.tl-update {
+  stroke: var(--ink);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.tl-label {
+  fill: var(--ink-3);
+  font: 500 9.5px var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tl-count {
+  fill: var(--red);
+}
+
+/* A program's or extension's own picture: in grey, in colour when you point at its row. */
+.row-icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  vertical-align: -3px;
+  border-radius: 4px;
+  object-fit: contain;
+  filter: grayscale(1) contrast(1.05);
+  opacity: 0.8;
+  transition:
+    filter 220ms ease,
+    opacity 220ms ease;
+}
+
+.row:hover > .row-name > .row-icon,
+.row.is-open > .row-name > .row-icon {
+  filter: none;
+  opacity: 1;
+}
+
 .row-nums {
   font-weight: 600;
 }

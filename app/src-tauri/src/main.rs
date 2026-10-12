@@ -418,6 +418,8 @@ fn stop_where(s: &Shared, pick: impl Fn(&Group) -> bool) -> KillReport {
     let table = s.sampler.lk().sample();
     let analysis = mom_core::scan::analyze(&table, &mom_core::ports::listeners(), &cfg);
     let chosen: Vec<&Group> = analysis.groups.iter().filter(|g| pick(g)).collect();
+    // How to start the servers again, before they're gone.
+    mom_core::restart::remember(&s.paths, &table, &chosen);
     let report = kill::stop_groups(&table, &chosen);
     if report.groups > 0 {
         let names: Vec<&str> = chosen.iter().take(4).map(|g| g.name.as_str()).collect();
@@ -437,6 +439,27 @@ async fn stop_groups(ids: Vec<String>, s: State<'_, S>) -> Res<KillReport> {
 async fn stop_leftovers(s: State<'_, S>) -> Res<KillReport> {
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || stop_where(&s, |g| g.is_leftover())).await.map_err(err)
+}
+
+/// Servers mom stopped that she can start again.
+#[tauri::command(async)]
+fn get_stopped(s: State<'_, S>) -> Vec<mom_core::restart::Stopped> {
+    mom_core::restart::list(&s.paths)
+}
+
+/// Starts a stopped server again in a new terminal window, in its folder.
+#[tauri::command(async)]
+fn start_again(id: String, s: State<'_, S>) -> Res<String> {
+    let msg = mom_core::restart::start(&s.paths, &id)?;
+    s.note(msg.clone());
+    s.rescan_now();
+    Ok(msg)
+}
+
+/// Forgets a stopped server.
+#[tauri::command(async)]
+fn forget_stopped(id: String, s: State<'_, S>) -> Res<()> {
+    mom_core::restart::forget(&s.paths, &id).map_err(err)
 }
 
 #[tauri::command(async)]
@@ -725,10 +748,14 @@ fn undo_setting(id: String, s: State<'_, S>) -> Res<String> {
     mom_core::winsettings::undo(&s.paths, &id).map_err(err)
 }
 
-/// Opens one of Windows' own settings programs (the ones the checkup points to).
+/// Opens one of Windows' own settings programs (the ones the checkup points to), Event Viewer, or
+/// the graphics card maker's app.
 #[tauri::command(async)]
 fn open_program(name: String) -> Res<()> {
-    const ALLOWED: &[&str] = &["SystemPropertiesPerformance.exe", "SystemPropertiesAdvanced.exe", "UserAccountControlSettings.exe", "cttune.exe"];
+    const ALLOWED: &[&str] = &["SystemPropertiesPerformance.exe", "SystemPropertiesAdvanced.exe", "UserAccountControlSettings.exe", "cttune.exe", "eventvwr.exe"];
+    if let Some(app) = mom_core::speed::gpu_app_path(&name) {
+        return mom_core::elevate::open(&app, "");
+    }
     if !ALLOWED.contains(&name.as_str()) {
         return Err("mom only opens Windows' own settings programs".into());
     }
@@ -947,6 +974,12 @@ async fn get_programs(s: State<'_, S>) -> Res<Vec<mom_core::programs::Program>> 
     })
     .await
     .map_err(err)
+}
+
+/// Programs' own icons, by .exe path, as data: URIs (kept for as long as mom runs).
+#[tauri::command]
+async fn get_icons(exes: Vec<String>) -> Res<std::collections::HashMap<String, Option<String>>> {
+    tauri::async_runtime::spawn_blocking(move || mom_core::icons::programs(&exes)).await.map_err(err)
 }
 
 /// Restarts, quits or ends a program from `get_programs` (only what it offers for it).
@@ -1277,6 +1310,9 @@ fn main() {
             stop_groups,
             stop_leftovers,
             keep_group,
+            get_stopped,
+            start_again,
+            forget_stopped,
             stop_container,
             stop_wsl,
             get_trash,
@@ -1303,6 +1339,7 @@ fn main() {
             get_health,
             get_speed,
             get_programs,
+            get_icons,
             files_places,
             get_browsers,
             fix_registry,

@@ -330,6 +330,19 @@
   };
   let filesReport = null;
 
+  // Servers mom stopped earlier, with how they were started.
+  let stopped = [
+    { id: "4120-1", name: "vite", project: "lanternfall-site", command: "npm run dev", cwd: "C:\\Users\\you\\code\\lanternfall-site", ports: [5173], at: now - 2 * 3600 },
+    { id: "5532-1", name: "uvicorn", project: "copperline-api", command: "uvicorn app.main:app --reload --port 8000", cwd: "C:\\Users\\you\\code\\copperline-api", ports: [8000], at: now - 26 * 3600 },
+  ];
+
+  /** A made-up icon: a coloured tile with the name's first letter. */
+  const mockIcon = (name) => {
+    const h = [...name].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='hsl(${h} 70% 48%)'/><text x='16' y='22' font-size='17' text-anchor='middle' fill='white' font-family='Segoe UI, sans-serif' font-weight='700'>${name.replace(/[^A-Za-z0-9]/g, "").charAt(0).toUpperCase()}</text></svg>`;
+    return "data:image/svg+xml," + encodeURIComponent(svg);
+  };
+
   let winsettings = [
     { id: "pagefile", area: "Memory", level: "check", title: "The page file has a fixed size", now: "Fixed at 8,192 MB on C:", default: "Managed by Windows",
       why: "A fixed page file can run out when memory gets tight, and apps then crash instead of slowing down. Windows sizes it well on its own.",
@@ -414,8 +427,11 @@
       { id: "no-gpu-chatgpt", level: "warn", title: "ChatGPT is drawing without your graphics card",
         detail: "ChatGPT draws video, scrolling and animation on the processor instead, which is why videos stutter. It happens when the graphics driver crashes or updates while ChatGPT is open, and lasts until ChatGPT restarts. Restarting ChatGPT fixes it.",
         fix: { label: "Restart ChatGPT", kind: "program", value: "app:chatgpt", hint: "3 Codex sessions run inside it, and stop when it closes." } },
-      { id: "gpu-driver", level: "warn", title: "Your graphics driver crashed 6 times in two weeks",
-        detail: "All 6 were 7 days ago. The driver was also updated 19 hours ago. Each time, Windows restarts it, and apps that were open can lose the graphics card until they restart. An overclock on the graphics card is the usual cause; otherwise, reinstall the driver from the maker's site.", fix: null },
+      { id: "gpu-driver", level: "tip", title: "Your graphics driver crashed twice, then was updated",
+        detail: "On 4 Oct, 21:37 and 5 Oct, 03:39. Nothing since the driver was updated 19 hours ago, so the update may well have fixed it. If it comes back, an overclock on the graphics card is the usual cause; otherwise, reinstall the driver from the maker's site.",
+        timeline: { from: now - 14 * 86400, to: now, marks: [{ at: now - 8 * 86400 - 2 * 3600, kind: "crash" }, { at: now - 7 * 86400 - 20 * 3600, kind: "crash" }, { at: now - 19 * 3600, kind: "update" }] },
+        fix: { label: "NVIDIA drivers", kind: "open", value: "https://www.nvidia.com/en-us/drivers/", hint: null },
+        more: [{ label: "NVIDIA App", kind: "launch", value: "nvidia-app", hint: null }, { label: "Event Viewer", kind: "launch", value: "eventvwr.exe", hint: null }] },
       { id: "tuners", level: "tip", title: "GPU Tweak III is installed, not running",
         detail: "So nothing is overclocked right now. Your RTX 2070 SUPER runs at its standard power limit (215 W). If you overclocked with it when the crashes above happened, that's the likely cause: leave it at default.", fix: null },
       { id: "extras-iobit-uninstaller", level: "tip", title: "IObit Uninstaller runs all the time",
@@ -595,6 +611,14 @@
     get_snapshot: () => JSON.parse(JSON.stringify(snapshot)),
     refresh: () => null,
     stop_groups: async ({ ids }) => (await wait(500), stop(ids)),
+    get_stopped: async () => (await wait(80), JSON.parse(JSON.stringify(stopped))),
+    start_again: async ({ id }) => {
+      await wait(400);
+      const x = stopped.find((s) => s.id === id);
+      stopped = stopped.filter((s) => s.id !== id);
+      return `Started ${x ? x.name : "it"} again, in a new window.`;
+    },
+    forget_stopped: async ({ id }) => ((stopped = stopped.filter((s) => s.id !== id)), null),
     stop_leftovers: async () => (await wait(700), stop(snapshot.groups.filter((x) => x.status === "left-behind" || x.status === "orphaned").map((x) => x.id))),
     keep_group: () => null,
     get_trash: () => ({ spots: [], busy: false }),
@@ -743,7 +767,13 @@
     files_places: () => JSON.parse(JSON.stringify(places)),
     set_files_place: ({ path, on }) => ((places.find((x) => x.path === path).on = on), JSON.parse(JSON.stringify(places))),
     add_files_place: async () => (await wait(300), places.push({ path: "E:\\Photos", name: "Photos", kind: "added", on: true, total: 0, free: 0 }), JSON.parse(JSON.stringify(places))),
-    get_browsers: async () => (await wait(700), JSON.parse(JSON.stringify(browsers))),
+    get_browsers: async () => {
+      await wait(700);
+      const out = JSON.parse(JSON.stringify(browsers));
+      for (const b of out) for (const p of b.profiles) for (const e of p.extensions) e.icon = e.icon || mockIcon(e.name);
+      return out;
+    },
+    get_icons: async ({ exes }) => (await wait(120), Object.fromEntries(exes.map((x) => [x, mockIcon(x.split("\\").pop())]))),
     get_programs: async () => (await wait(250), JSON.parse(JSON.stringify(programs))),
     program_action: async ({ id, action }) => {
       await wait(action === "restart" ? 1800 : 700);

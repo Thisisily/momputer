@@ -513,7 +513,7 @@ fn run(cli: Cli) -> Result<i32> {
                 println!("\n  {}", st.dim("`mom stop mine` stops all of it. Leave anything the user asked to keep running, and tell them about it."));
             }
         }
-        Some(Cmd::Stop { targets, yes, dry_run }) => return stop(&st, &cfg, targets, yes, dry_run),
+        Some(Cmd::Stop { targets, yes, dry_run }) => return stop(&st, &paths, &cfg, targets, yes, dry_run),
         Some(Cmd::Sessions { json }) => {
             let (_, snap) = mom_core::snapshot_now(&cfg, false);
             if json {
@@ -1291,7 +1291,7 @@ fn print_room(st: &Style, r: &tidy::RoomReport) {
     }
 }
 
-fn stop(st: &Style, cfg: &Config, targets: Vec<String>, yes: bool, dry_run: bool) -> Result<i32> {
+fn stop(st: &Style, paths: &Paths, cfg: &Config, targets: Vec<String>, yes: bool, dry_run: bool) -> Result<i32> {
     if targets.is_empty() {
         bail!("stop what? A PID, :port, `leftovers` or `mine`.");
     }
@@ -1345,6 +1345,7 @@ fn stop(st: &Style, cfg: &Config, targets: Vec<String>, yes: bool, dry_run: bool
         println!("Fine. They keep running.");
         return Ok(0);
     }
+    mom_core::restart::remember(paths, &table, &chosen);
     let r = kill::stop_groups(&table, &chosen);
     println!("{}", st.green(&r.message));
     for f in &r.failed {

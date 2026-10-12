@@ -35,6 +35,25 @@ pub struct Finding {
     pub fix: Option<Fix>,
     /// More buttons, after the main one.
     pub more: Vec<Fix>,
+    /// When it happened, on a line of the last two weeks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<Timeline>,
+}
+
+/// Moments on a line from `from` to `to` (Unix seconds): when something went wrong, and when
+/// something changed.
+#[derive(Clone, Debug, Serialize)]
+pub struct Timeline {
+    pub from: u64,
+    pub to: u64,
+    pub marks: Vec<Mark>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Mark {
+    pub at: u64,
+    /// "crash" or "update".
+    pub kind: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -90,7 +109,12 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
     findings.extend(busy_for_minutes(&programs, table.cpus));
     findings.extend(memory_full(&programs));
     findings.extend(driver_trouble(&slow.events, now).map(|mut f| {
-        f.fix = slow.gpu.as_ref().and_then(|g| driver_page(&g.name)).or_else(|| driver_page(&slow.driver_vendor));
+        let card = slow.gpu.as_ref().map(|g| g.name.as_str()).unwrap_or(&slow.driver_vendor);
+        f.fix = driver_page(card).or_else(|| driver_page(&slow.driver_vendor));
+        f.more.extend(gpu_app(card));
+        if f.timeline.is_some() {
+            f.more.push(Fix { label: "Event Viewer".into(), kind: "launch", value: "eventvwr.exe".into(), hint: None });
+        }
         f
     }));
     findings.extend(hardware_errors(&slow.events, now));
@@ -101,12 +125,12 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
     // From the Windows checkup (gathered on its own thread): what holds the PC back.
     if let Some(sys) = crate::system::cached() {
         for c in sys.checks.into_iter().filter(|c| c.level != "ok" && (matches!(c.area, "Performance" | "Hardware") || c.id == "two-antivirus" || c.id == "broken-services")) {
-            findings.push(Finding { more: vec![], id: c.id, level: c.level, title: c.title, detail: c.detail, fix: c.fix });
+            findings.push(Finding { more: vec![], timeline: None, id: c.id, level: c.level, title: c.title, detail: c.detail, fix: c.fix });
         }
     }
     let starting = crate::health::startup_apps(paths).iter().filter(|a| a.enabled).count();
     if starting >= 12 {
-        findings.push(Finding { more: vec![],
+        findings.push(Finding { more: vec![], timeline: None,
             id: "startup".into(),
             level: "tip",
             title: format!("{starting} apps start with Windows"),
@@ -115,7 +139,7 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
         });
     }
     if slow.power_saver {
-        findings.push(Finding { more: vec![],
+        findings.push(Finding { more: vec![], timeline: None,
             id: "power-plan".into(),
             level: "tip",
             title: "Windows is on Power saver".into(),
@@ -200,7 +224,7 @@ fn lost_gpu(table: &ProcTable, programs: &[Program], now: u64) -> Vec<Finding> {
             };
             let open = format!("{label} has been open {} with {} and {} of memory", human_age_long(open_for), processes(family.len()), human_bytes(mem));
             out.push(if software {
-                Finding { more: vec![],
+                Finding { more: vec![], timeline: None,
                     id: format!("no-gpu-{}", exe.trim_end_matches(".exe")),
                     level: "warn",
                     title: format!("{label} is drawing without your graphics card"),
@@ -211,7 +235,7 @@ fn lost_gpu(table: &ProcTable, programs: &[Program], now: u64) -> Vec<Finding> {
                     fix,
                 }
             } else {
-                Finding { more: vec![],
+                Finding { more: vec![], timeline: None,
                     id: format!("long-open-{}", exe.trim_end_matches(".exe")),
                     level: "tip",
                     title: format!("{label} has been open for {}", human_age_long(open_for)),
@@ -247,7 +271,7 @@ fn busy_for_minutes(programs: &[Program], cpus: usize) -> Vec<Finding> {
         let cores = p.avg_cpu * cpus.max(1) as f32 / 100.0;
         let mins = human_age_long(p.avg_secs);
         match p.kind {
-            "security" if cores >= 0.5 && p.name.contains("Defender") => out.push(Finding { more: vec![],
+            "security" if cores >= 0.5 && p.name.contains("Defender") => out.push(Finding { more: vec![], timeline: None,
                 id: "defender-busy".into(),
                 level: "tip",
                 title: "Microsoft Defender is scanning".into(),
@@ -256,14 +280,14 @@ fn busy_for_minutes(programs: &[Program], cpus: usize) -> Vec<Finding> {
                 ),
                 fix: Some(Fix { label: "Windows Security".into(), kind: "open", value: "windowsdefender:".into(), hint: None }),
             }),
-            "windows" if cores >= 0.5 && p.name.to_ascii_lowercase().contains("search") => out.push(Finding { more: vec![],
+            "windows" if cores >= 0.5 && p.name.to_ascii_lowercase().contains("search") => out.push(Finding { more: vec![], timeline: None,
                 id: "search-busy".into(),
                 level: "tip",
                 title: "Windows Search is indexing".into(),
                 detail: format!("It's kept {cores:.1} processor cores busy for the last {mins}, reading your files so search is quick. It settles down by itself; you can leave big folders out of it."),
                 fix: Some(Fix { label: "Search settings".into(), kind: "open", value: "ms-settings:cortana-windowssearch".into(), hint: None }),
             }),
-            "app" | "background" if cores >= 0.75 => out.push(Finding { more: vec![],
+            "app" | "background" if cores >= 0.75 => out.push(Finding { more: vec![], timeline: None,
                 id: format!("busy-{}", p.id),
                 level: if cores >= 1.5 { "warn" } else { "tip" },
                 title: format!("{} is busy all the time", p.name),
@@ -301,7 +325,7 @@ fn memory_full(programs: &[Program]) -> Option<Finding> {
     let mut top: Vec<&Program> = programs.iter().filter(|p| !matches!(p.kind, "windows" | "security")).collect();
     top.sort_by(|a, b| b.mem.cmp(&a.mem));
     let names: Vec<String> = top.iter().take(3).map(|p| format!("{} ({})", p.name, human_bytes(p.mem))).collect();
-    Some(Finding { more: vec![],
+    Some(Finding { more: vec![], timeline: None,
         id: "memory-full".into(),
         level: "warn",
         title: if commit >= 0.9 && ram < 0.9 {
@@ -330,6 +354,35 @@ pub(crate) fn driver_page(card: &str) -> Option<Fix> {
         return None;
     };
     Some(Fix { label: format!("{who} drivers"), kind: "open", value: url.into(), hint: None })
+}
+
+/// The card maker's own app: (the name the widget asks to open, its label, where it's installed
+/// under Program Files).
+const GPU_APPS: &[(&str, &str, &str)] = &[
+    ("nvidia-app", "NVIDIA App", r"NVIDIA Corporation\NVIDIA app\CEF\NVIDIA App.exe"),
+    ("geforce-experience", "GeForce Experience", r"NVIDIA Corporation\NVIDIA GeForce Experience\NVIDIA GeForce Experience.exe"),
+    ("amd-software", "AMD Software", r"AMD\CNext\CNext\RadeonSoftware.exe"),
+];
+
+/// Where one of `GPU_APPS` is installed, if it is.
+pub fn gpu_app_path(name: &str) -> Option<std::path::PathBuf> {
+    let (_, _, rel) = GPU_APPS.iter().find(|(n, _, _)| *n == name)?;
+    let base = std::env::var_os("ProgramFiles").map(std::path::PathBuf::from).unwrap_or_else(|| r"C:\Program Files".into());
+    Some(base.join(rel)).filter(|p| p.is_file())
+}
+
+/// A button for the card maker's app, if it's installed.
+fn gpu_app(card: &str) -> Option<Fix> {
+    let c = card.to_ascii_lowercase();
+    let names: &[&str] = if c.contains("nvidia") || c.contains("geforce") || c.contains("rtx") || c.contains("gtx") || c.starts_with("nvlddmkm") {
+        &["nvidia-app", "geforce-experience"]
+    } else if c.contains("radeon") || c.contains("amd") {
+        &["amd-software"]
+    } else {
+        &[]
+    };
+    let (name, label, _) = GPU_APPS.iter().find(|(n, _, _)| names.contains(n) && gpu_app_path(n).is_some())?;
+    Some(Fix { label: (*label).into(), kind: "launch", value: (*name).into(), hint: None })
 }
 
 /// A browser a robot is driving (an agent's Playwright, a test run): it turns the graphics card
@@ -440,49 +493,100 @@ fn when(at: u64, now: u64) -> String {
     let ago = now.saturating_sub(at);
     if ago < 86_400 {
         format!("{} ago", human_age_long(ago.max(60)))
+    } else if ago < 2 * 86_400 {
+        "yesterday".into()
     } else {
         format!("{} days ago", ago / 86_400)
     }
 }
 
+/// When something happened, on the PC's clock: "5 Oct, 03:39".
+fn stamp(at: u64) -> String {
+    use chrono::TimeZone;
+    chrono::Local.timestamp_opt(at as i64, 0).single().map(|t| t.format("%-d %b, %H:%M").to_string()).unwrap_or_default()
+}
+
+/// Times closer than `gap` seconds are one moment: the driver logs several events for each
+/// crash, Windows several for each install.
+fn moments(mut times: Vec<u64>, gap: u64) -> Vec<u64> {
+    times.sort_unstable();
+    let mut out: Vec<u64> = Vec::new();
+    let mut prev: Option<u64> = None;
+    for t in times {
+        if prev.is_none_or(|p| t - p > gap) {
+            out.push(t);
+        }
+        prev = Some(t);
+    }
+    out
+}
+
 /// The graphics driver crashing or being reset, and updates that cut every app off from the card.
 fn driver_trouble(events: &[Event], now: u64) -> Option<Finding> {
-    let resets: Vec<&Event> = events
-        .iter()
-        .filter(|e| GPU_DRIVERS.contains(&e.provider.to_ascii_lowercase().as_str()) || (e.provider == "Display" && e.id == 4101))
-        .collect();
-    let updates: Vec<&Event> = events
-        .iter()
-        .filter(|e| e.provider == "Microsoft-Windows-UserPnp" && e.service.as_deref().is_some_and(|s| GPU_DRIVERS.iter().any(|d| s.starts_with(d))))
-        .collect();
-    let latest_update = updates.iter().map(|e| e.at).max();
-    if resets.is_empty() {
-        return latest_update.filter(|t| now.saturating_sub(*t) < 3 * 86_400).map(|t| Finding { more: vec![],
+    let resets = moments(
+        events.iter().filter(|e| GPU_DRIVERS.contains(&e.provider.to_ascii_lowercase().as_str()) || (e.provider == "Display" && e.id == 4101)).map(|e| e.at).collect(),
+        120,
+    );
+    let updates = moments(
+        events
+            .iter()
+            .filter(|e| e.provider == "Microsoft-Windows-UserPnp" && e.service.as_deref().is_some_and(|s| GPU_DRIVERS.iter().any(|d| s.starts_with(d))))
+            .map(|e| e.at)
+            .collect(),
+        3600,
+    );
+    let latest_update = updates.last().copied();
+    let (Some(&first), Some(&last)) = (resets.first(), resets.last()) else {
+        return latest_update.filter(|t| now.saturating_sub(*t) < 3 * 86_400).map(|t| Finding { more: vec![], timeline: None,
             id: "gpu-driver".into(),
             level: "tip",
             title: format!("Your graphics driver was updated {}", when(t, now)),
             detail: "Apps that were open during the update can lose the graphics card until they restart. If one stutters, restart it.".into(),
             fix: None,
         });
-    }
-    let last = resets.iter().map(|e| e.at).max().unwrap_or(now);
-    let first = resets.iter().map(|e| e.at).min().unwrap_or(now);
-    let n = resets.len() as u64;
-    let times = if n == 1 {
-        format!("It happened {}", when(last, now))
-    } else if when(first, now) == when(last, now) {
-        format!("All {n} were {}", when(last, now))
-    } else {
-        format!("The last was {}, the first {}", when(last, now), when(first, now))
     };
-    let updated = latest_update.filter(|t| *t > last).map(|t| format!(" The driver was also updated {}.", when(t, now))).unwrap_or_default();
-    Some(Finding { more: vec![],
-        id: "gpu-driver".into(),
-        level: if n >= 3 || now.saturating_sub(last) < 3 * 86_400 { "warn" } else { "tip" },
-        title: format!("Your graphics driver crashed {} in two weeks", if n == 1 { "once".to_string() } else { format!("{n} times") }),
-        detail: format!(
-            "{times}.{updated} Each time, Windows restarts it, and apps that were open can lose the graphics card until they restart. An overclock on the graphics card is the usual cause; otherwise, reinstall the driver from the maker's site."
+    let n = resets.len();
+    let count = match n {
+        1 => "once".to_string(),
+        2 => "twice".to_string(),
+        _ => format!("{n} times"),
+    };
+    let times = match n {
+        1 => format!("It happened {} ({})", when(last, now), stamp(last)),
+        2..=4 => {
+            let all: Vec<String> = resets.iter().map(|&t| stamp(t)).collect();
+            format!("On {} and {}", all[..n - 1].join(", "), all[n - 1])
+        }
+        _ => format!("The first {} ({}), the last {} ({})", when(first, now), stamp(first), when(last, now), stamp(last)),
+    };
+    let since = latest_update.filter(|t| *t > last);
+    let (level, title, detail) = match since {
+        Some(t) => (
+            "tip",
+            format!("Your graphics driver crashed {count}, then was updated"),
+            format!(
+                "{times}. Nothing since the driver was updated {}, so the update may well have fixed it. If it comes back, an overclock on the graphics card is the usual cause; otherwise, reinstall the driver from the maker's site.",
+                when(t, now)
+            ),
         ),
+        None => (
+            if n >= 3 || now.saturating_sub(last) < 3 * 86_400 { "warn" } else { "tip" },
+            format!("Your graphics driver crashed {count} in two weeks"),
+            format!(
+                "{times}. Each time, Windows restarts it, and apps that were open can lose the graphics card until they restart. An overclock on the graphics card is the usual cause; otherwise, reinstall the driver from the maker's site."
+            ),
+        ),
+    };
+    let mut marks: Vec<Mark> = resets.iter().map(|&at| Mark { at, kind: "crash" }).collect();
+    marks.extend(updates.iter().map(|&at| Mark { at, kind: "update" }));
+    marks.sort_by_key(|m| m.at);
+    Some(Finding {
+        more: vec![],
+        timeline: Some(Timeline { from: now.saturating_sub(LOOK_BACK), to: now, marks }),
+        id: "gpu-driver".into(),
+        level,
+        title,
+        detail,
         fix: None,
     })
 }
@@ -497,7 +601,7 @@ fn hardware_errors(events: &[Event], now: u64) -> Option<Finding> {
     let fatal = whea.iter().filter(|e| matches!(e.id, 18 | 20 | 46)).count() as u64;
     let n = whea.len() as u64;
     let last = whea.iter().map(|e| e.at).max().unwrap_or(now);
-    Some(Finding { more: vec![],
+    Some(Finding { more: vec![], timeline: None,
         id: "hardware-errors".into(),
         level: if fatal > 0 || n >= 3 { "warn" } else { "tip" },
         title: if fatal > 0 {
@@ -573,7 +677,7 @@ fn tuners(installed: &[String], table: &ProcTable, gpu: Option<&Gpu>, trouble: b
             ),
         )
     };
-    Some(Finding { more: vec![], id: "tuners".into(), level, title, detail, fix: None })
+    Some(Finding { more: vec![], timeline: None, id: "tuners".into(), level, title, detail, fix: None })
 }
 
 // ------------------------------------------------------------------ helpers that run all the time
@@ -655,6 +759,7 @@ fn extras(table: &ProcTable, programs: &[Program], apps: &[(String, String)], st
         }
         let mut cards = buttons.into_iter();
         out.push(Finding {
+            timeline: None,
             id: format!("extras-{}", short(who).to_ascii_lowercase().replace(' ', "-")),
             level: "tip",
             title: format!("{} runs all the time", short(who)),
@@ -810,7 +915,7 @@ fn too_many_extensions(e: &(String, usize, Vec<String>)) -> Option<Finding> {
         return None;
     }
     let doubled = if blockers.len() >= 2 { format!(" {} of them block ads ({}); one does the job.", blockers.len(), blockers.join(", ")) } else { String::new() };
-    Some(Finding { more: vec![],
+    Some(Finding { more: vec![], timeline: None,
         id: "chrome-extensions".into(),
         level: "tip",
         title: format!("{n} Chrome extensions are on in {profile}"),
@@ -914,13 +1019,31 @@ mod tests {
     fn driver_crashes_and_hardware_errors_are_told_plainly() {
         let now = parse_time("2026-10-12T20:00:00Z").unwrap();
         let ev = |provider: &str, id: u32, at: &str| Event { provider: provider.into(), id, at: parse_time(at).unwrap(), service: None };
-        let resets: Vec<Event> = (1..=5).map(|i| ev("nvlddmkm", 153, &format!("2026-10-05T03:3{i}:00Z"))).collect();
+        // Five events in a few seconds are one crash; another that evening makes two.
+        let mut resets: Vec<Event> = (1..=5).map(|i| ev("nvlddmkm", 153, &format!("2026-10-05T03:39:0{i}Z"))).collect();
+        resets.push(ev("nvlddmkm", 14, "2026-10-04T21:37:57Z"));
         let f = driver_trouble(&resets, now).unwrap();
-        assert_eq!((f.level, f.title.as_str()), ("warn", "Your graphics driver crashed 5 times in two weeks"));
-        assert!(f.detail.starts_with("All 5 were 7 days ago."), "{}", f.detail);
+        assert_eq!((f.level, f.title.as_str()), ("tip", "Your graphics driver crashed twice in two weeks"));
+        let (a, b) = (stamp(parse_time("2026-10-04T21:37:57Z").unwrap()), stamp(parse_time("2026-10-05T03:39:01Z").unwrap()));
+        assert!(f.detail.starts_with(&format!("On {a} and {b}.")), "{}", f.detail);
+        let marks = &f.timeline.as_ref().unwrap().marks;
+        assert_eq!(marks.iter().map(|m| m.kind).collect::<Vec<_>>(), vec!["crash", "crash"]);
+        // The driver updated after the last one: nothing since, said calmly.
+        let mut later = resets.clone();
+        later.push(Event { provider: "Microsoft-Windows-UserPnp".into(), id: 20003, at: parse_time("2026-10-12T01:28:12Z").unwrap(), service: Some("nvlddmkm".into()) });
+        later.push(Event { provider: "Microsoft-Windows-UserPnp".into(), id: 20003, at: parse_time("2026-10-12T01:28:21Z").unwrap(), service: Some("nvlddmkm".into()) });
+        let f = driver_trouble(&later, now).unwrap();
+        assert_eq!((f.level, f.title.as_str()), ("tip", "Your graphics driver crashed twice, then was updated"));
+        assert!(f.detail.contains("Nothing since the driver was updated 18 hours ago"), "{}", f.detail);
+        assert_eq!(f.timeline.unwrap().marks.iter().map(|m| m.kind).collect::<Vec<_>>(), vec!["crash", "crash", "update"]);
+        // Three crashes on different days: worth a look.
+        let three: Vec<Event> = (6..=8).map(|d| ev("nvlddmkm", 153, &format!("2026-10-0{d}T12:00:00Z"))).collect();
+        assert_eq!(driver_trouble(&three, now).unwrap().level, "warn");
         assert!(driver_trouble(&[], now).is_none());
         let update = Event { provider: "Microsoft-Windows-UserPnp".into(), id: 20003, at: now - 3600, service: Some("nvlddmkm".into()) };
         assert_eq!(driver_trouble(&[update], now).unwrap().level, "tip");
+        assert_eq!(when(now - 30 * 3600, now), "yesterday");
+        assert_eq!(when(now - 7 * 86_400, now), "7 days ago");
 
         let one = hardware_errors(&[ev("Microsoft-Windows-WHEA-Logger", 19, "2026-10-11T10:00:00Z")], now).unwrap();
         assert_eq!(one.level, "tip");

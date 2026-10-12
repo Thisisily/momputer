@@ -53,6 +53,9 @@
     startup: null, // what starts with Windows (get_startup)
     startupAt: 0,
     startupBusy: null,
+    stopped: [], // servers mom stopped and can start again (get_stopped)
+    startBusy: null, // the one starting now
+    icons: new Map(), // .exe path -> its icon (a data: URI), or null when it has none (get_icons)
     expanded: new Set(),
     stopping: new Set(),
     done: new Set(),
@@ -555,6 +558,7 @@
       return `<button class="secondary" data-act="copy-fix" data-text="${esc(f.value)}" data-hint="${esc(f.hint || "Copied.")}">${ICON.copy}${esc(f.label)}</button>`;
     if (f.kind === "open") return `<button class="secondary" data-act="open-uri" data-url="${esc(f.value)}">${esc(f.label)}${ICON.out}</button>`;
     if (f.kind === "tab") return `<button class="secondary" data-act="go-tab" data-to="${esc(f.value)}">${esc(f.label)}</button>`;
+    if (f.kind === "launch") return `<button class="secondary" data-act="open-program" data-url="${esc(f.value)}">${esc(f.label)}${ICON.out}</button>`;
     if (f.kind === "regfix") {
       const armed = state.regConfirm === f.value;
       const busy = state.regBusy === f.value;
@@ -580,6 +584,44 @@
     return "";
   }
 
+  /** When it happened, on a line of the last two weeks: a red dot for each crash, a tall tick
+      for each update, days marked underneath. Point at a mark for its time. */
+  function timeline(t) {
+    const W = 320, L = 6, R = 6, Y = 30;
+    const x = (at) => L + ((at - t.from) / Math.max(1, t.to - t.from)) * (W - L - R);
+    const when = (at) => new Date(at * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    const days = Math.round((t.to - t.from) / 86400);
+    const ticks = Array.from({ length: days + 1 }, (_, i) => `<line x1="${x(t.to - i * 86400).toFixed(1)}" x2="${x(t.to - i * 86400).toFixed(1)}" y1="${Y - 2}" y2="${Y + 2}" class="tl-tick"/>`).join("");
+    const marks = t.marks
+      .map((m) =>
+        m.kind === "crash"
+          ? `<circle cx="${x(m.at).toFixed(1)}" cy="${Y}" r="4" class="tl-crash"><title>Crashed ${esc(when(m.at))}</title></circle>`
+          : `<g><line x1="${x(m.at).toFixed(1)}" x2="${x(m.at).toFixed(1)}" y1="13" y2="${Y + 6}" class="tl-update"/><text x="${x(m.at).toFixed(1)}" y="9" text-anchor="${x(m.at) > W / 2 ? "end" : "start"}" class="tl-label">updated</text><title>Driver updated ${esc(when(m.at))}</title></g>`
+      )
+      .join("");
+    // Crashes too close to tell apart get a count above them.
+    const groups = [];
+    for (const m of t.marks.filter((m) => m.kind === "crash")) {
+      const g = groups[groups.length - 1];
+      if (g && x(m.at) - x(g[g.length - 1].at) < 14) g.push(m);
+      else groups.push([m]);
+    }
+    const counts = groups
+      .filter((g) => g.length > 1)
+      .map((g) => {
+        const cx = (x(g[0].at) + x(g[g.length - 1].at)) / 2;
+        return `<text x="${Math.min(Math.max(cx, L + 20), W - R - 20).toFixed(1)}" y="${Y - 9}" text-anchor="middle" class="tl-label tl-count">${g.length} crashes</text>`;
+      })
+      .join("");
+    const crashes = t.marks.filter((m) => m.kind === "crash").length;
+    const updates = t.marks.length - crashes;
+    const label = `${plural(crashes, "crash", "crashes")}${updates ? ` and ${plural(updates, "driver update")}` : ""} in the last ${days} days`;
+    return `<svg class="timeline" viewBox="0 0 ${W} 50" role="img" aria-label="${esc(label)}">
+        <line x1="${L}" x2="${W - R}" y1="${Y}" y2="${Y}" class="tl-base"/>${ticks}${marks}${counts}
+        <text x="${L}" y="47" class="tl-label">${days} days ago</text><text x="${W - R}" y="47" text-anchor="end" class="tl-label">today</text>
+      </svg>`;
+  }
+
   function renderSpeed() {
     const sp = state.speed;
     const again = `<button class="secondary" data-act="speed-again" ${state.speedLoading ? "disabled" : ""}>${state.speedLoading ? '<span class="led green blink"></span>Looking' : "Look again"}</button>`;
@@ -597,7 +639,7 @@
         findings
           .map(
             (f) => `<div class="check-row${f.fix ? " stack" : ""}" id="spd-${hash(f.id)}" data-led="${f.level === "warn" ? "red" : f.level === "ok" ? "green" : "off"}">
-          <div class="check-text"><strong>${esc(f.title)}</strong><span>${esc(f.detail)}</span></div>
+          <div class="check-text"><strong>${esc(f.title)}</strong><span>${esc(f.detail)}</span>${f.timeline ? timeline(f.timeline) : ""}</div>
           ${f.fix ? `<div class="fix-row">${[f.fix, ...(f.more || [])].map(fixButton).join("")}</div>` : ""}
         </div>`
           )
@@ -693,6 +735,28 @@
 `;
   }
 
+  /** A program's or extension's own picture: grey until you point at its row. */
+  const rowIcon = (src) => (src ? `<img class="row-icon" src="${esc(src)}" alt="" draggable="false">` : "");
+
+  /** Fetches the icons of these .exe files that mom hasn't seen yet, then shows them. Once per
+      file: they're kept for as long as the widget runs. */
+  async function loadIcons(exes) {
+    const missing = [...new Set(exes.filter((x) => x && !state.icons.has(x)))];
+    if (!missing.length) return;
+    for (const x of missing) state.icons.set(x, null);
+    try {
+      const got = await invoke("get_icons", { exes: missing });
+      let any = false;
+      for (const [x, uri] of Object.entries(got || {})) {
+        state.icons.set(x, uri);
+        any = any || !!uri;
+      }
+      if (any) render();
+    } catch (e) {
+      console.warn("no icons", e);
+    }
+  }
+
   function progRow(p) {
     const open = state.progOpen === p.id;
     const cpu = p.avgSecs ? p.avgCpu : p.cpu;
@@ -703,7 +767,7 @@
     if (p.inside) bits.push(`${p.inside} inside`);
     const buttons = p.can.map((a) => progButton(p, a)).join("") + (p.exe && p.can.length ? `<button class="link-btn" data-act="reveal-path" data-path="${esc(p.exe)}">${ICON.folder}Show folder</button>` : "");
     return `<div class="row prog${open ? " is-open" : ""}" id="pg-${hash(p.id)}" data-led="${cpu >= 10 ? "red" : p.kind === "app" ? "green" : "off"}">
-      <button class="row-name" data-act="prog-expand" data-id="${esc(p.id)}" aria-expanded="${open}" title="${esc(p.exe || p.name)}">${esc(p.name)}</button>
+      <button class="row-name" data-act="prog-expand" data-id="${esc(p.id)}" aria-expanded="${open}" title="${esc(p.exe || p.name)}">${rowIcon(state.icons.get(p.exe))}${esc(p.name)}</button>
       <div class="row-meta"><span class="why">${esc(bits.filter(Boolean).join(" · "))}</span></div>
       <div class="row-nums num">${bytes(p.mem)}</div>
       <div class="row-nums2 num">${cpu >= 0.1 ? `<span class="${cpu >= 10 ? "hot" : ""}">${cpu < 10 ? cpu.toFixed(1) : Math.round(cpu)}%</span>` : ""}</div>
@@ -768,6 +832,7 @@
     try {
       state.programs = await invoke("get_programs");
       state.programsAt = Date.now();
+      loadIcons(state.programs.map((p) => p.exe));
     } catch (e) {
       console.warn("no programs", e);
     }
@@ -806,7 +871,7 @@
     const meta = [e.can[0] || "Asks for nothing special", e.on ? saved : "switched off", e.added ? `added ${agoText(e.added)}` : ""].filter(Boolean);
     const led = !e.on ? "off" : e.everywhere ? "red" : e.lastSaved ? "green" : "off";
     return `<div class="row ext${e.on ? "" : " is-off"}" id="ex-${hash(b.id + e.id)}" data-led="${led}" title="${esc(e.description || e.name)}">
-      <span class="row-name">${esc(e.name)}${e.kind ? ` <span class="badge">${esc(e.kind)}</span>` : ""}${e.app ? ` <span class="badge look">Chrome app</span>` : ""}</span>
+      <span class="row-name">${rowIcon(e.icon)}${esc(e.name)}${e.kind ? ` <span class="badge">${esc(e.kind)}</span>` : ""}${e.app ? ` <span class="badge look">Chrome app</span>` : ""}</span>
       <div class="row-meta"><span class="why">${esc(meta.join(" · "))}</span></div>
       <div class="row-nums num">${e.size ? bytes(e.size) : ""}</div>
       <div class="row-nums2"></div>
@@ -899,7 +964,7 @@
       ? `<button class="switch" role="switch" aria-checked="${x.enabled}" aria-label="Start ${esc(x.name)} with Windows" data-act="startup-set" data-id="${esc(x.id)}" ${state.startupBusy === x.id ? "disabled" : ""}></button>`
       : `<button class="mini-btn wide" data-act="open-uri" data-url="ms-settings:startupapps" title="It starts for every user, so only an administrator can switch it. Windows Settings can.">Settings</button>`;
     return `<div class="row" id="st-${hash(x.id)}" data-led="${x.enabled ? (x.running ? "green" : "off") : "off"}" title="${esc(x.command)}">
-      <span class="row-name">${esc(x.name)}</span>
+      <span class="row-name">${rowIcon(state.icons.get(x.exe))}${esc(x.name)}</span>
       <div class="row-meta"><span class="why">${esc(meta.join(" · "))}</span></div>
       <div class="row-nums num">${x.running ? bytes(x.mem) : ""}</div>
       <div class="row-nums2 num">${x.running && x.cpu >= 0.1 ? `${x.cpu.toFixed(1)}%` : ""}</div>
@@ -923,10 +988,35 @@
     try {
       state.startup = await invoke("get_startup");
       state.startupAt = Date.now();
+      loadIcons(state.startup.map((x) => x.exe));
     } catch (e) {
       console.warn("no startup list", e);
     }
     if (state.tab === "running" && state.runningTab === "startup") render();
+  }
+
+  /** A server mom stopped: what started it, where, and a button to start it again. */
+  function stoppedRow(x) {
+    const busy = state.startBusy === x.id;
+    const where = x.project || x.cwd.split(/[\/]/).filter(Boolean).pop() || x.cwd;
+    const ago = Math.max(60, Math.floor(Date.now() / 1000) - x.at);
+    return `<div class="row" id="sp-${hash(x.id)}" data-led="off" title="${esc(`${x.command}
+in ${x.cwd}`)}">
+      <span class="row-name">${esc(x.name)} <span class="dim">${esc(where)}</span></span>
+      <div class="row-meta"><span class="why"><span class="cmd">${esc(x.command)}</span> · stopped ${esc(ageLong(ago))} ago</span></div>
+      <div class="row-nums num">${x.ports.length ? `:${x.ports[0]}` : ""}</div>
+      <div class="row-nums2"></div>
+      <div class="row-act"><button class="mini-btn wide" data-act="start-again" data-id="${esc(x.id)}" ${state.startBusy ? "disabled" : ""} title="Opens a terminal in ${esc(x.cwd)} and runs ${esc(x.command)}">${ICON.refresh}${busy ? "Starting" : "Start"}</button></div>
+    </div>`;
+  }
+
+  async function loadStopped() {
+    try {
+      state.stopped = (await invoke("get_stopped")) || [];
+    } catch (e) {
+      console.warn("no stopped list", e);
+    }
+    if (state.tab === "running" && state.runningTab === "agents") render();
   }
 
   function renderAgents() {
@@ -1008,6 +1098,17 @@
 
     if (yours.length) html += section("yours", "Started by you", total(yours), yours.map((g) => row(g)).join(""));
     if (kept.length) html += section("kept", "Kept on purpose", total(kept), kept.map((g) => row(g)).join(""));
+
+    // Servers mom stopped, with how they were started: not the ones running again already.
+    const upAgain = (x) => s.groups.some((g) => g.name === x.name && (g.cwd || "").toLowerCase() === x.cwd.toLowerCase());
+    const stopped = state.stopped.filter((x) => !upAgain(x));
+    if (stopped.length)
+      html += section(
+        "stopped",
+        "Stopped recently",
+        "",
+        stopped.map(stoppedRow).join("") + `<button class="quiet-toggle" data-act="forget-stopped">Forget ${stopped.length === 1 ? "it" : "them"}</button>`
+      );
 
     const m = s.machines || {};
     let machines = "";
@@ -2703,6 +2804,7 @@
       state.stopping.delete(id);
       if (r) state.done.add(id);
     });
+    loadStopped();
     if (r) react("kiss");
     render();
     setTimeout(() => {
@@ -2726,6 +2828,7 @@
       state.stopping.delete(id);
       if (r) state.done.add(id);
     });
+    loadStopped();
     btn.disabled = false;
     if (r) react("kiss");
     render();
@@ -3101,6 +3204,25 @@
         renderSheet();
         break;
       }
+      case "start-again": {
+        const id = el.dataset.id;
+        state.startBusy = id;
+        render();
+        invoke("start_again", { id })
+          .then((msg) => {
+            toast(msg);
+            react("proud");
+          })
+          .catch((e) => toast(String(e), true))
+          .finally(() => {
+            state.startBusy = null;
+            loadStopped();
+          });
+        break;
+      }
+      case "forget-stopped":
+        Promise.all(state.stopped.map((x) => invoke("forget_stopped", { id: x.id }).catch(() => null))).then(loadStopped);
+        break;
       case "open-program":
         act(invoke("open_program", { name: el.dataset.url }), () => null);
         break;
@@ -3617,6 +3739,7 @@
     } catch {}
     applySnap(await invoke("get_snapshot"));
     state.ready = true;
+    loadStopped();
     bridge.listen("snapshot", (e) => applySnap(e.payload));
     // Watchdog: if updates stop arriving (a hidden window can miss them), go and fetch one.
     setInterval(async () => {
