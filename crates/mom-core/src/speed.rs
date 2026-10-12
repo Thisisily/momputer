@@ -657,7 +657,7 @@ fn extras(table: &ProcTable, programs: &[Program], apps: &[(String, String)], st
         out.push(Finding {
             id: format!("extras-{}", short(who).to_ascii_lowercase().replace(' ', "-")),
             level: "tip",
-            title: format!("{who} runs all the time"),
+            title: format!("{} runs all the time", short(who)),
             detail: format!("It {what}: {}, {}{cpu}. {comes_back}{gone}", processes(procs.len()), human_bytes(mem)),
             fix: cards.next(),
             more: cards.collect(),
