@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use mom_core::agents::{AgentKind, AgentProc};
 use mom_core::scan::{Group, Status};
 use mom_core::util::{ellipsize, human_age, human_bytes};
-use mom_core::{hooks, kill, rules, tidy, trash, Config, Paths, Snapshot};
+use mom_core::{hooks, kill, rules, tidy, trash, winsettings, Config, Paths, Snapshot};
 use std::io::{IsTerminal, Read, Write};
 use std::path::PathBuf;
 
@@ -75,6 +75,14 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Windows settings that drifted from the defaults over the years, and leftovers pointing at
+    /// things that are gone. `mom settings fix <id>` puts one back.
+    Settings {
+        #[command(subcommand)]
+        action: Option<SettingsCmd>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Grade a messy folder and list what to fix.
     Tidy {
         /// Folder to inspect (default: current folder).
@@ -130,6 +138,22 @@ enum TrashCmd {
         #[arg(long, hide = true)]
         pick_hex: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum SettingsCmd {
+    /// Put one back the way Windows ships it (ids from `mom settings`).
+    Fix {
+        id: String,
+        #[arg(short, long)]
+        yes: bool,
+        /// For the ones that need an administrator: run from a terminal opened with "Run as
+        /// administrator" (the widget asks Windows for you).
+        #[arg(long, hide = true)]
+        elevated: bool,
+    },
+    /// Put back what the last fix of one changed (the ones mom can undo).
+    Undo { id: String },
 }
 
 #[derive(Subcommand)]
@@ -387,7 +411,10 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Trash { .. })
         | Some(Cmd::Health { .. })
         | Some(Cmd::Integrations { .. })
-        | Some(Cmd::Config) => true,
+        | Some(Cmd::Config)
+        | Some(Cmd::Settings { action: None, .. }) => true,
+        Some(Cmd::Settings { action: Some(SettingsCmd::Fix { id, elevated: true, .. }), .. }) => winsettings::is_admin_fix(id),
+        Some(Cmd::Settings { action: Some(SettingsCmd::Fix { .. } | SettingsCmd::Undo { .. }), .. }) => false,
         Some(Cmd::Stop { dry_run, .. }) => *dry_run,
         Some(Cmd::Tidy { apply, .. }) => !*apply,
         Some(Cmd::Rules { action }) => matches!(action, None | Some(RulesCmd::Show)),
@@ -627,6 +654,57 @@ fn run(cli: Cli) -> Result<i32> {
                 }
             }
         }
+        Some(Cmd::Settings { action, json }) => match action {
+            None => {
+                let found = winsettings::check(&paths);
+                if json {
+                    print_json(&found)?;
+                } else {
+                    print_settings(&st, &found);
+                }
+            }
+            Some(SettingsCmd::Fix { id, yes, elevated }) => {
+                if elevated {
+                    // As administrator: only mom's own list, with her own values (see winsettings).
+                    match winsettings::fix_elevated(&id) {
+                        Ok(msg) => println!("{msg}"),
+                        Err(why) => bail!("{why}"),
+                    }
+                    return Ok(0);
+                }
+                let Some(f) = winsettings::check(&paths).into_iter().find(|f| f.id == id) else {
+                    println!("{}", st.green("Nothing to fix there: it's already fine."));
+                    return Ok(0);
+                };
+                let Some(fix) = &f.fix else {
+                    bail!("mom can't change that one herself.{}", f.settings.as_deref().map(|s| format!(" Change it here: {s}")).unwrap_or_default());
+                };
+                if fix.admin {
+                    bail!(
+                        "{} needs an administrator. The widget asks Windows for you (Upkeep, Windows), or run `mom settings fix {id} --elevated` from a terminal opened with \"Run as administrator\".",
+                        f.title
+                    );
+                }
+                println!("{}  {}", st.bold(&f.title), st.dim(&format!("{} now, {} by default", f.now, f.default)));
+                println!("{}", wrap(&f.why, 96, "  "));
+                if !yes && !confirm(&format!("{}?", fix.label)) {
+                    if !std::io::stdin().is_terminal() {
+                        eprintln!("mom: not a terminal, so pass --yes to confirm.");
+                        return Ok(1);
+                    }
+                    println!("Fine. It stays.");
+                    return Ok(0);
+                }
+                match winsettings::fix(&paths, &id) {
+                    Ok(msg) => println!("{}", st.green(&msg)),
+                    Err(why) => bail!("{why}"),
+                }
+            }
+            Some(SettingsCmd::Undo { id }) => match winsettings::undo(&paths, &id) {
+                Ok(msg) => println!("{}", st.green(&msg)),
+                Err(why) => bail!("{why}"),
+            },
+        },
         Some(Cmd::Health { json }) => {
             let table = mom_core::procs::Sampler::new().sample();
             let h = mom_core::health::check(&table, &paths);
@@ -872,6 +950,40 @@ fn print_health(st: &Style, h: &mom_core::health::Health) {
     }
 }
 
+fn print_settings(st: &Style, found: &[winsettings::Finding]) {
+    let fix = found.iter().filter(|f| f.level == winsettings::Level::Fix).count();
+    let line = match (found.len(), fix) {
+        (0, _) => "Everything's how Windows ships it. Lovely.".to_string(),
+        (_, 0) => "A few old tweaks and leftovers. Nothing urgent.".to_string(),
+        (_, 1) => "One thing needs fixing, sweetie.".to_string(),
+        (_, n) => format!("{n} things need fixing, sweetie."),
+    };
+    println!("{}  {}", st.pink(&st.bold("mom")), st.bold(&format!("\"{line}\"")));
+    let mut areas: Vec<&str> = found.iter().map(|f| f.area).collect();
+    areas.sort_unstable();
+    areas.dedup();
+    for area in areas {
+        println!("\n{}", st.bold(&area.to_uppercase()));
+        for f in found.iter().filter(|f| f.area == area) {
+            let mark = match f.level {
+                winsettings::Level::Fix => st.red("!"),
+                winsettings::Level::Check => st.yellow("~"),
+                winsettings::Level::Info => st.dim("·"),
+            };
+            println!("  {mark} {}  {}", st.bold(&f.title), st.dim(&format!("now: {} · default: {}", f.now, f.default)));
+            println!("{}", st.dim(&wrap(&f.why, 92, "      ")));
+            match (&f.fix, &f.settings) {
+                (Some(x), _) => {
+                    let how = if x.admin { " (needs an administrator)" } else { "" };
+                    println!("      {}", st.dim(&format!("{}{how}: mom settings fix {}", x.label, f.id)));
+                }
+                (None, Some(s)) => println!("      {}", st.dim(&format!("Change it in {s}"))),
+                (None, None) => {}
+            }
+        }
+    }
+}
+
 fn print_room(st: &Style, r: &tidy::RoomReport) {
     let grade = match r.grade {
         'A' | 'B' => st.green(&r.grade.to_string()),
@@ -1021,5 +1133,11 @@ mod tests {
         assert!(!ok(&["install", "all"]));
         assert!(!ok(&["rules", "install", "claude"]));
         assert!(!ok(&["hook", "claude", "stop"]));
+        assert!(ok(&["settings"]) && ok(&["settings", "--json"]));
+        assert!(ok(&["settings", "fix", "pagefile", "--elevated"]));
+        assert!(!ok(&["settings", "fix", "pagefile"]), "without --elevated it's the user-level path");
+        assert!(!ok(&["settings", "fix", "auto-end-tasks", "--elevated"]), "your own settings aren't changed as administrator");
+        assert!(!ok(&["settings", "fix", "made-up", "--elevated"]));
+        assert!(!ok(&["settings", "undo", "proxy"]));
     }
 }
