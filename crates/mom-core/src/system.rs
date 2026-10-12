@@ -773,10 +773,11 @@ fn leftovers() -> Vec<(&'static str, Vec<Leftover>)> {
                 if !clsid.starts_with('{') {
                     continue;
                 }
-                let lib = [(Cu, r"Software\Classes"), (Lm, r"SOFTWARE\Classes")]
-                    .iter()
-                    .find_map(|(h, c)| default(*h, &format!(r"{c}\CLSID\{clsid}\InprocServer32")))
-                    .and_then(|v| target(&v));
+                // An every-user handler is judged by every-user registrations only: anything running
+                // as you can write your own, and mustn't be able to make one look gone.
+                let sources: &[(Hive, &str)] =
+                    if user(hive) { &[(Cu, r"Software\Classes"), (Lm, r"SOFTWARE\Classes")] } else { &[(Lm, r"SOFTWARE\Classes")] };
+                let lib = sources.iter().find_map(|(h, c)| default(*h, &format!(r"{c}\CLSID\{clsid}\InprocServer32"))).and_then(|v| target(&v));
                 if lib.as_deref().is_some_and(gone) {
                     menus.push(Leftover { user: user(hive), key: format!(r"{list}\{name}"), shown: name.trim_matches(['{', '}']).to_string() });
                 }
@@ -850,16 +851,25 @@ fn listing(list: &[Leftover]) -> String {
 
 /// The command that fixes every user's leftovers, for Terminal (Admin): each key saved to a .reg
 /// file first, then removed; services switched off (not removed), so they can be switched back.
-fn admin_command(kind: &str, list: &[Leftover]) -> String {
+/// None if a name can't be put in a command safely.
+fn admin_command(kind: &str, list: &[Leftover]) -> Option<String> {
     if kind == "services" {
-        return list.iter().map(|l| format!("sc.exe config \"{}\" start= disabled", l.key)).collect::<Vec<_>>().join("; ");
+        let parts: Option<Vec<String>> = list.iter().map(|l| quoted(&l.key).map(|k| format!("sc.exe config {k} start= disabled"))).collect();
+        return parts.map(|p| p.join("; "));
     }
-    let mut parts = vec![r#"$b = "$env:USERPROFILE\.momputer\backups\registry"; New-Item -ItemType Directory -Force $b | Out-Null"#.to_string()];
+    let mut parts = vec![r"$b = Join-Path $env:USERPROFILE '.momputer\backups\registry'; New-Item -ItemType Directory -Force $b | Out-Null".to_string()];
     for (i, l) in list.iter().enumerate() {
-        let key = format!(r"HKLM\{}", l.key);
-        parts.push(format!(r#"reg.exe export "{key}" "$b\{kind}-{i}.reg" /y; reg.exe delete "{key}" /f"#));
+        let key = quoted(&format!(r"HKLM\{}", l.key))?;
+        parts.push(format!("reg.exe export {key} (Join-Path $b '{kind}-{i}.reg') /y; reg.exe delete {key} /f"));
     }
-    parts.join("; ")
+    Some(parts.join("; "))
+}
+
+/// A name for a PowerShell command line: in single quotes, which PowerShell never expands (no
+/// $variables, no $(commands)), with any quote inside doubled. Nothing for a name with control
+/// characters in it.
+fn quoted(s: &str) -> Option<String> {
+    (!s.chars().any(char::is_control)).then(|| format!("'{}'", s.replace('\'', "''")))
 }
 
 fn registry() -> Vec<Check> {
@@ -903,17 +913,21 @@ fn registry() -> Vec<Check> {
             let id = format!("registry-{kind}-{}", if user { "user" } else { "machine" });
             let fix = if user {
                 Fix { label: if one { "Remove it".into() } else { "Remove them".into() }, kind: "regfix", value: id.clone(), hint: Some("Mom keeps a copy, and Undo puts it back.".into()) }
-            } else {
+            } else if let Some(command) = admin_command(kind, &list) {
                 Fix {
                     label: "Copy the fix".into(),
                     kind: "copy",
-                    value: admin_command(kind, &list),
+                    value: command,
                     hint: Some(if kind == "services" {
                         "Paste it into Terminal (Admin). It switches the service off; nothing is deleted.".into()
                     } else {
                         "Paste it into Terminal (Admin). It saves a .reg copy of each entry in .momputer\\backups first.".into()
                     }),
                 }
+            } else {
+                // A name mom won't put in a command: no button, just the finding.
+                out.push(check(&id, "Registry", level, title, detail, None));
+                continue;
             };
             let detail = if user {
                 detail
@@ -1083,13 +1097,18 @@ mod tests {
     #[test]
     fn every_users_leftovers_come_as_a_safe_command() {
         let svc = vec![Leftover { user: false, key: "asComSvc".into(), shown: "ASUS Com Service".into() }];
-        assert_eq!(admin_command("services", &svc), r#"sc.exe config "asComSvc" start= disabled"#);
+        assert_eq!(admin_command("services", &svc).unwrap(), "sc.exe config 'asComSvc' start= disabled");
         let app = vec![Leftover { user: false, key: r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\devenv.exe".into(), shown: "devenv.exe".into() }];
-        let cmd = admin_command("app-paths", &app);
-        assert!(cmd.contains(r#"reg.exe export "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\devenv.exe""#), "{cmd}");
+        let cmd = admin_command("app-paths", &app).unwrap();
+        assert!(cmd.contains(r"reg.exe export 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\devenv.exe'"), "{cmd}");
         let export = cmd.find("reg.exe export").unwrap();
         let delete = cmd.find("reg.exe delete").unwrap();
         assert!(export < delete, "a copy is saved before anything is removed");
+        // A name can't sneak a command in: single quotes never expand, and a quote inside is doubled.
+        let sly = vec![Leftover { user: false, key: r"SOFTWARE\x\a'$(calc)'.exe".into(), shown: "x".into() }];
+        assert!(admin_command("app-paths", &sly).unwrap().contains(r"'HKLM\SOFTWARE\x\a''$(calc)''.exe'"));
+        let broken = vec![Leftover { user: false, key: "bad\nname".into(), shown: "x".into() }];
+        assert!(admin_command("services", &broken).is_none());
         assert!(!gone(r"Q:\nowhere\x.exe"), "a drive that isn't there may come back");
     }
 
