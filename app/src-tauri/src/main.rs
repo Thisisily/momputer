@@ -876,7 +876,8 @@ async fn inspect_room(path: String, s: State<'_, S>) -> Res<tidy::RoomReport> {
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let cfg = s.cfg();
-        let report = tidy::inspect(&PathBuf::from(&path), &cfg.tidy).map_err(err)?;
+        let dir = tidy::check_room(&PathBuf::from(&path), &s.paths)?;
+        let report = tidy::inspect(&dir, &cfg.tidy).map_err(err)?;
         s.rooms.lk().insert(path, report.clone());
         Ok(report)
     })
@@ -890,6 +891,8 @@ async fn add_room(app: AppHandle, s: State<'_, S>) -> Res<Option<String>> {
         return Ok(None);
     };
     let path = picked.into_path().map_err(err)?;
+    // Not a drive, Windows, programs or apps' own data: say why, and don't add it.
+    let path = tidy::check_room(&path, &s.paths)?;
     let mut cfg = s.config.lk();
     if !cfg.rooms.contains(&path) {
         cfg.rooms.push(path.clone());
@@ -912,6 +915,7 @@ async fn apply_tidy(path: String, ids: Vec<String>, s: State<'_, S>) -> Res<tidy
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let report = s.rooms.lk().get(&path).cloned().ok_or("Look at the room first.")?;
+        tidy::check_room(&PathBuf::from(&report.path), &s.paths)?;
         let r = tidy::apply(&report, &ids, &s.paths.journal_dir());
         s.note(format!("Tidied {}: {}", report.name, r.message));
         if let Ok(fresh) = tidy::inspect(&PathBuf::from(&path), &s.cfg().tidy) {

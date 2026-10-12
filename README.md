@@ -84,6 +84,7 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
       <h3>Rooms</h3>
       <p>Point her at a messy folder and she grades it. She catches dated report folders at the top level, <code>thing-v2</code> / <code>thing-v3</code> / <code>thing-final</code> sprawl, screenshot piles, empty shells and typo'd folder names.</p>
       <p>You get a plan you can apply and undo with one click, or a chore list you can paste to the agent that made the mess.</p>
+      <p>She's careful about it. A folder full of projects is a workspace: she never moves or groups the projects (tools and agents find them by path) and only tidies inside them. In your own folders and in code, she ticks only what's plainly throwaway, and you tick the rest. Whole drives, Windows, installed programs, apps' data and your profile folder itself can't be rooms at all.</p>
     </td>
   </tr>
   <tr>

@@ -37,7 +37,8 @@ const BUDGET: u64 = 10_000_000;
 
 /// The config's rooms plus the usual places people keep code, if they exist.
 pub(super) fn default_roots(paths: &Paths, rooms: &[PathBuf]) -> Vec<PathBuf> {
-    let mut v: Vec<PathBuf> = rooms.to_vec();
+    // Only rooms that are rooms: a whole drive (say) would mean walking everything on it.
+    let mut v: Vec<PathBuf> = rooms.iter().filter_map(|r| crate::tidy::check_room(r, paths).ok()).collect();
     for rel in [
         "Workspace",
         "workspace",

@@ -6,7 +6,8 @@
 //! outright (they're empty).
 
 use crate::config::TidyConfig;
-use crate::util::{human_bytes, now_secs, plural};
+use crate::paths::Paths;
+use crate::util::{human_bytes, norm_path, now_secs, plural};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -74,6 +75,17 @@ pub struct RoomReport {
     pub entries: usize,
     /// Has code in it (package.json, .git, ...). Moving things can break paths, so mom is careful.
     pub code_project: bool,
+    /// Folders at the top level that are projects of their own (a git repo, a package). A room
+    /// with several is a workspace: mom never moves or groups them, only tidies inside them.
+    #[serde(default)]
+    pub projects: usize,
+    /// The room was too big to look through in full; what's listed is what mom saw.
+    #[serde(default)]
+    pub partial: bool,
+    /// One of the person's own folders (Desktop, Documents, Downloads…) or in OneDrive: mom
+    /// ticks nothing she'd move or remove there.
+    #[serde(default)]
+    pub personal: bool,
     pub findings: Vec<Finding>,
     pub actions: Vec<Action>,
     pub scanned_at: u64,
@@ -88,13 +100,58 @@ fn date_re() -> &'static Regex {
     re(&R, r"(?:19|20)\d{2}[-_.]?(?:0[1-9]|1[0-2])[-_.]?(?:0[1-9]|[12]\d|3[01])")
 }
 
+/// Names that say "screenshot" whatever folder they're in.
 fn shot_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    re(
-        &R,
-        r"(?i)(screenshot|screen[-_ ]?shot|^shot|[-_]shot|capture|snap|^page[-_]?\d|^step[-_]?\d|^frame[-_]?\d|playwright|^\d+$|^img[-_]?\d+|^image[-_]?\d+|^test[-_])",
-    )
+    re(&R, r"(?i)(screenshot|screen[-_ ]?shot|cleanshot|^snip|capture|playwright)")
 }
+
+/// Names that are only captures inside a capture or scratch folder ("frame_1_01", "img_004",
+/// "step-2"): elsewhere they're as likely to be references or renders someone wants.
+fn loose_shot_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    re(&R, r"(?i)((^|[-_ ])(shot|snap)s?([-_ \d]|$)|^page[-_]?\d|^step[-_]?\d|^frame[-_]?\d|^\d+$|^img[-_]?\d+|^image[-_]?\d+|^test[-_])")
+}
+
+/// Folders whose images are captures by nature.
+const CAPTURE_DIRS: &[&str] = &["screenshots", "screenshot", "shots", ".shots", "captures", "screens", "screencaps", "snaps", "snapshots-tmp", "recordings"];
+/// Scratch folders: whatever piles up in them is throwaway.
+const SCRATCH_DIRS: &[&str] = &["tmp", ".tmp", "temp", ".temp", "scratch"];
+
+/// Images a test compares against (Jest, Playwright, golden files). Deleting them breaks the
+/// test, so they're never offered.
+fn is_baseline_dir(name: &str) -> bool {
+    matches!(name, "__screenshots__" | "__image_snapshots__" | "snapshots" | "baselines" | "golden" | "goldens") || name.ends_with("-snapshots")
+}
+
+/// A folder holding one of these is a project of its own.
+const PROJECT_MARKERS: &[&str] = &[
+    ".git",
+    "package.json",
+    "Cargo.toml",
+    "pyproject.toml",
+    "go.mod",
+    "deno.json",
+    "requirements.txt",
+    "project.godot",
+    "pubspec.yaml",
+    "build.gradle",
+    "pom.xml",
+    "composer.json",
+    "Gemfile",
+    "CMakeLists.txt",
+];
+
+/// Is `dir` a project (a git repo, a package, a game)? Moving one breaks every path to it.
+pub fn is_project_dir(dir: &Path) -> bool {
+    PROJECT_MARKERS.iter().any(|f| dir.join(f).exists())
+        || std::fs::read_dir(dir)
+            .map(|rd| rd.filter_map(Result::ok).any(|e| matches!(ext_of(&e.file_name().to_string_lossy()).as_str(), "sln" | "uproject" | "csproj")))
+            .unwrap_or(false)
+}
+
+/// The most mom reads in one room before saying it's too big to look through in full.
+const MAX_ENTRIES: usize = 300_000;
 
 pub(crate) const REPORT_WORDS: &[&str] = &[
     "report", "summary", "plan", "notes", "analysis", "review", "audit", "uploads", "status", "results",
@@ -209,13 +266,19 @@ fn levenshtein(a: &str, b: &str) -> usize {
 
 /// Groups look-alike sibling folders: `radio-night-show-v3-2026-10-09`, `...-v4-...`, ...
 /// Returns (family name, member names).
+/// Words too common to make a family on their own ("Free Prism Shape", "Free Line Shape").
+const GENERIC_WORDS: &[&str] = &[
+    "free", "copy", "untitled", "final", "test", "temp", "download", "downloads", "image", "images", "file", "files", "document", "photo",
+    "video", "screenshot", "project", "export", "backup",
+];
+
 pub fn families(names: &[String], min: usize) -> Vec<(String, Vec<String>)> {
     let toks: Vec<(String, Vec<String>)> = names.iter().map(|n| (n.clone(), tokens(n))).collect();
     let mut candidates: BTreeMap<(usize, String), Vec<String>> = BTreeMap::new();
     for (name, t) in &toks {
         for k in 1..=t.len().min(4) {
             let prefix = t[..k].join("-");
-            if prefix.len() < 4 || prefix.chars().all(|c| c.is_ascii_digit()) {
+            if prefix.len() < 4 || prefix.chars().all(|c| c.is_ascii_digit()) || (k == 1 && GENERIC_WORDS.contains(&prefix.as_str())) {
                 continue;
             }
             candidates.entry((k, prefix)).or_default().push(name.clone());
@@ -259,8 +322,106 @@ pub fn families(names: &[String], min: usize) -> Vec<(String, Vec<String>)> {
     out
 }
 
+/// Can `dir` be a room? Mom tidies folders of yours, not whole drives, Windows, installed
+/// programs, apps' own data or your profile folder itself: moving or deleting things there
+/// breaks the PC. Returns the folder as it really is (links followed), or why not, in words
+/// for the person.
+pub fn check_room(dir: &Path, paths: &Paths) -> Result<PathBuf, String> {
+    let shown = dir.display().to_string();
+    let raw = dir.to_string_lossy();
+    let network = |p: &str| format!("{p} is on another computer or in WSL. Mom only tidies folders on this PC's own drives.");
+    if raw.starts_with(r"\\") && !raw.starts_with(r"\\?\") && !raw.starts_with(r"\\.\") {
+        return Err(network(&shown));
+    }
+    let meta = std::fs::metadata(dir).map_err(|_| format!("There's no folder at {shown}."))?;
+    if !meta.is_dir() {
+        return Err(format!("{shown} is a file, not a folder."));
+    }
+    let real = std::fs::canonicalize(dir).map(|p| unverbatim(&p)).unwrap_or_else(|_| dir.to_path_buf());
+    let real_s = real.to_string_lossy().to_string();
+    if real_s.starts_with(r"\\") {
+        return Err(network(&real_s));
+    }
+    if real.parent().is_none() {
+        return Err(format!("{real_s} is a whole drive. Pick a folder on it instead: mom tidies rooms, not the whole house."));
+    }
+    let r = norm_path(&real_s);
+    let inside = |base: &Path| {
+        let b = norm_path(&base.to_string_lossy());
+        r == b || r.starts_with(&format!("{b}\\"))
+    };
+    let programs = paths.system_drive.join("Program Files");
+    let app_data = paths.home.join("AppData");
+    let off_limits: [(&Path, &str); 8] = [
+        (&paths.windows, "Windows' own folder"),
+        (&programs, "where programs are installed"),
+        (&paths.program_files_x86, "where programs are installed"),
+        (&paths.program_data, "where programs keep their data"),
+        (&app_data, "where apps keep their data"),
+        (&paths.local_appdata, "where apps keep their data"),
+        (&paths.appdata, "where apps keep their data"),
+        (&paths.mom, "mom's own folder"),
+    ];
+    for (base, what) in off_limits {
+        if inside(base) {
+            return Err(format!("{real_s} is {what}. Moving or deleting things there can break programs, so mom won't tidy it."));
+        }
+    }
+    let home = norm_path(&paths.home.to_string_lossy());
+    if r == home || home.starts_with(&format!("{r}\\")) {
+        return Err(format!(
+            "{real_s} holds your whole user folder, where apps keep their settings. Pick a folder inside it instead, like Desktop or Documents."
+        ));
+    }
+    if let Ok(rel) = real.strip_prefix(&paths.home) {
+        if let Some(first) = rel.components().next().map(|c| c.as_os_str().to_string_lossy().to_string()) {
+            if first.starts_with('.') {
+                return Err(format!("{real_s} is an app's own folder ({first}). Mom won't tidy it."));
+            }
+        }
+    }
+    // Windows' own folders at the top of a drive.
+    let top = real.components().nth(2).map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if ["$recycle.bin", "system volume information", "recovery", "perflogs", "windows.old", "$winreagent", "$windows.~bt", "$windows.~ws", "msocache"].contains(&top.as_str()) {
+        return Err(format!("{real_s} belongs to Windows. Mom won't tidy it."));
+    }
+    Ok(real)
+}
+
+/// Is `room` one of the person's own folders (Desktop, Documents, Downloads, Pictures, Videos,
+/// Music) or anywhere in OneDrive? What's in them is theirs rather than an agent's, and in
+/// OneDrive a change reaches the cloud: mom offers, but ticks nothing she'd move or remove.
+fn personal_folder(room: &Path) -> bool {
+    let r = norm_path(&room.to_string_lossy());
+    let known = [dirs::desktop_dir(), dirs::document_dir(), dirs::download_dir(), dirs::picture_dir(), dirs::video_dir(), dirs::audio_dir()];
+    if known.iter().flatten().any(|k| norm_path(&k.to_string_lossy()) == r) {
+        return true;
+    }
+    // The same folders in the profile, even when Windows keeps the real ones in OneDrive.
+    let name = room.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if ["desktop", "documents", "downloads", "pictures", "videos", "music"].contains(&name.as_str())
+        && dirs::home_dir().is_some_and(|h| room.parent().is_some_and(|p| norm_path(&p.to_string_lossy()) == norm_path(&h.to_string_lossy())))
+    {
+        return true;
+    }
+    ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"].iter().filter_map(std::env::var_os).any(|c| {
+        let c = norm_path(&c.to_string_lossy());
+        !c.is_empty() && (r == c || r.starts_with(&format!("{c}\\")))
+    })
+}
+
+/// "C:\x" for "\\?\C:\x" (what canonicalize gives back on Windows).
+fn unverbatim(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(unc) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    PathBuf::from(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string())
+}
+
 pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
     anyhow::ensure!(room.is_dir(), "{} is not a folder", room.display());
+    anyhow::ensure!(room.parent().is_some(), "{} is a whole drive; mom tidies folders on it, not the drive", room.display());
     let mut findings: Vec<Finding> = Vec::new();
     let mut actions: Vec<Action> = Vec::new();
     let s = |p: &Path| p.to_string_lossy().to_string();
@@ -286,10 +447,16 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
     dirs.sort();
     files.sort();
     let entries = dirs.len() + files.len();
-    let code_project = ["package.json", "Cargo.toml", "pyproject.toml", "go.mod", "deno.json", "requirements.txt"]
-        .iter()
-        .any(|f| room.join(f).exists())
-        || room.join(".git").exists();
+    let code_project = is_project_dir(room);
+    // Projects of their own at the top level. Several make the room a workspace.
+    let projects: HashSet<String> = dirs.iter().filter(|d| is_project_dir(&room.join(d))).cloned().collect();
+    let workspace = !code_project && projects.len() >= 2;
+    let careful = code_project || workspace;
+    // What's ticked for you has to be plainly safe. Moving things and removing folders isn't,
+    // in code, in your own folders, or in big batches (the bigger the batch, the likelier a
+    // wrong guess is in it). Those are offered, and you tick them.
+    let personal = personal_folder(room);
+    let tick_moves = |n: usize| !careful && !personal && n <= 50;
 
     // Where reports belong. Reuse an existing folder that matches, even with odd casing.
     let reports_name = dirs
@@ -356,14 +523,14 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
             title: format!("Move {} into {reports_name}/", plural(loose.len() as u64, "report file")),
             reason: "Reports go in one clearly named place.".into(),
             bytes,
-            selected: !code_project,
+            selected: tick_moves(loose.len()),
         });
     }
 
     // Folder families and dated folders.
     let candidates: Vec<String> = dirs
         .iter()
-        .filter(|d| !d.eq_ignore_ascii_case(&reports_name) && !ARTIFACT_DIRS.contains(&d.as_str()))
+        .filter(|d| !d.eq_ignore_ascii_case(&reports_name) && !ARTIFACT_DIRS.contains(&d.as_str()) && !projects.contains(*d))
         .cloned()
         .collect();
     let profiles: BTreeMap<String, Profile> = candidates.iter().map(|d| (d.clone(), profile(&room.join(d)))).collect();
@@ -402,7 +569,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
                 title: format!("Group {} into {shown}/", plural(movers.len() as u64, "folder")),
                 reason: "One thing, one folder.".into(),
                 bytes,
-                selected: !code_project,
+                selected: tick_moves(movers.len()),
             });
         }
     }
@@ -431,7 +598,7 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
                 title: format!("Move {} into {reports_name}/", plural(reports.len() as u64, "dated report folder")),
                 reason: "Reports go in one place, not scattered by date.".into(),
                 bytes,
-                selected: !code_project,
+                selected: tick_moves(reports.len()),
             });
         }
         if !content.is_empty() {
@@ -455,7 +622,14 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
         let n = e.file_name().to_string_lossy().to_ascii_lowercase();
         e.depth() == 0 || !(SKIP_DIRS.contains(&n.as_str()) && n != "__pycache__")
     });
+    let mut seen = 0usize;
+    let mut partial = false;
     for e in walker.filter_map(Result::ok) {
+        seen += 1;
+        if seen > MAX_ENTRIES {
+            partial = true;
+            break;
+        }
         let name = e.file_name().to_string_lossy().to_string();
         let lname = name.to_ascii_lowercase();
         if e.file_type().is_dir() {
@@ -471,9 +645,18 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
         let ext = ext_of(&name);
         if IMG_EXT.contains(&ext.as_str()) {
             let stem = name.rsplit_once('.').map(|(a, _)| a).unwrap_or(&name);
-            let entry = images_by_dir.entry(e.path().parent().unwrap_or(room).to_path_buf()).or_default();
+            let dir = e.path().parent().unwrap_or(room);
+            let folders: Vec<String> = dir
+                .strip_prefix(room)
+                .map(|r| r.components().map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase()).collect())
+                .unwrap_or_default();
+            if folders.iter().any(|f| is_baseline_dir(f)) {
+                continue; // a test's reference images
+            }
+            let in_captures = folders.iter().any(|f| CAPTURE_DIRS.contains(&f.as_str()) || SCRATCH_DIRS.contains(&f.as_str()));
+            let entry = images_by_dir.entry(dir.to_path_buf()).or_default();
             entry.2 += 1;
-            if shot_re().is_match(stem) {
+            if shot_re().is_match(stem) || (in_captures && loose_shot_re().is_match(stem)) {
                 entry.0.push(e.path().to_path_buf());
                 entry.1 += len;
             }
@@ -496,19 +679,24 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
         if shots.len() < cfg.screenshot_pile {
             continue;
         }
-        let dname = dir.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        let obvious = ["screenshots", "shots", "captures", "screens", "snapshots-tmp"].contains(&dname.as_str());
+        let scratch = dir
+            .strip_prefix(room)
+            .map(|r| r.components().any(|c| SCRATCH_DIRS.contains(&c.as_os_str().to_string_lossy().to_ascii_lowercase().as_str())))
+            .unwrap_or(false);
+        // Ticked for you only in a scratch folder. Anywhere else, captures may be a project's
+        // test fixtures or docs, or your own screenshots (Pictures\Screenshots): offered, not ticked.
+        let obvious = scratch;
         let rel = dir.strip_prefix(room).unwrap_or(dir).to_string_lossy().replace('\\', "/");
         let place = if rel.is_empty() { "the top level".to_string() } else { format!("{rel}/") };
         findings.push(Finding {
             kind: FindingKind::ScreenshotPile,
             title: format!("{} screenshots piled up in {place}", shots.len()),
             detail: format!(
-                "{} of captures{}. Delete them once they've done their job (video uploaded, bug fixed).",
+                "{} of captures{}. Usually throwaway once they've done their job (the video's out, the bug's fixed).",
                 human_bytes(*bytes),
                 if *total_images > shots.len() { format!(", out of {total_images} images there") } else { String::new() }
             ),
-            paths: vec![s(dir)],
+            paths: shots.iter().map(|p| s(p)).collect(),
             bytes: *bytes,
         });
         actions.push(Action {
@@ -583,7 +771,8 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
             selected: false,
         });
     }
-    let empties = empty_dirs(room);
+    let (empties, cut) = empty_dirs_within(room, MAX_ENTRIES / 3);
+    partial |= cut;
     if !empties.is_empty() {
         findings.push(Finding {
             kind: FindingKind::EmptyFolders,
@@ -600,31 +789,39 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
             title: format!("Remove {}", plural(empties.len() as u64, "empty folder")),
             reason: "Leave no empty folders behind.".into(),
             bytes: 0,
-            selected: !code_project,
+            selected: !careful && !personal,
         });
     }
-    if entries > 30 {
+    // Projects sit at the top of a workspace by design; only the rest crowds it.
+    let loose_entries = entries - projects.len();
+    if loose_entries > 30 {
         findings.push(Finding {
             kind: FindingKind::Crowded,
-            title: format!("{entries} things at the top level"),
+            title: if projects.is_empty() {
+                format!("{loose_entries} things at the top level")
+            } else {
+                format!("{loose_entries} things at the top level besides the projects")
+            },
             detail: "Past about 30, nobody can find anything. Group related folders.".into(),
             paths: vec![],
             bytes: 0,
         });
     }
 
+    // Each kind of mess counts, but none on its own can sink a room: a thousand empty folders
+    // are one chore, not a thousand.
     let mut score: u32 = 0;
     for f in &findings {
         let n = f.paths.len() as u32;
         score += match f.kind {
-            FindingKind::LooseReports => 3 * n,
-            FindingKind::DatedFolders => 3 * n,
-            FindingKind::Family => n + 2,
-            FindingKind::ScreenshotPile => 4 + (f.bytes / (100 * 1024 * 1024)) as u32,
-            FindingKind::TempDebris => 1 + n / 10,
-            FindingKind::EmptyFolders => 1 + n / 3,
+            FindingKind::LooseReports => (3 * n).min(15),
+            FindingKind::DatedFolders => (3 * n).min(15),
+            FindingKind::Family => (n + 2).min(10),
+            FindingKind::ScreenshotPile => (4 + (f.bytes / (100 * 1024 * 1024)) as u32).min(8),
+            FindingKind::TempDebris => (1 + n / 10).min(8),
+            FindingKind::EmptyFolders => (1 + n / 3).min(10),
             FindingKind::Misspelled => 2,
-            FindingKind::Crowded => (entries.saturating_sub(25) / 5) as u32,
+            FindingKind::Crowded => ((loose_entries.saturating_sub(25) / 5) as u32).min(10),
         };
     }
     let grade = match score {
@@ -643,6 +840,9 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
         score,
         entries,
         code_project,
+        projects: projects.len(),
+        partial,
+        personal,
         findings,
         actions,
         scanned_at: now,
@@ -651,8 +851,19 @@ pub fn inspect(room: &Path, cfg: &TidyConfig) -> anyhow::Result<RoomReport> {
 
 /// Outermost folders under `root` that contain no files at any depth.
 pub fn empty_dirs(root: &Path) -> Vec<PathBuf> {
-    fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) -> bool {
+    empty_dirs_within(root, usize::MAX).0
+}
+
+/// The same, looking in at most `budget` folders; past that, anything not looked at counts as
+/// not empty. Says whether it ran out.
+pub fn empty_dirs_within(root: &Path, budget: usize) -> (Vec<PathBuf>, bool) {
+    let left = std::cell::Cell::new(budget);
+    fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>, left: &std::cell::Cell<usize>) -> bool {
         // Returns true if `dir` holds no files (recursively).
+        if left.get() == 0 {
+            return false;
+        }
+        left.set(left.get() - 1);
         let Ok(rd) = std::fs::read_dir(dir) else { return false };
         let mut empty = true;
         let mut empty_children = Vec::new();
@@ -670,7 +881,7 @@ pub fn empty_dirs(root: &Path) -> Vec<PathBuf> {
                     empty = false;
                     continue;
                 }
-                if walk(&e.path(), depth + 1, out) {
+                if walk(&e.path(), depth + 1, out, left) {
                     empty_children.push(e.path());
                 } else {
                     empty = false;
@@ -685,12 +896,12 @@ pub fn empty_dirs(root: &Path) -> Vec<PathBuf> {
         empty
     }
     let mut out = Vec::new();
-    if walk(root, 0, &mut out) {
+    if walk(root, 0, &mut out, &left) {
         // The whole room is empty; don't suggest deleting the room itself.
         out.clear();
     }
     out.sort();
-    out
+    (out, left.get() == 0)
 }
 
 // ------------------------------------------------------------------ apply & undo
@@ -743,10 +954,23 @@ fn has_files(dir: &Path) -> bool {
 }
 
 /// Applies the selected actions (by id) of a report. Everything is journaled for `undo`.
+/// Is `p` somewhere inside `room` (not the room itself, not above it)? A plan comes from a scan,
+/// but it's still data: mom checks every path again before touching it.
+fn within(room: &Path, p: &Path) -> bool {
+    let r = norm_path(&room.to_string_lossy());
+    let x = norm_path(&p.to_string_lossy());
+    x.starts_with(&format!("{r}\\")) && !x.split('\\').any(|part| part == "..")
+}
+
 pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyReport {
     let mut r = ApplyReport::default();
     let mut journal = Journal { room: report.path.clone(), at: now_secs(), entries: vec![] };
     let room = Path::new(&report.path);
+    if room.parent().is_none() {
+        r.message = "Mom doesn't tidy a whole drive.".into();
+        return r;
+    }
+    let outside = |t: &str| format!("{t}: outside the room, so mom left it alone");
     for a in report.actions.iter().filter(|a| ids.contains(&a.id)) {
         match a.op {
             Op::Move => {
@@ -763,6 +987,10 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
                 for t in &a.targets {
                     let src = PathBuf::from(t);
                     let Some(name) = src.file_name() else { continue };
+                    if !within(room, &src) {
+                        r.failed.push(outside(t));
+                        continue;
+                    }
                     if !src.exists() || to.starts_with(&src) {
                         continue;
                     }
@@ -778,6 +1006,10 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
             }
             Op::Rename => {
                 let (Some(t), Some(to)) = (a.targets.first(), &a.to) else { continue };
+                if !within(room, Path::new(t)) || !within(room, Path::new(to)) {
+                    r.failed.push(outside(t));
+                    continue;
+                }
                 if Path::new(to).exists() {
                     r.failed.push(format!("{to} already exists"));
                     continue;
@@ -792,6 +1024,10 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
             }
             Op::Recycle => {
                 for t in &a.targets {
+                    if !within(room, Path::new(t)) {
+                        r.failed.push(outside(t));
+                        continue;
+                    }
                     if !Path::new(t).exists() {
                         continue;
                     }
@@ -807,6 +1043,10 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
             Op::RemoveEmpty => {
                 for t in &a.targets {
                     let p = Path::new(t);
+                    if !within(room, p) {
+                        r.failed.push(outside(t));
+                        continue;
+                    }
                     if !p.is_dir() || has_files(p) {
                         continue; // something moved in since the scan; leave it
                     }
@@ -970,26 +1210,59 @@ fn restore_from_recycle_bin(entries: &[&JournalEntry], _since: u64) -> (u32, Vec
 }
 
 /// A message to paste to an agent so it tidies up (and fixes any paths that referenced the mess).
+/// A note to paste to an agent: what's wrong, what to do about each, and how (carefully).
 pub fn chore_prompt(report: &RoomReport) -> String {
-    let mut out = format!(
-        "Mom here. Your room ({}) got a {} — {}\n\nPlease tidy it up:\n",
-        report.path, report.grade, report.line
-    );
+    let an = if matches!(report.grade, 'A' | 'F') { "an" } else { "a" };
+    let mut out = format!("Mom here. I looked at {} and gave it {an} {}. Could you help me tidy it up?\n\n", report.path, report.grade);
+    if report.projects >= 2 && !report.code_project {
+        out.push_str(&format!(
+            "This folder holds {} separate projects, each its own git repo or package. Don't move, rename, merge or group \
+             them: other tools and agents find them by their paths. Only tidy inside them.\n\n",
+            report.projects
+        ));
+    } else if report.code_project {
+        out.push_str("This folder is a code project. Before you move anything, check what imports, scripts or configs point at it.\n\n");
+    }
+    if report.partial {
+        out.push_str("It's a big folder and I didn't get through all of it, so there may be more of the same.\n\n");
+    }
+    if report.findings.is_empty() {
+        out.push_str("Nothing needs doing. It's tidy.\n");
+        return out;
+    }
+    out.push_str("What needs doing:\n");
     for f in &report.findings {
-        out.push_str(&format!("- {}. {}\n", f.title, f.detail));
+        let todo = match f.kind {
+            FindingKind::LooseReports => "Move them there.",
+            FindingKind::DatedFolders => "Do as the note says, and ask me if it isn't clear where they belong.",
+            FindingKind::Family => "If they really are versions of one thing, put them in that one folder. If they're different things, leave them and tell me.",
+            FindingKind::ScreenshotPile => {
+                "Recycle the ones that are plainly throwaway captures. Keep anything that looks like a reference, a test baseline or an \
+                 asset, and ask me about any you're not sure of."
+            }
+            FindingKind::TempDebris => "Recycle them.",
+            FindingKind::EmptyFolders => "Remove them, checking each is still empty first.",
+            FindingKind::Misspelled => "Rename it, merging into the right folder if both exist.",
+            FindingKind::Crowded => "Group related folders, but never move a project.",
+        };
+        out.push_str(&format!("- {}. {} {}\n", f.title, f.detail, todo));
         for p in f.paths.iter().take(12) {
             let rel = Path::new(p).strip_prefix(&report.path).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| p.clone());
             out.push_str(&format!("    {rel}\n"));
         }
         if f.paths.len() > 12 {
-            out.push_str(&format!("    …and {} more\n", f.paths.len() - 12));
+            out.push_str(&format!("    …and {} more like these\n", f.paths.len() - 12));
         }
     }
-    out.push_str(
-        "\nRules: reports go in Documents/ with clear names. One thing, one folder (no -v2/-v3/-trial siblings). \
-         Delete temp files and screenshots that have done their job. Remove folders you empty. \
-         Update any scripts, configs or docs that point at paths you move, then tell me exactly what you changed.\n",
-    );
+    out.push_str(&format!(
+        "\nHow:\n\
+         - Send things to the Recycle Bin rather than deleting them for good. If you can't, ask me before deleting anything.\n\
+         - Only touch what's described above, inside {}. Leave .git, node_modules and everything outside it alone.\n\
+         - If you move something, update the scripts, configs and docs that point at it.\n\
+         - Reports go in Documents/ with clear names, and one thing gets one folder (no -v2/-v3/-trial siblings).\n\
+         - When you're done, tell me exactly what you changed.\n",
+        report.path
+    ));
     out
 }
 
@@ -1109,6 +1382,152 @@ mod tests {
 
         let prompt = chore_prompt(&r);
         assert!(prompt.contains("radio-night-show") && prompt.contains("Documents/"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("mom-tidy-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        root
+    }
+
+    #[test]
+    fn rooms_are_folders_of_yours_not_drives_windows_or_apps() {
+        let root = tmp("rooms");
+        let paths = Paths::under(&root);
+        for d in [&paths.windows, &paths.program_data, &paths.local_appdata, &paths.appdata, &paths.mom] {
+            mkdir(&d.join("inside"));
+        }
+        mkdir(&paths.home.join(".claude").join("projects"));
+        mkdir(&paths.home.join("Desktop").join("mess"));
+        write(&paths.home.join("notes.txt"), "x");
+        let no = |p: &Path, says: &str| {
+            let err = check_room(p, &paths).unwrap_err();
+            assert!(err.contains(says), "{}: {err}", p.display());
+        };
+        no(&paths.windows.join("inside"), "Windows' own folder");
+        no(&paths.program_data, "where programs keep their data");
+        no(&paths.local_appdata.join("inside"), "where apps keep their data");
+        no(&paths.mom, "mom's own folder");
+        no(&paths.home, "your whole user folder");
+        no(&root, "your whole user folder"); // above the profile
+        no(&paths.home.join(".claude").join("projects"), "an app's own folder");
+        no(&paths.home.join("notes.txt"), "a file, not a folder");
+        no(&paths.home.join("nowhere"), "There's no folder");
+        no(Path::new(r"\\server\share\stuff"), "on another computer");
+        no(Path::new(r"\\wsl$\Ubuntu\home"), "on another computer");
+        #[cfg(windows)]
+        {
+            no(Path::new(r"C:\"), "a whole drive");
+            // A link that leads into Windows' folder is judged by where it leads.
+            let link = paths.home.join("Desktop").join("shortcut-to-windows");
+            junction::create(&paths.windows, &link).unwrap();
+            no(&link, "Windows' own folder");
+        }
+        let ok = check_room(&paths.home.join("Desktop").join("mess"), &paths).unwrap();
+        assert!(ok.ends_with("mess"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_folder_of_projects_is_a_workspace_and_projects_never_move() {
+        let root = tmp("workspace");
+        for p in ["atlas-web", "atlas-docs", "atlas-api"] {
+            write(&root.join(p).join("package.json"), "{}");
+        }
+        mkdir(&root.join("nimbus").join(".git"));
+        for d in ["atlas-notes-a", "atlas-notes-b", "atlas-notes-c"] {
+            write(&root.join(d).join("notes.md"), "notes");
+        }
+        let r = inspect(&root, &TidyConfig::default()).unwrap();
+        assert_eq!((r.projects, r.code_project), (4, false));
+        for f in r.findings.iter().filter(|f| f.kind == FindingKind::Family) {
+            assert!(f.paths.iter().all(|p| p.contains("atlas-notes")), "a project was grouped: {:?}", f.paths);
+        }
+        assert!(r.actions.iter().all(|a| !(a.op == Op::Move && a.selected)), "nothing moves unless ticked in a workspace");
+        let prompt = chore_prompt(&r);
+        assert!(prompt.contains("holds 4 separate projects") && prompt.contains("Don't move, rename, merge or group them"), "{prompt}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn screenshots_by_name_anywhere_by_look_only_in_capture_folders() {
+        let root = tmp("shots");
+        for i in 0..12 {
+            write(&root.join("refs").join("librarian").join(format!("frame_1_{i:02}.jpg")), "jpg"); // reference frames
+            write(&root.join("shots").join(format!("frame_{i:03}.png")), "png"); // captures
+            write(&root.join(format!("Screenshot 2026-01-{i:02} 101010.png")), "png"); // Windows' own names
+            write(&root.join("tests").join("__screenshots__").join(format!("Screenshot home {i}.png")), "png"); // test baselines
+            write(&root.join("shots").join("weapons").join(format!("hero_shotgun_aim_{i:03}.png")), "png"); // not a "shot"
+            write(&root.join("art").join(".tmp").join(format!("img_{i:03}.png")), "png"); // scratch
+        }
+        let r = inspect(&root, &TidyConfig::default()).unwrap();
+        let piles: Vec<String> = r.findings.iter().filter(|f| f.kind == FindingKind::ScreenshotPile).map(|f| f.title.clone()).collect();
+        assert!(piles.iter().any(|t| t.contains("in shots/")), "{piles:?}");
+        assert!(piles.iter().any(|t| t.contains("the top level")), "{piles:?}");
+        assert!(piles.iter().any(|t| t.contains("art/.tmp/")), "{piles:?}");
+        assert!(!piles.iter().any(|t| t.contains("refs") || t.contains("__screenshots__") || t.contains("weapons")), "{piles:?}");
+        // Only the scratch folder's are ticked for you.
+        let ticked: Vec<&str> = r.actions.iter().filter(|a| a.selected && a.title.contains("screenshots")).map(|a| a.title.as_str()).collect();
+        assert_eq!(ticked.len(), 1, "{ticked:?}");
+        assert!(ticked[0].contains(".tmp"));
+        // The note lists the files themselves, not just the folder.
+        let shots = r.findings.iter().find(|f| f.title.contains("in shots/")).unwrap();
+        assert!(shots.paths.iter().all(|p| p.ends_with(".png")));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_plan_never_reaches_outside_its_room() {
+        // A made-up plan aimed only outside the room, so nothing real is ever recycled.
+        let root = tmp("outside");
+        let room = root.join("room");
+        write(&room.join("keep.txt"), "x");
+        write(&root.join("precious.txt"), "keep me");
+        mkdir(&root.join("empty-next-door"));
+        let mut r = inspect(&room, &TidyConfig::default()).unwrap();
+        let outside = root.join("precious.txt").to_string_lossy().to_string();
+        let sneaky = room.join("..").join("precious.txt").to_string_lossy().to_string();
+        let next_door = root.join("empty-next-door").to_string_lossy().to_string();
+        let plan = |id: &str, op: Op, targets: Vec<String>, to: Option<String>| Action {
+            id: id.into(),
+            op,
+            targets,
+            to,
+            title: String::new(),
+            reason: String::new(),
+            bytes: 0,
+            selected: true,
+        };
+        r.actions = vec![
+            plan("r", Op::Recycle, vec![outside.clone(), sneaky.clone()], None),
+            plan("e", Op::RemoveEmpty, vec![next_door.clone()], None),
+            plan("m", Op::Move, vec![outside.clone()], Some(room.join("in").to_string_lossy().to_string())),
+            plan("n", Op::Rename, vec![outside.clone()], Some(room.join("mine.txt").to_string_lossy().to_string())),
+        ];
+        let ids: Vec<String> = r.actions.iter().map(|a| a.id.clone()).collect();
+        let done = apply(&r, &ids, &root.join("journal"));
+        assert!(root.join("precious.txt").exists() && root.join("empty-next-door").is_dir(), "{:?}", done.failed);
+        assert_eq!((done.recycled, done.removed, done.moved), (0, 0, 0));
+        assert_eq!(done.failed.iter().filter(|f| f.contains("outside the room")).count(), 5, "{:?}", done.failed);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn one_kind_of_mess_cant_sink_a_room_and_the_note_is_kind() {
+        let root = tmp("hollow");
+        for i in 0..600 {
+            mkdir(&root.join(format!("shell-{i:03}")).join("inner"));
+        }
+        write(&root.join("keep").join("file.txt"), "x");
+        let r = inspect(&root, &TidyConfig::default()).unwrap();
+        assert_ne!(r.grade, 'F', "600 empty folders are one chore, not an F (score {})", r.score);
+        let prompt = chore_prompt(&r);
+        assert!(prompt.contains("Recycle Bin") && !prompt.contains("Delete them once"), "{prompt}");
+        let f = RoomReport { grade: 'F', ..r.clone() };
+        assert!(chore_prompt(&f).contains("gave it an F"));
+        let c = RoomReport { grade: 'C', ..r };
+        assert!(chore_prompt(&c).contains("gave it a C"));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

@@ -749,8 +749,10 @@ fn run(cli: Cli) -> Result<i32> {
                 Some(d) => d,
                 None => std::env::current_dir()?,
             };
-            let dir = dir.canonicalize().with_context(|| format!("can't find {}", dir.display()))?;
-            let dir = PathBuf::from(dir.to_string_lossy().trim_start_matches(r"\\?\"));
+            let dir = match tidy::check_room(&dir, &paths) {
+                Ok(d) => d,
+                Err(why) => bail!("{why}"),
+            };
             let report = tidy::inspect(&dir, &cfg.tidy)?;
             if prompt {
                 println!("{}", tidy::chore_prompt(&report));
@@ -1084,6 +1086,17 @@ fn print_room(st: &Style, r: &tidy::RoomReport) {
     println!("{}  {} {}  {}", st.pink(&st.bold("mom")), st.bold(&r.name), st.bold(&format!("[{grade}]")), st.bold(&format!("\"{}\"", r.line)));
     if r.code_project {
         println!("  {}", st.dim("This is a code project. Moving things can break paths, so nothing is pre-selected; `--prompt` writes a chore list for your agent instead."));
+    } else if r.projects >= 2 {
+        println!(
+            "  {}",
+            st.dim(&format!("This folder holds {} projects. Mom never moves or groups them (tools and agents find them by path); she only tidies inside them.", r.projects))
+        );
+    }
+    if r.personal {
+        println!("  {}", st.dim("This is one of your own folders, so only what's plainly throwaway is ticked."));
+    }
+    if r.partial {
+        println!("  {}", st.yellow("It's too big to look through in full, so this is what mom saw in the first part of it."));
     }
     for f in &r.findings {
         println!("\n  {} {}", st.bold("•"), st.bold(&f.title));

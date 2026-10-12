@@ -61,6 +61,7 @@
     roomOpen: null,
     roomSel: {},
     roomBusy: false,
+    roomErrors: {}, // rooms mom can't tidy, and why (a drive, Windows, gone)
     rules: null,
     rulesDraft: null,
     rulesEditing: false,
@@ -1421,8 +1422,9 @@
     const rows = state.roomPaths
       .map((p) => {
         const r = state.rooms[p];
-        const name = r ? r.name : p.split(/[\\/]/).pop();
-        const meta = r ? `${plural(r.entries, "thing")} at the top level, ${r.findings.length} to sort out` : "Looking…";
+        const name = r ? r.name : p.split(/[\\/]/).filter(Boolean).pop() || p;
+        const why = state.roomErrors[p];
+        const meta = why ? why : r ? `${plural(r.entries, "thing")} at the top level, ${r.findings.length} to sort out` : "Looking…";
         return `<div class="row room-row" id="room-${hash(p)}" data-room="${esc(p)}" data-act="open-room" tabindex="0" role="button">
           <span class="row-name">${esc(name)}</span>
           <div class="row-meta"><span class="why">${esc(meta)}</span></div>
@@ -1448,12 +1450,23 @@
   function renderRoom(path) {
     const r = state.rooms[path];
     let html = `<button class="back" data-act="close-room">All rooms</button>`;
+    const why = state.roomErrors[path];
+    if (why)
+      return (
+        html +
+        section("room", "Mom can't tidy this one", "", `<p class="empty">${esc(why)}</p>`) +
+        `<div class="button-row"><button class="link-btn" data-act="remove-room">Stop watching this folder</button></div>`
+      );
     if (!r) return html + section("room", "Looking", "", `<p class="empty">Looking…</p>`);
     const sel = state.roomSel[path] || new Set();
     html += `<div class="room-title"><h2>${esc(r.name)}</h2>${grade(r.grade, 4)}<p class="said">${esc(r.line)}</p></div>`;
-    if (r.codeProject) {
-      html += section("code", "Careful", "", `<p class="empty">This folder has code in it. Moving things can break paths, so nothing is ticked. "Copy chores for an agent" lets an agent tidy and fix the paths.</p>`);
-    }
+    const careful = [];
+    if (r.codeProject) careful.push(`This folder has code in it. Moving things can break paths, so nothing is ticked. "Copy chores for an agent" lets an agent tidy and fix the paths.`);
+    else if (r.projects >= 2)
+      careful.push(`This folder holds ${r.projects} projects (git repos and packages). Mom never moves or groups them, since tools and agents find them by path. She only tidies inside them.`);
+    if (r.personal) careful.push("This is one of your own folders, so mom only ticks what's plainly throwaway. Everything else waits for you.");
+    if (r.partial) careful.push("It's too big to look through in full, so this is what mom saw in the first part of it.");
+    if (careful.length) html += section("code", "Careful", "", careful.map((t) => `<p class="empty">${esc(t)}</p>`).join(""));
     const findings = r.findings.map((f) => `<div class="room-finding" id="f-${hash(f.title)}"><strong>${pathy(f.title)}</strong><p>${pathy(f.detail)}</p></div>`).join("");
     html += section("wrong", "What's wrong", "", findings || `<p class="empty">Nothing. Spotless.</p>`);
     if (r.actions.length) {
@@ -1493,9 +1506,10 @@
     try {
       const r = await invoke("inspect_room", { path: p });
       state.rooms[p] = r;
+      delete state.roomErrors[p];
       state.roomSel[p] = new Set(r.actions.filter((a) => a.selected).map((a) => a.id));
     } catch (e) {
-      toast(String(e), true);
+      state.roomErrors[p] = String(e);
     }
     render();
   }
@@ -2349,6 +2363,7 @@
         await act(invoke("remove_room", { path: state.roomOpen }), () => "I'll stop nagging about that one.");
         state.roomPaths = state.roomPaths.filter((p) => p !== state.roomOpen);
         delete state.rooms[state.roomOpen];
+        delete state.roomErrors[state.roomOpen];
         state.roomOpen = null;
         render();
         break;
