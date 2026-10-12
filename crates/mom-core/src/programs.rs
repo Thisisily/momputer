@@ -127,6 +127,7 @@ pub fn list(table: &ProcTable) -> Vec<Program> {
         }
     }
     let agent_work = agent_family(table);
+    let session = table.get(me).map(|p| p.session);
 
     let mut out = Vec::with_capacity(groups.len());
     for (key, a) in groups {
@@ -156,8 +157,10 @@ pub fn list(table: &ProcTable) -> Vec<Program> {
         } else {
             "background"
         };
+        // Buttons only when there's a process of its that mom may touch.
+        let touchable = a.procs.iter().any(|p| !agent_work.contains(&p.pid) && actionable(p, paths.get(&p.pid).map(String::as_str), session, &win_dir));
         let can: Vec<&'static str> = match kind {
-            _ if stray_helper => vec![],
+            _ if stray_helper || !touchable => vec![],
             "app" => {
                 let mut c = vec!["quit", "end"];
                 if relaunchable(&lexe) {
@@ -383,17 +386,42 @@ pub fn act(table: &ProcTable, id: &str, action: &str) -> ActReport {
 }
 
 /// The processes that are the program in `table`: the same key as when it was listed.
+///
+/// A program is grouped by its name, so one can mix your own processes with others (Razer's apps
+/// and Razer's services, say). Only the ones `actionable` allows are ever members: what's
+/// protected stays protected, process by process, whatever group it's in.
 fn members(table: &ProcTable, prog: &Program) -> Vec<Proc> {
     let paths = os::image_paths(table);
     let me = std::process::id();
     let mine: HashSet<u32> = table.descendants(me).into_iter().chain([me]).collect();
     let agents = agent_family(table);
+    let session = table.get(me).map(|p| p.session);
+    let win_dir = windows_dir();
     table
         .procs
         .values()
-        .filter(|p| p.pid != 0 && !mine.contains(&p.pid) && !agents.contains(&p.pid) && identify(table, p, &paths, &mine).0 == prog.id)
+        .filter(|p| {
+            !mine.contains(&p.pid)
+                && !agents.contains(&p.pid)
+                && actionable(p, paths.get(&p.pid).map(String::as_str), session, &win_dir)
+                && identify(table, p, &paths, &mine).0 == prog.id
+        })
         .cloned()
         .collect()
+}
+
+/// Whether mom may close or end this one process: it's in your own session (not a service in
+/// session 0, not another user's), and it isn't Windows, security software, or critical.
+fn actionable(p: &Proc, path: Option<&str>, session: Option<u32>, win_dir: &str) -> bool {
+    let lpath = path.map(lower).unwrap_or_default();
+    p.pid > 4
+        && p.session != 0
+        && session == Some(p.session)
+        && !crate::classify::is_critical(p)
+        && !crate::health::not_a_program(&p.name)
+        && !SECURITY.contains(&p_lname(p).as_str())
+        && !SECURITY_DIRS.iter().any(|d| lpath.contains(d))
+        && !(lpath.is_empty() || lpath.starts_with(win_dir))
 }
 
 /// Asks the program's windows to close, and waits up to `secs` for its processes to go.
@@ -426,6 +454,9 @@ fn end_all(table: &ProcTable, prog: &Program) -> (usize, usize) {
     let procs = members(table, prog);
     let protected = crate::kill::untouchable(table);
     let asked = table.self_and_ancestors();
+    let paths = os::image_paths(table);
+    let session = table.get(std::process::id()).map(|p| p.session);
+    let win_dir = windows_dir();
     let own: HashSet<u32> = procs.iter().map(|p| p.pid).collect();
     let mut order: Vec<&Proc> = procs.iter().collect();
     // Deepest first, so nothing restarts what's just been ended.
@@ -433,7 +464,8 @@ fn end_all(table: &ProcTable, prog: &Program) -> (usize, usize) {
     let (mut stopped, mut failed) = (0, 0);
     for p in order {
         let host = matches!(crate::agents::agent_process(p), Some((_, crate::agents::AgentProc::Host)));
-        if asked.contains(&p.pid) || (protected.contains(&p.pid) && !host) {
+        // Checked again right before: never whoever asked, never anything protected.
+        if asked.contains(&p.pid) || (protected.contains(&p.pid) && !host) || !actionable(p, paths.get(&p.pid).map(String::as_str), session, &win_dir) {
             continue;
         }
         match crate::kill::terminate(p.pid, p.start) {
@@ -831,6 +863,32 @@ mod tests {
         let pids: HashSet<u32> = [10].into_iter().collect();
         assert_eq!(inside(&table, &pids).as_deref(), Some("2 Claude Code sessions"));
         assert_eq!(inside(&table, &[20, 21, 22].into_iter().collect()), None);
+    }
+
+    #[test]
+    fn only_your_own_processes_can_be_ended() {
+        let win = r"c:\windows\";
+        let mut app = fake(30, 1, "RazerAppEngine.exe", "RazerAppEngine", 1);
+        app.session = 1;
+        let app_path = Some(r"C:\Program Files\Razer\RazerAppEngine\RazerAppEngine.exe");
+        assert!(actionable(&app, app_path, Some(1), win));
+        // The same group's service, in session 0: never.
+        let mut service = fake(31, 1, "RzActionSvc.exe", "RzActionSvc", 1);
+        service.session = 0;
+        assert!(!actionable(&service, Some(r"C:\Program Files (x86)\Razer\RzActionSvc.exe"), Some(1), win));
+        // Another user's copy, in their session: never.
+        let mut theirs = app.clone();
+        theirs.session = 2;
+        assert!(!actionable(&theirs, app_path, Some(1), win));
+        // Windows, security software, critical processes, and anything whose file Windows won't name.
+        assert!(!actionable(&app, Some(r"C:\Windows\System32	askhostw.exe"), Some(1), win));
+        assert!(!actionable(&app, Some(r"C:\Program Files\Bitdefender\Bitdefender Security Appdagent.exe"), Some(1), win));
+        let mut explorer = fake(32, 1, "explorer.exe", "explorer", 1);
+        explorer.session = 1;
+        assert!(!actionable(&explorer, Some(r"D:\explorer.exe"), Some(1), win));
+        assert!(!actionable(&app, None, Some(1), win));
+        // Without knowing our own session, nothing.
+        assert!(!actionable(&app, app_path, None, win));
     }
 
     #[test]
