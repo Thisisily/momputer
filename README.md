@@ -131,6 +131,7 @@ mom machines           Docker, WSL and Hyper-V
 mom trash              what can go, and what each clean-up does (mom trash <id> lists the files)
 mom trash clean all    take out the safe trash (never the Recycle Bin or your own files)
 mom health             drives, memory, restarts, Storage Sense and startup apps
+mom files              copies of the same file, and big files nobody opened in a year (only looks)
 mom tidy <folder>      grade a folder and list what to fix (--apply, --prompt)
 mom undo               undo the last tidy-up
 mom rules              the house rules, and who knows them

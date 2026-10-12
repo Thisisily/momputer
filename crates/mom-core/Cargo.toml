@@ -20,6 +20,7 @@ walkdir.workspace = true
 trash.workspace = true
 rusqlite.workspace = true
 chrono.workspace = true
+blake3.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
