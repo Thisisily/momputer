@@ -348,6 +348,12 @@
     { id: "compat-orphans-user", area: "Paths", level: "info", title: "Compatibility settings for 2 programs that are gone", now: "Lanternfall.exe, Copperline.exe", default: "None",
       why: "Windows remembers 'run as administrator' and old-Windows modes per program, even after the program is gone.",
       fix: { label: "Forget them", admin: false, undo: true, after: null }, settings: null },
+    { id: "powershell-7", area: "Terminal", level: "check", title: "PowerShell 7 isn't installed", now: "Windows PowerShell 5.1, line editor 2.0.0", default: "PowerShell 7 alongside it",
+      why: "Windows PowerShell 5.1 is from 2016, and its line editor has known bugs: lines that wrap are drawn wrong and long sessions slow down. PowerShell 7 fixes them, speaks UTF-8, and installs alongside 5.1.",
+      fix: null, settings: null, command: "winget install --id Microsoft.PowerShell --exact --source winget" },
+    { id: "cmd-autorun-user", area: "Terminal", level: "check", title: "Something runs every time cmd starts", now: "\"C:\\Tools\\Nimbus\\condabin\\conda_hook.bat\"", default: "Nothing",
+      why: "Usually conda's or a similar tool's set-up. It slows every cmd window and can break scripts that run cmd behind the scenes.",
+      fix: { label: "Stop running it", admin: false, undo: true, after: null }, settings: null },
   ];
 
   const archive = {

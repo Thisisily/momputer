@@ -41,6 +41,8 @@ pub struct Finding {
     pub fix: Option<Fix>,
     /// Where to change it by hand: an `ms-settings:` page or a program to run.
     pub settings: Option<String>,
+    /// A command that fixes it, to copy and run yourself (an install mom won't do for you).
+    pub command: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -68,6 +70,7 @@ pub(crate) fn check_with(m: &dyn Machine) -> Vec<Finding> {
     shutdown(m, &mut out);
     display(m, &mut out);
     network(m, &mut out);
+    terminal(m, &mut out);
     leftovers(m, &mut out);
     out.sort_by_key(|f| match f.level {
         Level::Fix => 0,
@@ -206,6 +209,18 @@ pub(crate) trait Machine {
     fn listening(&self, port: u16) -> bool;
     /// "C:\".
     fn system_drive(&self) -> String;
+    /// A small settings file's text.
+    fn read_text(&self, _path: &Path) -> Option<String> {
+        None
+    }
+    /// The names in a folder.
+    fn list_dir(&self, _path: &Path) -> Vec<String> {
+        Vec::new()
+    }
+    /// A file's size in bytes.
+    fn size(&self, _path: &Path) -> Option<u64> {
+        None
+    }
 }
 
 /// Changing values, for fixes. Separate from reading so checks can never write.
@@ -247,6 +262,17 @@ const USER_ENV: &str = "Environment";
 const SYSTEM_ENV: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
 const LAYERS: &str = r"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers";
 const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+const CONSOLE: &str = "Console";
+const CONSOLE_STARTUP: &str = r"Console\%%Startup";
+const CMD_PROCESSOR: &str = r"Software\Microsoft\Command Processor";
+const NT_VERSION: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+const NLS_CODEPAGE: &str = r"SYSTEM\CurrentControlSet\Control\Nls\CodePage";
+/// Windows Terminal's registration as the default terminal (from its own manifest).
+const WT_CONSOLE: &str = "{2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69}";
+const WT_TERMINAL: &str = "{E12CFF52-A866-4C77-9A90-F570A7AA2C6B}";
+const CONHOST: &str = "{B23D10C0-E52E-411E-9D5B-C09FDF709C7D}";
+/// Console fonts that can't draw much beyond plain English.
+const WEAK_FONTS: &[&str] = &["lucida console", "terminal", "raster fonts", "fixedsys", "courier new"];
 const RUN_32: &str = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run";
 
 const ENV_EDITOR: &str = "rundll32.exe sysdm.cpl,EditEnvironmentVariables";
@@ -255,7 +281,7 @@ const AFTER_RESTART: &str = "Takes effect after a restart.";
 const AFTER_SIGN_IN: &str = "Takes effect the next time you sign in.";
 
 fn finding(id: &str, area: &'static str, level: Level, title: String, now: String, default: &str, why: &str) -> Finding {
-    Finding { id: id.into(), area, level, title, now, default: default.into(), why: why.into(), fix: None, settings: None }
+    Finding { id: id.into(), area, level, title, now, default: default.into(), why: why.into(), fix: None, settings: None, command: None }
 }
 
 impl Finding {
@@ -267,9 +293,211 @@ impl Finding {
         self.settings = Some(s.into());
         self
     }
+    fn command(mut self, c: &str) -> Finding {
+        self.command = Some(c.into());
+        self
+    }
 }
 
 // ------------------------------------------------------------------ the checks
+
+/// PowerShell and cmd: where they open, how they draw, what they speak.
+fn terminal(m: &dyn Machine, out: &mut Vec<Finding>) {
+    let local = m.env("LOCALAPPDATA").unwrap_or_default();
+    let wt = !local.is_empty() && m.exists(&Path::new(&local).join(r"Microsoft\WindowsApps\wt.exe"));
+    let delegation = string(m, CU, CONSOLE_STARTUP, "DelegationConsole").unwrap_or_default().to_ascii_uppercase();
+    let forced = delegation == CONHOST;
+    // "Let Windows decide" means Windows Terminal from Windows 11 22H2 (build 22621) on, the old
+    // console window before it.
+    let build: Option<u32> = string(m, LM, NT_VERSION, "CurrentBuildNumber").and_then(|b| b.trim().parse().ok());
+    let decides_old = !delegation.starts_with("{") || delegation == "{00000000-0000-0000-0000-000000000000}";
+    let old_console = !wt || forced || (decides_old && build.is_some_and(|b| b < 22621));
+    // Only people who use PowerShell hear about it (its history file is there).
+    let appdata = m.env("APPDATA").unwrap_or_default();
+    let history = Path::new(&appdata).join(r"Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt");
+    let uses_shell = !appdata.is_empty() && m.exists(&history);
+    if wt && old_console {
+        out.push(
+            finding(
+                "terminal-default",
+                "Terminal",
+                if forced { Level::Fix } else { Level::Check },
+                "PowerShell and cmd can open in the old console window".into(),
+                if forced { "The old console window (Windows Console Host)".into() } else { "Let Windows decide".into() },
+                "Windows Terminal",
+                "The old window draws slowly and can't show many symbols, so long Claude Code chats crawl and some text comes out wrong or cut off. Windows Terminal is installed, and much faster.",
+            )
+            .fix("Use Windows Terminal", false, Some("Windows you open from now on use it."))
+            .settings("ms-settings:developers"),
+        );
+    }
+
+    let windir = m.env("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    let good = if m.exists(&Path::new(&windir).join(r"Fonts\CascadiaMono.ttf")) { "Cascadia Mono" } else { "Consolas" };
+    let weak: Vec<(String, String)> = console_keys(m)
+        .into_iter()
+        .filter(|_| uses_shell && old_console)
+        .filter_map(|k| string(m, CU, &k, "FaceName").filter(|f| WEAK_FONTS.contains(&f.to_ascii_lowercase().as_str())).map(|f| (k, f)))
+        .collect();
+    if !weak.is_empty() {
+        let mut faces: Vec<&str> = weak.iter().map(|(_, f)| f.as_str()).collect();
+        faces.sort_unstable();
+        faces.dedup();
+        out.push(
+            finding(
+                "console-font",
+                "Terminal",
+                Level::Check,
+                format!("The console window uses {}", faces.join(" and ")),
+                format!("{} in {}", faces.join(", "), plural_windows(weak.len())),
+                good,
+                "An old font that can't draw many of the symbols today's tools print (Claude Code's boxes and dots, emoji), so they show up as boxes or push the layout out of line.",
+            )
+            .fix(&format!("Use {good}"), false, Some("Windows you open from now on use it.")),
+        );
+    }
+
+    let oem = string(m, LM, NLS_CODEPAGE, "OEMCP").unwrap_or_default();
+    let cp = dword(m, CU, CONSOLE, "CodePage");
+    if uses_shell && old_console && oem != "65001" && cp != Some(65001) {
+        out.push(
+            finding(
+                "console-utf8",
+                "Terminal",
+                Level::Check,
+                "The console doesn't speak UTF-8".into(),
+                format!("Code page {}", cp.map(|c| c.to_string()).unwrap_or(oem)),
+                "UTF-8 (65001)",
+                "Anything a program prints beyond plain English (accents, symbols, emoji) can come out garbled. New console windows can speak UTF-8; a few very old batch files prefer the old code page.",
+            )
+            .fix("Switch to UTF-8", false, Some("Windows you open from now on use it.")),
+        );
+    }
+
+    let program_files = m.env("ProgramFiles").unwrap_or_else(|| r"C:\Program Files".into());
+    let pwsh = m.exists(&Path::new(&program_files).join(r"PowerShell\7\pwsh.exe"));
+    let profile = m.env("USERPROFILE").unwrap_or_default();
+    let readline = [Path::new(&program_files).join(r"WindowsPowerShell\Modules\PSReadLine"), Path::new(&profile).join(r"Documents\WindowsPowerShell\Modules\PSReadLine")]
+        .iter()
+        .flat_map(|d| m.list_dir(d))
+        .filter_map(|v| version(&v))
+        .max();
+    let old_readline = readline.as_ref().is_some_and(|v| *v < vec![2, 2]);
+    let shown = |v: &Vec<u64>| v.iter().map(u64::to_string).collect::<Vec<_>>().join(".");
+    if uses_shell && !pwsh {
+        out.push(
+            finding(
+                "powershell-7",
+                "Terminal",
+                Level::Check,
+                "PowerShell 7 isn't installed".into(),
+                match &readline {
+                    Some(v) => format!("Windows PowerShell 5.1, line editor {}", shown(v)),
+                    None => "Windows PowerShell 5.1".into(),
+                },
+                "PowerShell 7 alongside it",
+                "Windows PowerShell 5.1 is from 2016, and its line editor has known bugs: lines that wrap are drawn wrong and long sessions slow down. PowerShell 7 fixes them, speaks UTF-8, and installs alongside 5.1.",
+            )
+            .command("winget install --id Microsoft.PowerShell --exact --source winget"),
+        );
+    } else if uses_shell && old_readline {
+        out.push(
+            finding(
+                "psreadline-old",
+                "Terminal",
+                Level::Check,
+                "Windows PowerShell's line editor is out of date".into(),
+                readline.as_ref().map(|v| format!("PSReadLine {}", shown(v))).unwrap_or_default(),
+                "PSReadLine 2.3 or newer",
+                "The version Windows ships has known bugs: lines that wrap are drawn wrong and long sessions slow down.",
+            )
+            .command("Install-Module PSReadLine -Scope CurrentUser -Force -SkipPublisherCheck"),
+        );
+    }
+
+    // Windows Terminal's own settings.
+    let wt_settings = Path::new(&local).join(r"Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json");
+    if let Some(json) = m.read_text(&wt_settings).and_then(|t| serde_json::from_str::<serde_json::Value>(&strip_comments(&t)).ok()) {
+        let truthy = |k: &str| json.get(k).and_then(serde_json::Value::as_bool) == Some(true);
+        if truthy("experimental.rendering.forceFullRepaint") || truthy("experimental.rendering.software") || json.get("rendering.graphicsAPI").and_then(serde_json::Value::as_str) == Some("warp") {
+            out.push(finding(
+                "terminal-rendering",
+                "Terminal",
+                Level::Check,
+                "Windows Terminal is set to draw the slow way".into(),
+                "Full repaints, or drawing without the graphics card".into(),
+                "Off",
+                "A troubleshooting setting: every frame is drawn from scratch, or on the processor. Fine for chasing a bug, slow for everything else. Settings > Rendering in Windows Terminal.",
+            ));
+        }
+        let mut sizes: Vec<u64> = json.pointer("/profiles/defaults/historySize").and_then(serde_json::Value::as_u64).into_iter().collect();
+        if let Some(list) = json.pointer("/profiles/list").and_then(serde_json::Value::as_array) {
+            sizes.extend(list.iter().filter_map(|p| p.get("historySize").and_then(serde_json::Value::as_u64)));
+        }
+        if let Some(big) = sizes.into_iter().max().filter(|n| *n > 100_000) {
+            out.push(finding(
+                "terminal-history",
+                "Terminal",
+                Level::Check,
+                "Windows Terminal keeps a very long history".into(),
+                format!("{big} lines per tab"),
+                "9,001 lines",
+                "Every line kept costs memory and time, and long sessions get slower and slower. A few thousand lines is plenty.",
+            ));
+        }
+    }
+
+    // PowerShell's saved history, read at every start.
+    if let Some(len) = m.size(&history).filter(|n| *n > 5 * 1024 * 1024) {
+        out.push(finding(
+            "powershell-history",
+            "Terminal",
+            Level::Check,
+            "PowerShell's history file is huge".into(),
+            format!("{} MB", len / (1024 * 1024)),
+            "A few hundred KB",
+            "PowerShell reads all of it every time a window opens. Trimming it (or setting MaximumHistoryCount) makes new windows open faster.",
+        ));
+    }
+
+    // Something run every time cmd starts.
+    if let Some(cmd) = string(m, CU, CMD_PROCESSOR, "AutoRun").filter(|c| !c.trim().is_empty()) {
+        out.push(
+            finding(
+                "cmd-autorun-user",
+                "Terminal",
+                Level::Check,
+                "Something runs every time cmd starts".into(),
+                cmd,
+                "Nothing",
+                "Usually conda's or a similar tool's set-up. It slows every cmd window and can break scripts that run cmd behind the scenes.",
+            )
+            .fix("Stop running it", false, None),
+        );
+    }
+}
+
+/// HKCU\Console and the per-program keys under it (a shortcut's own settings), not the default
+/// terminal's.
+fn console_keys(m: &dyn Machine) -> Vec<String> {
+    std::iter::once(CONSOLE.to_string())
+        .chain(m.subkeys(CU, CONSOLE).into_iter().filter(|k| !k.starts_with("%%")).map(|k| format!(r"{CONSOLE}\{k}")))
+        .collect()
+}
+
+fn plural_windows(n: usize) -> String {
+    if n == 1 { "1 console setting".into() } else { format!("{n} console settings") }
+}
+
+/// "2.0.0" -> [2, 0, 0].
+fn version(s: &str) -> Option<Vec<u64>> {
+    s.split('.').map(|p| p.parse().ok()).collect::<Option<Vec<u64>>>().filter(|v| !v.is_empty())
+}
+
+/// Windows Terminal allows // comments in its settings; JSON doesn't.
+fn strip_comments(text: &str) -> String {
+    text.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n")
+}
 
 fn memory(m: &dyn Machine, out: &mut Vec<Finding>) {
     let system = m.system_drive().chars().next().unwrap_or('C').to_ascii_uppercase();
@@ -972,7 +1200,7 @@ fn delete(hive: Hive, key: &str, name: &str) -> Change {
 }
 
 /// The keys user-level fixes change (and undo may put back), nothing else.
-const USER_KEYS: &[&str] = &[DESKTOP, INTERNET, USER_ENV, LAYERS, RUN];
+const USER_KEYS: &[&str] = &[DESKTOP, INTERNET, USER_ENV, LAYERS, RUN, CMD_PROCESSOR];
 
 /// What a fix to your own settings changes, worked out from the PC as it is now.
 fn user_changes(m: &dyn Machine, id: &str) -> Option<Vec<Change>> {
@@ -986,6 +1214,21 @@ fn user_changes(m: &dyn Machine, id: &str) -> Option<Vec<Change>> {
         "compat-orphans-user" => {
             m.raw_values(CU, LAYERS).into_iter().filter(|(exe, _)| gone(m, exe).is_some()).map(|(exe, _)| delete(CU, LAYERS, &exe)).collect()
         }
+        "terminal-default" => vec![
+            set(CU, CONSOLE_STARTUP, "DelegationConsole", Raw::string(WT_CONSOLE)),
+            set(CU, CONSOLE_STARTUP, "DelegationTerminal", Raw::string(WT_TERMINAL)),
+        ],
+        "console-font" => {
+            let windir = m.env("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+            let good = if m.exists(&Path::new(&windir).join(r"Fonts\CascadiaMono.ttf")) { "Cascadia Mono" } else { "Consolas" };
+            console_keys(m)
+                .into_iter()
+                .filter(|k| string(m, CU, k, "FaceName").is_some_and(|f| WEAK_FONTS.contains(&f.to_ascii_lowercase().as_str())))
+                .map(|k| set(CU, &k, "FaceName", Raw::string(good)))
+                .collect()
+        }
+        "console-utf8" => vec![set(CU, CONSOLE, "CodePage", Raw::dword(65001))],
+        "cmd-autorun-user" => vec![delete(CU, CMD_PROCESSOR, "AutoRun")],
         "startup-orphans-user" => {
             text_values(m, CU, RUN).into_iter().filter(|(_, cmd)| run_target_gone(m, cmd).is_some()).map(|(name, _)| delete(CU, RUN, &name)).collect()
         }
@@ -1125,7 +1368,8 @@ fn undo_with(paths: &Paths, w: &dyn Writer, id: &str) -> Result<String, String> 
         .1;
     let backup: Backup = serde_json::from_str(&std::fs::read_to_string(&latest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     // Only ever your own settings, in the keys fixes change.
-    if backup.id != id || backup.values.iter().any(|v| v.hive != CU || !USER_KEYS.contains(&v.key.as_str())) {
+    let allowed = |k: &str| USER_KEYS.contains(&k) || k == CONSOLE || k.starts_with(r"Console\");
+    if backup.id != id || backup.values.iter().any(|v| v.hive != CU || !allowed(v.key.as_str())) {
         return Err("That backup isn't one mom made, so she won't use it.".into());
     }
     restore(w, &backup.values).map_err(|e| format!("Windows didn't let mom put it back ({e})."))?;
@@ -1262,6 +1506,16 @@ impl Machine for Real {
     }
     fn system_drive(&self) -> String {
         self.system_drive.clone()
+    }
+    fn read_text(&self, path: &Path) -> Option<String> {
+        // Settings files are small; a huge one isn't a settings file.
+        (self.size(path)? <= 4 * 1024 * 1024).then(|| std::fs::read(path).ok().map(|b| String::from_utf8_lossy(&b).into_owned()))?
+    }
+    fn list_dir(&self, path: &Path) -> Vec<String> {
+        std::fs::read_dir(path).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect()).unwrap_or_default()
+    }
+    fn size(&self, path: &Path) -> Option<u64> {
+        std::fs::metadata(path).ok().map(|m| m.len())
     }
 }
 
@@ -1598,6 +1852,51 @@ mod tests {
         fn system_drive(&self) -> String {
             r"C:\".into()
         }
+    }
+
+    #[test]
+    fn terminals_open_in_windows_terminal_draw_with_a_proper_font_and_speak_utf8() {
+        let mut m = Fake::new();
+        m.env.insert("LOCALAPPDATA".into(), r"C:\Users\me\AppData\Local".into());
+        m.env.insert("SystemRoot".into(), r"C:\Windows".into());
+        m.env.insert("ProgramFiles".into(), r"C:\Program Files".into());
+        m.files.insert(r"c:\users\me\appdata\local\microsoft\windowsapps\wt.exe".into());
+        m.files.insert(r"c:\windows\fonts\cascadiamono.ttf".into());
+        m.put(CU, CONSOLE_STARTUP, "DelegationConsole", Raw::string("{00000000-0000-0000-0000-000000000000}"));
+        m.put(CU, r"Console\%SystemRoot%_System32_WindowsPowerShell_v1.0_powershell.exe", "FaceName", Raw::string("Lucida Console"));
+        m.put(LM, NLS_CODEPAGE, "OEMCP", Raw::string("437"));
+        m.put(LM, NT_VERSION, "CurrentBuildNumber", Raw::string("19045"));
+        m.env.insert("APPDATA".into(), r"C:\Users\me\AppData\Roaming".into());
+        m.files.insert(r"c:\users\me\appdata\roaming\microsoft\windows\powershell\psreadline\consolehost_history.txt".into());
+        let found = check_with(&m);
+        let ids: Vec<&str> = found.iter().filter(|f| f.area == "Terminal").map(|f| f.id.as_str()).collect();
+        assert_eq!(ids, vec!["terminal-default", "console-font", "console-utf8", "powershell-7"], "{ids:?}");
+        let font = found.iter().find(|f| f.id == "console-font").unwrap();
+        assert_eq!(font.title, "The console window uses Lucida Console");
+        assert_eq!(font.default, "Cascadia Mono");
+        assert!(found.iter().find(|f| f.id == "powershell-7").unwrap().command.as_deref().unwrap().starts_with("winget install"));
+
+        let changes = user_changes(&m, "console-font").unwrap();
+        assert_eq!(changes.len(), 1);
+        assert!(changes[0].key.eq_ignore_ascii_case(r"Console\%SystemRoot%_System32_WindowsPowerShell_v1.0_powershell.exe"));
+        let d = user_changes(&m, "terminal-default").unwrap();
+        assert_eq!(d[0].to.as_ref().unwrap().as_string().as_deref(), Some(WT_CONSOLE));
+
+        // Windows 11 lets "Let Windows decide" mean Windows Terminal, where the old console's font
+        // and code page don't apply: nothing to say but PowerShell 7.
+        m.put(LM, NT_VERSION, "CurrentBuildNumber", Raw::string("26200"));
+        let terminal = |m: &Fake| check_with(m).into_iter().filter(|f| f.area == "Terminal").map(|f| f.id).collect::<Vec<String>>();
+        assert_eq!(terminal(&m), vec!["powershell-7".to_string()]);
+        // Unless the old console is chosen by name.
+        m.put(CU, CONSOLE_STARTUP, "DelegationConsole", Raw::string(CONHOST));
+        assert_eq!(get(&m, "terminal-default").level, Level::Fix);
+        // Windows Terminal chosen: the same as Windows deciding.
+        m.put(CU, CONSOLE_STARTUP, "DelegationConsole", Raw::string(WT_CONSOLE));
+        assert_eq!(terminal(&m), vec!["powershell-7".to_string()]);
+        // PowerShell 7 there, Windows PowerShell's line editor old.
+        m.env.insert("ProgramFiles".into(), r"C:\Program Files".into());
+        m.files.insert(r"c:\program files\powershell\7\pwsh.exe".into());
+        assert!(terminal(&m).is_empty(), "the Fake lists no PSReadLine folders");
     }
 
     impl Writer for Fake {

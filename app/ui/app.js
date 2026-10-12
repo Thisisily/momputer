@@ -1247,7 +1247,7 @@
 
   // ------------------------------------------------------------ Upkeep: Windows settings
 
-  const AREAS = ["Safety", "Memory", "Services", "Display", "Startup", "Shutdown", "Network", "Paths"];
+  const AREAS = ["Safety", "Memory", "Services", "Display", "Terminal", "Startup", "Shutdown", "Network", "Paths"];
 
   async function loadWinsettings(force = false) {
     if (state.winLoading || (state.winsettings && !force)) return;
@@ -1273,11 +1273,13 @@
       : "";
     const open = f.settings
       ? `<button class="link-btn" data-act="${f.settings.startsWith("ms-settings:") ? "open-uri" : "open-program"}" data-url="${esc(f.settings)}">Open the setting${ICON.out}</button>`
-      : "";
+      : f.command
+        ? `<button class="secondary" data-act="copy-fix" data-text="${esc(f.command)}" data-hint="Paste it into PowerShell and press Enter." title="Copies ${esc(f.command)}">${ICON.copy}Copy the command</button>`
+        : "";
     const after = f.fix ? [f.fix.after, f.fix.admin ? "Windows asks first." : f.fix.undo ? "You can undo it." : ""].filter(Boolean).join(" ") : "";
     return `<div class="drift" id="wf-${hash(f.id)}" data-level="${f.level}">
         <div class="drift-title">${led ? `<span class="led ${led === "red" ? "red" : ""}"></span>` : ""}<strong>${esc(f.title)}</strong>${f.level === "info" ? `<span class="badge">your call</span>` : ""}</div>
-        <div class="drift-vals"><div><span>Now</span>${esc(f.now)}</div><div><span>Windows' default</span>${esc(f.default)}</div></div>
+        <div class="drift-vals"><div><span>Now</span>${esc(f.now)}</div><div><span>${f.area === "Terminal" ? "Better" : "Windows' default"}</span>${esc(f.default)}</div></div>
         <p class="drift-why">${esc(f.why)}</p>
         ${fix || open ? `<div class="drift-acts">${open || "<span></span>"}${fix}</div>` : ""}
         ${after ? `<p class="drift-after">${esc(after)}</p>` : ""}

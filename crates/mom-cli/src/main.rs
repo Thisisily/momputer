@@ -739,7 +739,8 @@ fn run(cli: Cli) -> Result<i32> {
                     return Ok(0);
                 };
                 let Some(fix) = &f.fix else {
-                    bail!("mom can't change that one herself.{}", f.settings.as_deref().map(|s| format!(" Change it here: {s}")).unwrap_or_default());
+                    let how = f.command.as_deref().map(|c| format!(" Run it yourself: {c}")).or_else(|| f.settings.as_deref().map(|s| format!(" Change it here: {s}")));
+                    bail!("mom can't change that one herself.{}", how.unwrap_or_default());
                 };
                 if fix.admin {
                     bail!(
@@ -1227,7 +1228,8 @@ fn print_settings(st: &Style, found: &[winsettings::Finding]) {
                 winsettings::Level::Check => st.yellow("~"),
                 winsettings::Level::Info => st.dim("·"),
             };
-            println!("  {mark} {}  {}", st.bold(&f.title), st.dim(&format!("now: {} · default: {}", f.now, f.default)));
+            let better = if f.area == "Terminal" { "better" } else { "default" };
+            println!("  {mark} {}  {}", st.bold(&f.title), st.dim(&format!("now: {} · {better}: {}", f.now, f.default)));
             println!("{}", st.dim(&wrap(&f.why, 92, "      ")));
             match (&f.fix, &f.settings) {
                 (Some(x), _) => {
@@ -1236,6 +1238,9 @@ fn print_settings(st: &Style, found: &[winsettings::Finding]) {
                 }
                 (None, Some(s)) => println!("      {}", st.dim(&format!("Change it in {s}"))),
                 (None, None) => {}
+            }
+            if let Some(c) = &f.command {
+                println!("      {}", st.dim(&format!("Run it yourself: {c}")));
             }
         }
     }

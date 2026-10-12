@@ -1204,7 +1204,7 @@ button.row-name:hover {
 }
 
 .row.ext {
-  padding: 9px 0;
+  padding-block: 9px;
 }
 
 .row.ext.is-off .row-name,
@@ -2649,6 +2649,11 @@ button.row-name:hover {
   align-items: center;
   gap: 6px;
   margin: 14px 0 0;
+}
+
+/* A hint under the filter and sort row: its own line, with room above and below. */
+.list-tools + .list-hint {
+  margin: 10px 6px 16px;
 }
 
 .list-search {
