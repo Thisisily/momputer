@@ -266,6 +266,7 @@ Privacy policy: This program will not transfer any information to other networke
 - [idiomorph](https://github.com/bigskysoftware/idiomorph) (0BSD), so lists update in place.
 - [Geist](https://vercel.com/font) and [Doto](https://github.com/oliverlalan/Doto) fonts, under the SIL Open Font License.
 - [Lucide](https://lucide.dev) icons (ISC).
+- [Simple Icons](https://simpleicons.org) (CC0) for the coin and GitHub marks.
 - [three.js](https://threejs.org) (MIT), for something you'll have to find.
 
 ## Made by
@@ -284,3 +285,5 @@ momputer is free. If she saved you an afternoon, you can buy mom a coffee:
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+The Marsell and Ilisium logos on the About page belong to those projects and aren't covered by the MIT license.
