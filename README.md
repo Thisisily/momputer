@@ -46,7 +46,8 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
       <p>Every dev server, watcher, headless browser, database, tunnel, container and VM on the machine, grouped into the thing that was started, with its ports, memory, CPU and <b>who started it</b>.</p>
       <p>What's been left behind goes to the top, with one button that turns it all off. Below that: the agents that are awake right now (Claude Code sessions, Codex threads and their schedules) and what each one is running.</p>
       <p>When leftovers start eating your CPU at 3 a.m., she tells you. If you let her, she turns them off herself.</p>
-      <p><b>Speed</b>, next to the agents, is for when the whole PC feels slow. She checks the things people don't think to: a browser or app that lost the graphics card (Chrome then draws video on the processor, and YouTube plays at two frames a second; she hands you <code>chrome://restart</code>, which brings every tab back), a graphics driver that keeps crashing, hardware errors from an overclock or memory setting that's too much, overclocking tools and whether they're running, helpers that use the processor all day (vendor lighting and "booster" apps), and what's busy right now. She only looks; nothing is changed.</p>
+      <p>Four tabs. <b>Agents</b> is all of the above. <b>Speed</b> is for when the whole PC feels slow. She checks the things people don't think to: a browser or app that lost the graphics card (Chrome then draws video on the processor, and YouTube plays at two frames a second; she hands you <code>chrome://restart</code>, which brings every tab back), a graphics driver that keeps crashing, hardware errors from an overclock or memory setting that's too much, overclocking tools and whether they're running, helpers that use the processor all day (vendor lighting and "booster" apps), apps that stay busy for minutes, memory that's nearly full, Defender or Search hogging the processor, too many Chrome extensions, and too many startup apps. Every finding has a button: restart the app (she says first what agent work runs inside it), copy the browser's restart page, open the driver page, or go to the switch that fixes it.</p>
+      <p><b>Programs</b> is everything running, one line per program (all of Chrome's processes are one Chrome), with its processor, memory and graphics card use, sortable and filterable, and Restart, Quit, End and Show folder. Windows' own processes, security software, services, agents' work and mom herself are never offered. <b>Startup</b> is everything that starts with Windows, by the names you know, heaviest first, each with a switch (the same one Task Manager uses, so it's undone exactly); the ones that start for every user open Windows Settings instead.</p>
     </td>
   </tr>
   <tr>
@@ -136,6 +137,7 @@ mom trash              what can go, and what each clean-up does (mom trash <id> 
 mom trash clean all    take out the safe trash (never the Recycle Bin or your own files)
 mom health             drives, memory, restarts, Storage Sense and startup apps
 mom speed              what's slowing the PC down, and what's busy right now
+mom programs           every program running, one line each (only looks)
 mom files              copies of the same file, and big files nobody opened in a year (only looks)
 mom settings           Windows settings that drifted from the defaults (fix <id>, undo <id>)
 mom tidy <folder>      grade a folder and list what to fix (--apply, --prompt)

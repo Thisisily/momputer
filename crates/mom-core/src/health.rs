@@ -55,6 +55,9 @@ pub struct StartupApp {
     pub location: String,
     /// Switched on in Task Manager / Settings > Startup apps.
     pub enabled: bool,
+    /// The entry exactly as Windows lists it: the Run value's name, or the Startup folder file's.
+    #[serde(skip)]
+    pub entry: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -279,6 +282,14 @@ pub(crate) fn not_a_program(name: &str) -> bool {
 
 /// A name people recognise for a program's process.
 pub(crate) fn program_name(exe: &str) -> String {
+    match known_name(exe) {
+        Some(known) => known.to_string(),
+        None => exe.strip_suffix(".exe").or_else(|| exe.strip_suffix(".EXE")).unwrap_or(exe).to_string(),
+    }
+}
+
+/// The name people know a program by, for the ones whose file name says it badly.
+pub(crate) fn known_name(exe: &str) -> Option<&'static str> {
     let lower = exe.to_ascii_lowercase();
     let stem = lower.trim_end_matches(".exe");
     let known = match stem {
@@ -302,7 +313,7 @@ pub(crate) fn program_name(exe: &str) -> String {
         "dotnet" => ".NET",
         "explorer" => "File Explorer",
         "vmmem" | "vmmemwsl" => "WSL and virtual machines",
-        "docker desktop" | "com.docker.backend" => "Docker",
+        "docker desktop" => "Docker",
         "discord" => "Discord",
         "slack" => "Slack",
         "ms-teams" | "teams" => "Teams",
@@ -321,12 +332,15 @@ pub(crate) fn program_name(exe: &str) -> String {
         "lghub" | "lghub_agent" | "lghub_updater" | "lghub_system_tray" => "Logitech G HUB",
         "icue" => "Corsair iCUE",
         "momputer" => "momputer",
+        "snippingtool" => "Snipping Tool",
+        "whatsapp" | "whatsapp.root" => "WhatsApp",
+        "telegram" => "Telegram",
+        "steamservice" => "Steam",
+        "nvcontainer" | "nvdisplay.container" => "NVIDIA",
+        "com.docker.backend" | "com.docker.build" | "docker-agent" | "com.docker.service" => "Docker",
         _ => "",
     };
-    if !known.is_empty() {
-        return known.to_string();
-    }
-    exe.strip_suffix(".exe").or_else(|| exe.strip_suffix(".EXE")).unwrap_or(exe).to_string()
+    (!known.is_empty()).then_some(known)
 }
 
 /// The programs using the most memory, every process of a program added together.
@@ -393,7 +407,7 @@ pub fn startup_apps(paths: &Paths) -> Vec<StartupApp> {
                 continue; // does nothing at all
             }
             let enabled = approved(flags.get(&name).map(Vec::as_slice));
-            out.push(StartupApp { name: startup_name(&name), command, location: location.into(), enabled });
+            out.push(StartupApp { name: startup_name(&name), entry: name, command, location: location.into(), enabled });
         }
     }
     let programs = Path::new("Microsoft").join("Windows").join("Start Menu").join("Programs");
@@ -409,7 +423,7 @@ pub fn startup_apps(paths: &Paths) -> Vec<StartupApp> {
             }
             let name = Path::new(&file).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| file.clone());
             let enabled = approved(flags.get(&file).map(Vec::as_slice));
-            out.push(StartupApp { name, command: e.path().to_string_lossy().to_string(), location: "Startup folder".into(), enabled });
+            out.push(StartupApp { name, entry: file, command: e.path().to_string_lossy().to_string(), location: "Startup folder".into(), enabled });
         }
     }
     out

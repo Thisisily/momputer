@@ -1020,6 +1020,26 @@ button.row-name:hover {
   border-bottom: 1px solid var(--line);
 }
 
+/* A restart that ends agent work says so before the second press. */
+.fix-stack {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+}
+
+.fix-warn {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.fix-warn .led {
+  flex: none;
+  transform: translateY(-1px);
+}
+
 /* A longer story: the button goes under it, so the words get the whole width. */
 .check-row.stack {
   grid-template-columns: minmax(0, 1fr);

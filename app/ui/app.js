@@ -30,6 +30,16 @@
     speed: null, // what's slowing the PC down (get_speed)
     speedAt: 0,
     speedLoading: false,
+    programs: null, // every program running (get_programs)
+    programsAt: 0,
+    programsLoading: false,
+    progView: { sort: "cpu", q: "", rest: false }, // how Programs is sorted and filtered, and whether Windows' own show
+    progOpen: null, // the program whose details are open
+    progConfirm: null, // "id|action" waiting for its second press
+    progBusy: null, // { id, action } while mom does it
+    startup: null, // what starts with Windows (get_startup)
+    startupAt: 0,
+    startupBusy: null,
     expanded: new Set(),
     stopping: new Set(),
     done: new Set(),
@@ -493,6 +503,8 @@
   const RUNNING_TABS = [
     ["agents", "Agents"],
     ["speed", "Speed"],
+    ["programs", "Programs"],
+    ["startup", "Startup"],
   ];
 
   function runningTabs() {
@@ -504,7 +516,16 @@
   }
 
   function renderRunning() {
-    return runningTabs() + (state.runningTab === "speed" ? renderSpeed() : renderAgents());
+    const view = { speed: renderSpeed, programs: renderPrograms, startup: renderStartup }[state.runningTab] || renderAgents;
+    return runningTabs() + view();
+  }
+
+  /** Opens one of Running's views, loading what it shows if it's stale. */
+  function openRunningTab(tab) {
+    state.runningTab = tab;
+    if (tab === "speed" && Date.now() - state.speedAt > 10000) loadSpeed();
+    if (tab === "programs" && Date.now() - state.programsAt > 3000) loadPrograms();
+    if (tab === "startup" && Date.now() - state.startupAt > 15000) loadStartup();
   }
 
   // ------------------------------------------------------------ running: speed
@@ -516,6 +537,12 @@
       return `<button class="secondary" data-act="copy-fix" data-text="${esc(f.value)}" data-hint="${esc(f.hint || "Copied.")}">${ICON.copy}${esc(f.label)}</button>`;
     if (f.kind === "open") return `<button class="secondary" data-act="open-uri" data-url="${esc(f.value)}">${esc(f.label)}${ICON.out}</button>`;
     if (f.kind === "tab") return `<button class="secondary" data-act="go-tab" data-to="${esc(f.value)}">${esc(f.label)}</button>`;
+    if (f.kind === "program") {
+      const armed = state.progConfirm === `${f.value}|restart`;
+      const busy = state.progBusy && state.progBusy.id === f.value;
+      return `<div class="fix-stack"><button class="secondary${armed ? " sure" : ""}" data-act="prog-act" data-id="${esc(f.value)}" data-action="restart" data-sure="1" ${busy ? "disabled" : ""}>${ICON.refresh}${busy ? "Restarting…" : armed ? "Sure? Restart it" : esc(f.label)}</button>
+        ${armed && f.hint ? `<span class="fix-warn"><span class="led red"></span>${esc(f.hint)}</span>` : ""}</div>`;
+    }
     return "";
   }
 
@@ -582,6 +609,174 @@
     }
     state.speedLoading = false;
     if (state.tab === "running") render();
+  }
+
+  // ------------------------------------------------------------ running: programs
+
+  const ACTION = {
+    restart: ["Restart", "Restarting…"],
+    quit: ["Quit", "Quitting…"],
+    end: ["End", "Ending…"],
+  };
+  const HANDS_OFF = {
+    windows: "Part of Windows. Mom never stops it.",
+    security: "It keeps your PC safe. Mom never stops it.",
+    service: "It runs as a Windows service. Stop it from Windows' Services if you must.",
+    agent: "An agent's work, or something an agent started. It's in the Agents tab.",
+    mom: "That's me, sweetie.",
+  };
+  const PROG_SORT = {
+    cpu: (a, b) => (b.avgSecs ? b.avgCpu : b.cpu) - (a.avgSecs ? a.avgCpu : a.cpu) || b.mem - a.mem,
+    mem: (a, b) => b.mem - a.mem,
+    gpu: (a, b) => (b.gpu || 0) - (a.gpu || 0) || b.mem - a.mem,
+    name: (a, b) => a.name.localeCompare(b.name),
+  };
+
+  /** The button for one of a program's actions; restart and end ask "Sure?" first. */
+  function progButton(p, action, cls = "stop") {
+    const busy = state.progBusy && state.progBusy.id === p.id;
+    const armed = state.progConfirm === `${p.id}|${action}`;
+    const label = busy && state.progBusy.action === action ? ACTION[action][1] : armed ? "Sure?" : ACTION[action][0];
+    return `<button class="${cls}${armed ? " confirm" : ""}" data-act="prog-act" data-id="${esc(p.id)}" data-action="${action}" data-sure="${action === "quit" ? "" : "1"}" ${busy ? "disabled" : ""}>${label}</button>`;
+  }
+
+  function progDetail(p) {
+    const what = {
+      restart: `Closes ${p.name} the way its X button does (ending it if it hides in the tray), then starts it again.`,
+      quit: `Asks ${p.name} to close, the way its X button does, so it can save first.`,
+      end: `Stops ${p.name} at once, children first. Anything unsaved in it is lost.`,
+    };
+    const rows = p.can.map((a) => `<dt>${ACTION[a][0]}</dt><dd>${esc(what[a])}</dd>`).join("");
+    return `<dl>
+        ${p.exe ? `<dt>File</dt><dd><code>${esc(p.exe)}</code></dd>` : ""}
+        ${p.inside ? `<dt>Inside</dt><dd>${esc(p.inside)} run inside it, and stop when it closes.</dd>` : ""}
+        <dt>Running</dt><dd class="num">${plural(p.count, "process", "processes")} since ${esc(clock(p.started))}${p.avgSecs ? `, ${p.avgCpu.toFixed(1)}% of the processor over the last ${esc(ageLong(p.avgSecs))}` : ""}</dd>
+        ${rows || `<dt>Hands off</dt><dd>${esc(HANDS_OFF[p.kind] || "Mom leaves this one alone.")}</dd>`}
+      </dl>
+      <div class="detail-actions">${p.can.slice(1).map((a) => progButton(p, a, "secondary")).join("")}${
+        p.exe ? `<button class="link-btn" data-act="reveal-path" data-path="${esc(p.exe)}">Show folder</button>` : ""
+      }</div>`;
+  }
+
+  function progRow(p) {
+    const open = state.progOpen === p.id;
+    const cpu = p.avgSecs ? p.avgCpu : p.cpu;
+    const bits = [p.kind === "app" || p.kind === "background" ? "" : HANDS_OFF[p.kind] ? { windows: "Windows", security: "Security", service: "Service", agent: "Agent", mom: "momputer" }[p.kind] : ""];
+    bits.push(plural(p.count, "process", "processes"));
+    if (p.windows) bits.push(plural(p.windows, "window"));
+    if (p.gpu >= 1) bits.push(`graphics card ${Math.round(p.gpu)}%`);
+    if (p.inside) bits.push(`${p.inside} inside`);
+    return `<div class="row${open ? " is-open" : ""}" id="pg-${hash(p.id)}" data-led="${cpu >= 10 ? "red" : p.kind === "app" ? "green" : "off"}">
+      <button class="row-name" data-act="prog-expand" data-id="${esc(p.id)}" aria-expanded="${open}" title="${esc(p.exe || p.name)}">${esc(p.name)}</button>
+      <div class="row-meta"><span class="why">${esc(bits.filter(Boolean).join(" · "))}</span></div>
+      <div class="row-nums num">${bytes(p.mem)}</div>
+      <div class="row-nums2 num">${cpu >= 0.1 ? `<span class="${cpu >= 10 ? "hot" : ""}">${cpu < 10 ? cpu.toFixed(1) : Math.round(cpu)}%</span>` : ""}</div>
+      <div class="row-act">${p.can.length ? progButton(p, p.can[0]) : ""}</div>
+      <div class="row-detail">${open ? progDetail(p) : ""}</div>
+    </div>`;
+  }
+
+  function renderPrograms() {
+    const list = state.programs;
+    if (!list) return `<div class="lead"><div class="lead-text"><p>Looking at what's running…</p></div></div>`;
+    const v = state.progView;
+    const q = v.q.trim().toLowerCase();
+    const shown = list.filter((p) => !q || `${p.name} ${p.exe || ""}`.toLowerCase().includes(q)).sort(PROG_SORT[v.sort] || PROG_SORT.cpu);
+    const apps = shown.filter((p) => p.kind === "app");
+    const background = shown.filter((p) => p.kind === "background");
+    const rest = shown.filter((p) => p.kind !== "app" && p.kind !== "background");
+    const cpu = list.reduce((a, p) => a + p.cpu, 0);
+    const sort = (k, label) => `<button class="seg-btn" data-act="prog-sort" data-sort="${k}" aria-pressed="${v.sort === k}">${label}</button>`;
+    let html = `<div class="lead"><div class="lead-text"><p>${plural(apps.length, "app")} open and ${background.length} in the background, using ${Math.round(cpu)}% of the processor.</p></div></div>
+      <div class="list-tools">
+        <label class="list-search">${ICON.search}<input type="search" id="prog-q" placeholder="Filter" value="${esc(v.q)}" autocomplete="off" spellcheck="false" aria-label="Filter programs"></label>
+        <div class="seg" role="group" aria-label="Sort by">${sort("cpu", "CPU")}${sort("mem", "Memory")}${sort("gpu", "Graphics")}${sort("name", "A–Z")}</div>
+      </div>`;
+    html += section("apps", "Apps", apps.length ? total(apps) : "", apps.map(progRow).join("") || `<p class="empty">${q ? "No app matches that." : "No app windows open."}</p>`);
+    if (background.length) html += section("background", "In the background", total(background), background.map(progRow).join(""));
+    if (rest.length)
+      html += section(
+        "rest",
+        "Windows, security and agents",
+        total(rest),
+        (v.rest || q ? rest.map(progRow).join("") : "") +
+          `<button class="quiet-toggle" data-act="prog-rest">${v.rest ? "Hide them" : `Show all ${rest.length}`} (mom leaves these alone)</button>`
+      );
+    return html;
+  }
+
+  async function loadPrograms() {
+    if (state.programsLoading) return;
+    state.programsLoading = true;
+    try {
+      state.programs = await invoke("get_programs");
+      state.programsAt = Date.now();
+    } catch (e) {
+      console.warn("no programs", e);
+    }
+    state.programsLoading = false;
+    if (state.tab === "running" && state.runningTab === "programs") render();
+  }
+
+  /** Restart, quit or end: the second press of "Sure?" for restart and end. */
+  async function programAction(id, action) {
+    state.progConfirm = null;
+    state.progBusy = { id, action };
+    render();
+    try {
+      const r = await invoke("program_action", { id, action });
+      toast(r.message, !r.ok);
+      if (r.ok) react(action === "end" ? "cool" : "proud");
+    } catch (e) {
+      toast(String(e), true);
+    }
+    state.progBusy = null;
+    await loadPrograms();
+    if (action === "restart") setTimeout(() => loadSpeed(true), 4000);
+    render();
+  }
+
+  // ------------------------------------------------------------ running: startup
+
+  function startupRow(x) {
+    const meta = [
+      x.keep,
+      x.yours ? "" : "Every user's",
+      x.running ? "Running now" : x.enabled ? "Not running now" : "",
+      x.exe ? "" : x.location,
+    ].filter(Boolean);
+    const control = x.yours
+      ? `<button class="switch" role="switch" aria-checked="${x.enabled}" aria-label="Start ${esc(x.name)} with Windows" data-act="startup-set" data-id="${esc(x.id)}" ${state.startupBusy === x.id ? "disabled" : ""}></button>`
+      : `<button class="mini-btn wide" data-act="open-uri" data-url="ms-settings:startupapps" title="It starts for every user, so only an administrator can switch it. Windows Settings can.">Settings</button>`;
+    return `<div class="row" id="st-${hash(x.id)}" data-led="${x.enabled ? (x.running ? "green" : "off") : "off"}" title="${esc(x.command)}">
+      <span class="row-name">${esc(x.name)}</span>
+      <div class="row-meta"><span class="why">${esc(meta.join(" · "))}</span></div>
+      <div class="row-nums num">${x.running ? bytes(x.mem) : ""}</div>
+      <div class="row-nums2 num">${x.running && x.cpu >= 0.1 ? `${x.cpu.toFixed(1)}%` : ""}</div>
+      <div class="row-act">${control}</div>
+    </div>`;
+  }
+
+  function renderStartup() {
+    const list = state.startup;
+    if (!list) return `<div class="lead"><div class="lead-text"><p>Looking at what starts with Windows…</p></div></div>`;
+    const on = list.filter((x) => x.enabled);
+    const off = list.filter((x) => !x.enabled);
+    let html = `<div class="lead"><div class="lead-text"><div class="big"><span class="dot free-num">${on.length}</span></div><p>of ${plural(list.length, "app")} start with Windows. Switch off what you don't need the moment you sign in; it still opens when you start it.</p></div>
+      <button class="secondary" data-act="open-uri" data-url="ms-settings:startupapps">Settings${ICON.out}</button></div>`;
+    html += section("start-on", "Starts with Windows", on.length ? `${total(on.filter((x) => x.running))} now` : "", on.map(startupRow).join("") || `<p class="empty">Nothing. Windows starts clean.</p>`);
+    if (off.length) html += section("start-off", "Switched off", "", off.map(startupRow).join(""));
+    return html;
+  }
+
+  async function loadStartup() {
+    try {
+      state.startup = await invoke("get_startup");
+      state.startupAt = Date.now();
+    } catch (e) {
+      console.warn("no startup list", e);
+    }
+    if (state.tab === "running" && state.runningTab === "startup") render();
   }
 
   function renderAgents() {
@@ -771,22 +966,6 @@
   function renderApps() {
     const h = state.health;
     if (!h) return `<p class="empty">Checking…</p>`;
-    const mem = h.memory;
-    const top = h.topMemory
-      .map(
-        (p) => `<div class="mini-row" id="tm-${hash(p.name)}"><span class="mini-name">${esc(p.name)}${p.count > 1 ? ` <span class="dim">×${p.count}</span>` : ""}</span>
-          ${meter(mem.total ? p.mem / mem.total : 0, { n: 24 })}<span class="num">${bytes(p.mem)}</span></div>`
-      )
-      .join("");
-    const on = h.startup.filter((x) => x.enabled);
-    const list = state.showAllStartup ? h.startup : h.startup.slice(0, 6);
-    const startup = list
-      .map(
-        (x) => `<div class="mini-row" id="su-${hash(x.name + x.location)}" title="${esc(x.command)}"><span class="mini-name"><span class="led ${x.enabled ? "green" : ""}"></span>${esc(x.name)}</span>
-          <span class="dim">${esc(x.location)}${x.enabled ? "" : ", off"}</span></div>`
-      )
-      .join("");
-    const more = h.startup.length > 6 ? `<button class="quiet-toggle" data-act="toggle-startup">${state.showAllStartup ? "Show fewer" : `Show all ${h.startup.length}`}</button>` : "";
     const unusedApps = h.unusedApps || [];
     const now = Date.now() / 1000;
     const appList = (state.showAllUnused ? unusedApps : unusedApps.slice(0, 8))
@@ -811,15 +990,13 @@
               `<p class="group-note">Uninstall opens the app's own uninstaller, which may ask what to keep. Apps you use from a terminal or a right-click menu, runtimes, drivers, wallets and messengers are never listed.</p>`
           )
         : section("unused", "Apps you haven't opened in a year", "", `<p class="empty">None. Everything installed gets used.</p>`)) +
-      (h.startup.length
-        ? section(
-            "startup",
-            "Starts with Windows",
-            `${on.length} of ${h.startup.length} on`,
-            startup + more + `<div class="group-foot"><button class="link-btn" data-act="open-uri" data-url="ms-settings:startupapps">Turn them on or off in Windows${ICON.out}</button></div>`
-          )
-        : "") +
-      (top ? section("top", "Using the most memory", "", top) : "")
+      section(
+        "what-runs",
+        "What runs",
+        "",
+        `<p class="group-note">What starts with Windows (with a switch for each), and what's using the processor and memory right now, are in Running.</p>
+        <div class="group-foot"><button class="link-btn" data-act="go-tab" data-to="running:startup">Startup apps</button><button class="link-btn" data-act="go-tab" data-to="running:programs">Programs</button></div>`
+      )
     );
   }
 
@@ -2465,11 +2642,55 @@
         break;
       case "running-tab":
         if (state.runningTab === el.dataset.tab) break;
-        state.runningTab = el.dataset.tab;
+        openRunningTab(el.dataset.tab);
         $("#page").scrollTop = 0;
         render();
-        if (state.runningTab === "speed" && Date.now() - state.speedAt > 10000) loadSpeed();
         break;
+      case "prog-expand":
+        state.progOpen = state.progOpen === el.dataset.id ? null : el.dataset.id;
+        render();
+        break;
+      case "prog-sort":
+        state.progView.sort = el.dataset.sort;
+        render();
+        break;
+      case "prog-rest":
+        state.progView.rest = !state.progView.rest;
+        render();
+        break;
+      case "prog-act": {
+        if (state.progBusy) break;
+        const key = `${el.dataset.id}|${el.dataset.action}`;
+        if (el.dataset.sure && state.progConfirm !== key) {
+          state.progConfirm = key;
+          render();
+          setTimeout(() => {
+            if (state.progConfirm === key) {
+              state.progConfirm = null;
+              render();
+            }
+          }, 6000);
+          break;
+        }
+        programAction(el.dataset.id, el.dataset.action);
+        break;
+      }
+      case "startup-set": {
+        const x = state.startup && state.startup.find((y) => y.id === el.dataset.id);
+        if (!x || state.startupBusy) break;
+        state.startupBusy = x.id;
+        x.enabled = !x.enabled;
+        render();
+        try {
+          toast(await invoke("set_startup", { id: x.id, on: x.enabled }));
+        } catch (e) {
+          x.enabled = !x.enabled;
+          toast(String(e), true);
+        }
+        state.startupBusy = null;
+        loadStartup();
+        break;
+      }
       case "speed-again":
         loadSpeed(true);
         break;
@@ -2487,6 +2708,7 @@
           state.upkeepTab = sub;
           openUpkeepTab(sub);
         }
+        if (tab === "running" && sub) openRunningTab(sub);
         selectTab(tab);
         $("#page").scrollTop = 0;
         render();
@@ -2895,6 +3117,10 @@
       state.listView.q = e.target.value;
       renderSheet();
     }
+    if (e.target.id === "prog-q") {
+      state.progView.q = e.target.value;
+      render();
+    }
   });
 
   // Settings switches and numbers live in the sheet.
@@ -3041,6 +3267,10 @@
       const watching = state.tab === "running" && state.runningTab === "speed" && !document.hidden;
       const age = Date.now() - state.speedAt;
       if (age > (watching ? 10000 : 300000) && !state.paused) loadSpeed();
+      const here = (t) => state.tab === "running" && state.runningTab === t && !document.hidden;
+      // Not while a button is waiting for its "Sure?", so the row doesn't move under the pointer.
+      if (here("programs") && Date.now() - state.programsAt > 5000 && !state.progConfirm && !state.progBusy) loadPrograms();
+      if (here("startup") && Date.now() - state.startupAt > 30000 && !state.startupBusy) loadStartup();
     }, 2000);
     document.addEventListener("visibilitychange", async () => {
       if (document.visibilityState !== "visible") return;

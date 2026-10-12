@@ -86,6 +86,15 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Every program running, as one line each (all of Chrome's processes together): CPU,
+    /// memory, graphics card and windows. Only looks.
+    Programs {
+        /// Windows' own processes and services too.
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Windows settings that drifted from the defaults over the years, and leftovers pointing at
     /// things that are gone. `mom settings fix <id>` puts one back.
     Settings {
@@ -422,6 +431,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Trash { .. })
         | Some(Cmd::Health { .. })
         | Some(Cmd::Speed { .. })
+        | Some(Cmd::Programs { .. })
         | Some(Cmd::Files { .. })
         | Some(Cmd::Integrations { .. })
         | Some(Cmd::Config)
@@ -757,11 +767,35 @@ fn run(cli: Cli) -> Result<i32> {
             sampler.sample();
             std::thread::sleep(std::time::Duration::from_millis(1500));
             let table = sampler.sample();
-            let sp = mom_core::speed::check(&table);
+            let sp = mom_core::speed::check(&table, &paths);
             if json {
                 print_json(&sp)?;
             } else {
                 print_speed(&st, &sp);
+            }
+        }
+        Some(Cmd::Programs { all, json }) => {
+            let mut sampler = mom_core::procs::Sampler::new();
+            sampler.sample();
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let table = sampler.sample();
+            let list: Vec<_> = mom_core::programs::list(&table).into_iter().filter(|p| all || !matches!(p.kind, "windows" | "service")).collect();
+            if json {
+                print_json(&list)?;
+            } else {
+                println!("{}", st.bold("PROGRAMS"));
+                for p in &list {
+                    let gpu = p.gpu.filter(|g| *g >= 1.0).map(|g| format!(" · GPU {g:.0}%")).unwrap_or_default();
+                    let win = if p.windows > 0 { format!(" · {} window{}", p.windows, if p.windows == 1 { "" } else { "s" }) } else { String::new() };
+                    let inside = p.inside.as_ref().map(|i| format!(" · {i} inside")).unwrap_or_default();
+                    println!(
+                        "  {}{}{}{}",
+                        pad(&format!("{:.1}%", p.cpu), 8),
+                        pad(&human_bytes(p.mem), 10),
+                        pad(&p.name, 34),
+                        st.dim(&format!("{} · {} process{}{gpu}{win}{inside}", p.kind, p.count, if p.count == 1 { "" } else { "es" }))
+                    );
+                }
             }
         }
         Some(Cmd::Tidy { dir, apply, only, prompt, json }) => {

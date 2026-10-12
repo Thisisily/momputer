@@ -57,6 +57,9 @@ pub struct Proc {
     pub cpu: f32,
     /// Total CPU time used, milliseconds.
     pub cpu_ms: u64,
+    /// Windows session. 0 is where services run.
+    #[serde(skip)]
+    pub session: u32,
 }
 
 impl Proc {
@@ -429,6 +432,7 @@ impl Sampler {
                     mem: r.mem,
                     cpu: cpu.min(100.0),
                     cpu_ms: r.cpu_ms,
+                    session: r.session,
                 }
             })
             .collect();
@@ -514,6 +518,19 @@ mod nt {
     }
 }
 
+/// Every process running this moment, by (PID, start time): one cheap call, for waiting on a
+/// program to exit.
+pub fn running_now() -> Option<HashSet<(u32, u64)>> {
+    #[cfg(windows)]
+    {
+        nt::processes().map(|list| list.into_iter().map(|r| (r.pid, r.start)).collect())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// The command lines of a few processes, read now. The table only reads them for processes
 /// worth a look (opening every process is slow with some antivirus), so this is for the odd
 /// one more: a browser's newest tabs, say. A PID now running something else is left out.
@@ -560,6 +577,7 @@ pub fn fake(pid: u32, ppid: u32, name: &str, cmd: &str, start: u64) -> Proc {
         mem: 50 * 1024 * 1024,
         cpu: 0.0,
         cpu_ms: 0,
+        session: 1,
     }
 }
 

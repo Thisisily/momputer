@@ -871,10 +871,52 @@ async fn get_speed(fresh: bool, s: State<'_, S>) -> Res<mom_core::speed::Speed> 
             mom_core::speed::forget();
         }
         let table = s.sampler.lk().sample();
-        mom_core::speed::check(&table)
+        mom_core::speed::check(&table, &s.paths)
     })
     .await
     .map_err(err)
+}
+
+/// Every program running, as one line each.
+#[tauri::command]
+async fn get_programs(s: State<'_, S>) -> Res<Vec<mom_core::programs::Program>> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let table = s.sampler.lk().sample();
+        mom_core::programs::list(&table)
+    })
+    .await
+    .map_err(err)
+}
+
+/// Restarts, quits or ends a program from `get_programs` (only what it offers for it).
+#[tauri::command]
+async fn program_action(id: String, action: String, s: State<'_, S>) -> Res<mom_core::programs::ActReport> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let table = s.sampler.lk().sample();
+        mom_core::programs::act(&table, &id, &action)
+    })
+    .await
+    .map_err(err)
+}
+
+/// What starts with Windows.
+#[tauri::command]
+async fn get_startup(s: State<'_, S>) -> Res<Vec<mom_core::startup::Startup>> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let table = s.sampler.lk().sample();
+        mom_core::startup::list(&s.paths, &table)
+    })
+    .await
+    .map_err(err)
+}
+
+/// Switches one of them on or off, the way Task Manager does.
+#[tauri::command(async)]
+fn set_startup(id: String, on: bool, s: State<'_, S>) -> Res<String> {
+    mom_core::startup::set(&s.paths, &id, on)
 }
 
 #[tauri::command(async)]
@@ -1098,9 +1140,13 @@ fn open_url(url: String, app: AppHandle) -> Res<()> {
         .strip_prefix("ms-settings:")
         .map(|page| !page.is_empty() && page.len() <= 48 && page.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
         .unwrap_or(false);
+    // Where to get a graphics driver, from Speed; and Windows Security.
+    let driver_page = ["https://www.nvidia.com/en-us/drivers/", "https://www.amd.com/en/support/download/drivers.html", "https://www.intel.com/content/www/us/en/support/detect.html"]
+        .contains(&url.as_str());
+    let security = url == "windowsdefender:";
     // The author's other projects, from the About sheet.
     let author = ["https://getmarsell.com", "https://ilisium.xyz"].iter().any(|site| url == *site || url.starts_with(&format!("{site}/")));
-    if !(local || codex_thread || settings_page || author || url.starts_with("https://github.com/")) {
+    if !(local || codex_thread || settings_page || author || driver_page || security || url.starts_with("https://github.com/")) {
         return Err("mom only opens local servers, Codex threads, Windows Settings pages and the project's own pages".into());
     }
     app.opener().open_url(url, None::<&str>).map_err(err)
@@ -1196,6 +1242,10 @@ fn main() {
             open_program,
             get_health,
             get_speed,
+            get_programs,
+            program_action,
+            get_startup,
+            set_startup,
             get_rooms,
             room_paths,
             inspect_room,

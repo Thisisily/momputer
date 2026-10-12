@@ -4,10 +4,12 @@
 //! helpers that run all the time, and which programs are busy right now. Looks only; it changes
 //! nothing.
 
+use crate::paths::Paths;
 use crate::procs::{Proc, ProcTable};
+use crate::programs::Program;
 use crate::util::{human_age_long, human_bytes, now_secs, plural, run};
 use serde::Serialize;
-use std::collections::HashMap;
+
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -38,11 +40,12 @@ pub struct Finding {
 pub struct Fix {
     pub label: String,
     /// "copy": put `value` on the clipboard (a page like chrome://restart, which only the browser
-    /// itself can open). "open": open `value`, an ms-settings: link. "tab": show a part of the
-    /// widget ("upkeep:apps").
+    /// itself can open). "open": open `value`, a Windows Settings page or a driver download page.
+    /// "tab": show a part of the widget ("running:startup"). "program": restart the program
+    /// whose id is `value` (from `programs::list`), after a "Sure?".
     pub kind: &'static str,
     pub value: String,
-    /// What to say once it's copied.
+    /// What to say once it's copied, or what restarting it also ends.
     pub hint: Option<String>,
 }
 
@@ -71,16 +74,33 @@ pub struct Gpu {
 
 /// Looks the machine over. The event logs, installed tools and graphics card are read at most
 /// every five minutes (about a second's work); the rest comes from `table`.
-pub fn check(table: &ProcTable) -> Speed {
+pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
     let now = now_secs();
     let slow = slow_facts(now);
+    let programs = crate::programs::list(table);
     let mut findings = Vec::new();
-    findings.extend(lost_gpu(table, now));
-    findings.extend(driver_trouble(&slow.events, now));
+    findings.extend(lost_gpu(table, &programs, now));
+    findings.extend(busy_for_minutes(&programs, table.cpus));
+    findings.extend(memory_full(&programs));
+    findings.extend(driver_trouble(&slow.events, now).map(|mut f| {
+        f.fix = slow.gpu.as_ref().and_then(|g| driver_page(&g.name)).or_else(|| driver_page(&slow.driver_vendor));
+        f
+    }));
     findings.extend(hardware_errors(&slow.events, now));
     let trouble = findings.iter().any(|f| f.id == "gpu-driver" || f.id == "hardware-errors");
     findings.extend(tuners(&slow.tuners, table, slow.gpu.as_ref(), trouble));
     findings.extend(extras(table, now));
+    findings.extend(slow.extensions.as_ref().and_then(too_many_extensions));
+    let starting = crate::health::startup_apps(paths).iter().filter(|a| a.enabled).count();
+    if starting >= 12 {
+        findings.push(Finding {
+            id: "startup".into(),
+            level: "tip",
+            title: format!("{starting} apps start with Windows"),
+            detail: "Each one slows signing in and keeps running in the background. Switch off the ones you don't need straight away; they still open when you start them.".into(),
+            fix: Some(Fix { label: "Startup apps".into(), kind: "tab", value: "running:startup".into(), hint: None }),
+        });
+    }
     if slow.power_saver {
         findings.push(Finding {
             id: "power-plan".into(),
@@ -90,7 +110,7 @@ pub fn check(table: &ProcTable) -> Speed {
             fix: Some(Fix { label: "Power settings".into(), kind: "open", value: "ms-settings:powersleep".into(), hint: None }),
         });
     }
-    Speed { findings, busy: busy(table, 8), gpu: slow.gpu, at: now }
+    Speed { findings, busy: busy(&programs, 6), gpu: slow.gpu, at: now }
 }
 
 // ------------------------------------------------------------------ apps that lost the graphics card
@@ -126,7 +146,7 @@ const HELPERS_READ: usize = 4;
 const LONG_OPEN: u64 = 2 * 86_400;
 
 /// Chromium apps drawing without the graphics card, and browsers open for days.
-fn lost_gpu(table: &ProcTable, now: u64) -> Vec<Finding> {
+fn lost_gpu(table: &ProcTable, programs: &[Program], now: u64) -> Vec<Finding> {
     let mut out = Vec::new();
     for (exe, label, restart) in CHROMIUM {
         let all: Vec<&Proc> = table.procs.values().filter(|p| p.name.eq_ignore_ascii_case(exe)).collect();
@@ -156,12 +176,15 @@ fn lost_gpu(table: &ProcTable, now: u64) -> Vec<Finding> {
             if !software && !long_open {
                 continue;
             }
-            let fix = restart.map(|page| Fix {
-                label: format!("Copy {page}"),
-                kind: "copy",
-                value: (*page).to_string(),
-                hint: Some(format!("Paste it into {label}'s address bar. Your tabs come back.")),
-            });
+            let fix = match restart {
+                Some(page) => Some(Fix {
+                    label: format!("Copy {page}"),
+                    kind: "copy",
+                    value: (*page).to_string(),
+                    hint: Some(format!("Paste it into {label}'s address bar. Your tabs come back.")),
+                }),
+                None => restart_fix(programs, root.pid),
+            };
             let open = format!("{label} has been open {} with {} and {} of memory", human_age_long(open_for), processes(family.len()), human_bytes(mem));
             out.push(if software {
                 Finding {
@@ -170,7 +193,7 @@ fn lost_gpu(table: &ProcTable, now: u64) -> Vec<Finding> {
                     title: format!("{label} is drawing without your graphics card"),
                     detail: format!(
                         "{label} draws video, scrolling and animation on the processor instead, which is why videos stutter. It happens when the graphics driver crashes or updates while {label} is open, and lasts until {label} restarts. {}",
-                        if restart.is_some() { format!("{open}; a restart brings every tab back.") } else { format!("Quit {label} and open it again.") }
+                        if restart.is_some() { format!("{open}; a restart brings every tab back.") } else { format!("Restarting {label} fixes it.") }
                     ),
                     fix,
                 }
@@ -187,6 +210,113 @@ fn lost_gpu(table: &ProcTable, now: u64) -> Vec<Finding> {
         }
     }
     out
+}
+
+/// The Restart button for the program a process belongs to, when mom can restart it, with what
+/// runs inside it said up front.
+fn restart_fix(programs: &[Program], pid: u32) -> Option<Fix> {
+    let prog = programs.iter().find(|p| p.pids.contains(&pid) && p.can.contains(&"restart"))?;
+    Some(Fix {
+        label: format!("Restart {}", prog.name),
+        kind: "program",
+        value: prog.id.clone(),
+        hint: prog.inside.as_ref().map(|i| format!("{i} run inside it, and stop when it closes.")),
+    })
+}
+
+/// Programs that have kept the processor busy for minutes, not just this second.
+fn busy_for_minutes(programs: &[Program], cpus: usize) -> Vec<Finding> {
+    let mut out = Vec::new();
+    for p in programs {
+        if p.avg_secs < 60 {
+            continue;
+        }
+        let cores = p.avg_cpu * cpus.max(1) as f32 / 100.0;
+        let mins = human_age_long(p.avg_secs);
+        match p.kind {
+            "security" if cores >= 0.5 && p.name.contains("Defender") => out.push(Finding {
+                id: "defender-busy".into(),
+                level: "tip",
+                title: "Microsoft Defender is scanning".into(),
+                detail: format!(
+                    "It's kept {cores:.1} processor cores busy for the last {mins}. A scan finishes by itself; if it's always busy while you build code, a Dev Drive (Settings > System > Storage) is scanned far less."
+                ),
+                fix: Some(Fix { label: "Windows Security".into(), kind: "open", value: "windowsdefender:".into(), hint: None }),
+            }),
+            "windows" if cores >= 0.5 && p.name.to_ascii_lowercase().contains("search") => out.push(Finding {
+                id: "search-busy".into(),
+                level: "tip",
+                title: "Windows Search is indexing".into(),
+                detail: format!("It's kept {cores:.1} processor cores busy for the last {mins}, reading your files so search is quick. It settles down by itself; you can leave big folders out of it."),
+                fix: Some(Fix { label: "Search settings".into(), kind: "open", value: "ms-settings:cortana-windowssearch".into(), hint: None }),
+            }),
+            "app" | "background" if cores >= 0.75 => out.push(Finding {
+                id: format!("busy-{}", p.id),
+                level: if cores >= 1.5 { "warn" } else { "tip" },
+                title: format!("{} is busy all the time", p.name),
+                detail: format!(
+                    "It's kept {cores:.1} processor cores busy for the last {mins}{}. If it isn't doing something for you right now, it's stuck; a restart usually settles it.",
+                    p.inside.as_ref().map(|i| format!(" ({i} run inside it)")).unwrap_or_default()
+                ),
+                fix: if p.can.contains(&"restart") {
+                    Some(Fix {
+                        label: format!("Restart {}", p.name),
+                        kind: "program",
+                        value: p.id.clone(),
+                        hint: p.inside.as_ref().map(|i| format!("{i} run inside it, and stop when it closes.")),
+                    })
+                } else {
+                    Some(Fix { label: "Programs".into(), kind: "tab", value: "running:programs".into(), hint: None })
+                },
+            }),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Memory nearly full: Windows starts moving things to disk, and everything waits on it.
+fn memory_full(programs: &[Program]) -> Option<Finding> {
+    let m = os::memory()?;
+    let used = m.total.saturating_sub(m.available);
+    let commit_used = m.commit_limit.saturating_sub(m.commit_available);
+    let ram = used as f64 / m.total.max(1) as f64;
+    let commit = commit_used as f64 / m.commit_limit.max(1) as f64;
+    if ram < 0.9 && commit < 0.9 {
+        return None;
+    }
+    let mut top: Vec<&Program> = programs.iter().filter(|p| !matches!(p.kind, "windows" | "security")).collect();
+    top.sort_by(|a, b| b.mem.cmp(&a.mem));
+    let names: Vec<String> = top.iter().take(3).map(|p| format!("{} ({})", p.name, human_bytes(p.mem))).collect();
+    Some(Finding {
+        id: "memory-full".into(),
+        level: "warn",
+        title: if commit >= 0.9 && ram < 0.9 {
+            "Windows is nearly out of memory to hand out".into()
+        } else {
+            format!("Memory is nearly full: {} of {}", human_bytes(used), human_bytes(m.total))
+        },
+        detail: format!(
+            "When it fills up, Windows moves things to the disk and everything waits on it. The biggest users: {}. Closing one you're not using frees it straight away.",
+            names.join(", ")
+        ),
+        fix: Some(Fix { label: "Programs".into(), kind: "tab", value: "running:programs".into(), hint: None }),
+    })
+}
+
+/// Where to get a graphics driver, by who made the card.
+fn driver_page(card: &str) -> Option<Fix> {
+    let c = card.to_ascii_lowercase();
+    let (who, url) = if c.contains("nvidia") || c.contains("geforce") || c.contains("rtx") || c.contains("gtx") || c.starts_with("nvlddmkm") {
+        ("NVIDIA", "https://www.nvidia.com/en-us/drivers/")
+    } else if c.contains("radeon") || c.contains("amd") || c.starts_with("amdkmdag") || c.starts_with("amdwddmg") {
+        ("AMD", "https://www.amd.com/en/support/download/drivers.html")
+    } else if c.contains("intel") || c.starts_with("igfx") || c.starts_with("igdkmd") {
+        ("Intel", "https://www.intel.com/content/www/us/en/support/detect.html")
+    } else {
+        return None;
+    };
+    Some(Fix { label: format!("{who} drivers"), kind: "open", value: url.into(), hint: None })
 }
 
 /// A browser a robot is driving (an agent's Playwright, a test run): it turns the graphics card
@@ -496,25 +626,18 @@ fn extras(table: &ProcTable, now: u64) -> Option<Finding> {
         level: "tip",
         title: format!("{} running all the time", plural(text.len() as u64, "helper")),
         detail: format!("{}. If you don't need them, stop them starting with Windows.", text.join(". ")),
-        fix: Some(Fix { label: "Startup apps".into(), kind: "tab", value: "upkeep:apps".into(), hint: None }),
+        fix: Some(Fix { label: "Startup apps".into(), kind: "tab", value: "running:startup".into(), hint: None }),
     })
 }
 
 // ------------------------------------------------------------------ busy right now
 
-fn busy(table: &ProcTable, n: usize) -> Vec<Busy> {
-    let mut by: HashMap<String, Busy> = HashMap::new();
-    for p in table.procs.values() {
-        if p.pid == 0 || p.pid == 4 || crate::health::not_a_program(&p.name) {
-            continue;
-        }
-        let name = crate::health::program_name(&p.name);
-        let e = by.entry(name.clone()).or_insert(Busy { name, cpu: 0.0, mem: 0, count: 0 });
-        e.cpu += p.cpu;
-        e.mem += p.mem;
-        e.count += 1;
-    }
-    let mut v: Vec<Busy> = by.into_values().filter(|b| b.cpu >= 0.3).collect();
+fn busy(programs: &[Program], n: usize) -> Vec<Busy> {
+    let mut v: Vec<Busy> = programs
+        .iter()
+        .filter(|p| p.cpu >= 0.3 && p.name != "System Idle Process")
+        .map(|p| Busy { name: p.name.clone(), cpu: p.cpu, mem: p.mem, count: p.count })
+        .collect();
     v.sort_by(|a, b| b.cpu.total_cmp(&a.cpu).then_with(|| a.name.cmp(&b.name)));
     v.truncate(n);
     v
@@ -530,6 +653,10 @@ struct Slow {
     tuners: Vec<String>,
     gpu: Option<Gpu>,
     power_saver: bool,
+    /// Chrome's busiest profile: (its name, extensions on, the ad blockers among them).
+    extensions: Option<(String, usize, Vec<String>)>,
+    /// The graphics driver named in the event log ("nvlddmkm"), for when there's no card info.
+    driver_vendor: String,
 }
 
 static SLOW: Mutex<Option<Slow>> = Mutex::new(None);
@@ -546,7 +673,9 @@ fn slow_facts(now: u64) -> Slow {
     if let Some(s) = SLOW.lock().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|s| now.saturating_sub(s.at) < SLOW_FOR) {
         return s.clone();
     }
-    let s = Slow { at: now, events: read_events(), tuners: installed_tuners(), gpu: read_gpu(), power_saver: power_saver() };
+    let events = read_events();
+    let driver_vendor = events.iter().find(|e| GPU_DRIVERS.contains(&e.provider.to_ascii_lowercase().as_str())).map(|e| e.provider.to_ascii_lowercase()).unwrap_or_default();
+    let s = Slow { at: now, events, tuners: installed_tuners(), gpu: read_gpu(), power_saver: power_saver(), extensions: chrome_extensions(), driver_vendor };
     *SLOW.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
     s
 }
@@ -563,6 +692,87 @@ fn installed_tuners() -> Vec<String> {
         }
     }
     out
+}
+
+// ------------------------------------------------------------------ browser extensions
+
+/// Chrome's profile with the most extensions switched on: (its name, how many, the ad blockers
+/// among them, by name). Every extension is another program running inside every tab.
+fn chrome_extensions() -> Option<(String, usize, Vec<String>)> {
+    let data = std::env::var("LOCALAPPDATA").ok()?;
+    let root = std::path::Path::new(&data).join("Google").join("Chrome").join("User Data");
+    let state: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("Local State")).ok()?).ok()?;
+    let profiles = state.pointer("/profile/info_cache")?.as_object()?;
+    let mut best: Option<(String, usize, Vec<String>)> = None;
+    for (dir, info) in profiles {
+        let prefs = root.join(dir).join("Secure Preferences");
+        let Ok(bytes) = std::fs::read(&prefs) else { continue };
+        let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else { continue };
+        let Some(settings) = json.pointer("/extensions/settings").and_then(|v| v.as_object()) else { continue };
+        let mut on = Vec::new();
+        for (id, e) in settings {
+            // Web Store (1) and unpacked (4) extensions; Chrome's own components don't count.
+            let location = e.get("location").and_then(|v| v.as_i64()).unwrap_or(0);
+            let disabled = e.get("disable_reasons").is_some_and(|r| r.as_array().is_some_and(|a| !a.is_empty()) || r.as_i64().is_some_and(|n| n != 0))
+                || e.get("state").and_then(|v| v.as_i64()) == Some(0);
+            if matches!(location, 1 | 4) && !disabled {
+                on.push(extension_name(&root.join(dir).join("Extensions").join(id)).unwrap_or_default());
+            }
+        }
+        let blockers: Vec<String> = on
+            .iter()
+            .filter(|n| {
+                let l = n.to_ascii_lowercase();
+                l.contains("adblock") || l.contains("ad block") || l.contains("ublock") || l.contains("adguard") || l.contains("ghostery")
+            })
+            .cloned()
+            .collect();
+        let name = info.get("name").and_then(|v| v.as_str()).unwrap_or(dir).to_string();
+        if best.as_ref().is_none_or(|b| on.len() > b.1) {
+            best = Some((name, on.len(), blockers));
+        }
+    }
+    best
+}
+
+/// An extension's name from its manifest, with "__MSG_appName__" looked up in English.
+fn extension_name(dir: &std::path::Path) -> Option<String> {
+    let version = std::fs::read_dir(dir).ok()?.filter_map(Result::ok).map(|e| e.path()).find(|p| p.is_dir())?;
+    let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(version.join("manifest.json")).ok()?).ok()?;
+    let name = manifest.get("name")?.as_str()?.to_string();
+    let Some(key) = name.strip_prefix("__MSG_").and_then(|n| n.strip_suffix("__")) else { return Some(name) };
+    for locale in ["en", "en_US", "en_GB"] {
+        if let Ok(bytes) = std::fs::read(version.join("_locales").join(locale).join("messages.json")) {
+            if let Ok(m) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Some(obj) = m.as_object() {
+                    if let Some((_, v)) = obj.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)) {
+                        return v.get("message").and_then(|s| s.as_str()).map(str::to_string);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn too_many_extensions(e: &(String, usize, Vec<String>)) -> Option<Finding> {
+    let (profile, n, blockers) = e;
+    if *n < 20 && blockers.len() < 2 {
+        return None;
+    }
+    let doubled = if blockers.len() >= 2 { format!(" {} of them block ads ({}); one does the job.", blockers.len(), blockers.join(", ")) } else { String::new() };
+    Some(Finding {
+        id: "chrome-extensions".into(),
+        level: "tip",
+        title: format!("{n} Chrome extensions are on in {profile}"),
+        detail: format!("Each one runs in the background and inside the pages you open, so every tab does more work.{doubled} Switch off the ones you don't use."),
+        fix: Some(Fix {
+            label: "Copy chrome://extensions".into(),
+            kind: "copy",
+            value: "chrome://extensions".into(),
+            hint: Some("Paste it into Chrome's address bar.".into()),
+        }),
+    })
 }
 
 /// NVIDIA's own tool, when it's there. Other cards: nothing (no harm done).
@@ -595,6 +805,38 @@ fn power_saver() -> bool {
     run("powercfg", &["/getactivescheme"], Duration::from_secs(4))
         .map(|o| o.text().to_ascii_lowercase().contains("a1841308-3541-4fab-bc81-f71556f20b4a"))
         .unwrap_or(false)
+}
+
+struct Mem {
+    total: u64,
+    available: u64,
+    commit_limit: u64,
+    commit_available: u64,
+}
+
+#[cfg(windows)]
+mod os {
+    pub(super) fn memory() -> Option<super::Mem> {
+        use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+        // SAFETY: MEMORYSTATUSEX is plain data; dwLength is set before the call.
+        unsafe {
+            let mut m: MEMORYSTATUSEX = std::mem::zeroed();
+            m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+            (GlobalMemoryStatusEx(&mut m) != 0).then_some(super::Mem {
+                total: m.ullTotalPhys,
+                available: m.ullAvailPhys,
+                commit_limit: m.ullTotalPageFile,
+                commit_available: m.ullAvailPageFile,
+            })
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod os {
+    pub(super) fn memory() -> Option<super::Mem> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -683,18 +925,53 @@ mod tests {
         assert!(f.detail.contains("27% of a processor core all day"), "{}", f.detail);
     }
 
+    fn program(name: &str, kind: &'static str, avg_cpu: f32, can: Vec<&'static str>) -> Program {
+        Program {
+            id: format!("app:{}", name.to_lowercase()),
+            name: name.into(),
+            exe: None,
+            cpu: avg_cpu,
+            avg_cpu,
+            avg_secs: 240,
+            mem: 1 << 30,
+            gpu: None,
+            count: 3,
+            windows: 1,
+            kind,
+            started: 0,
+            inside: None,
+            can,
+            pids: vec![77],
+        }
+    }
+
     #[test]
-    fn busy_adds_up_each_program() {
-        let mut a = fake(30, 1, "chrome.exe", "chrome", 1);
-        a.cpu = 3.0;
-        let mut b = fake(31, 30, "chrome.exe", "chrome --type=renderer", 2);
-        b.cpu = 2.5;
-        let mut c = fake(32, 1, "Idle", "", 1);
-        c.cpu = 90.0;
-        let table = ProcTable::from_procs(vec![a, b, c], 999);
-        let v = busy(&table, 8);
-        assert_eq!(v.len(), 1);
-        assert_eq!((v[0].name.as_str(), v[0].count), ("Chrome", 2));
-        assert!((v[0].cpu - 5.5).abs() < 0.01);
+    fn programs_busy_for_minutes_get_a_restart() {
+        // 16 threads: 10% of the machine is 1.6 cores.
+        let stuck = program("Claude", "app", 10.0, vec!["restart", "quit", "end"]);
+        let calm = program("Spotify", "app", 1.0, vec!["restart", "quit", "end"]);
+        let scan = program("Microsoft Defender", "security", 4.0, vec![]);
+        let f = busy_for_minutes(&[stuck, calm, scan], 16);
+        assert_eq!(f.len(), 2, "{f:#?}");
+        assert_eq!((f[0].level, f[0].title.as_str()), ("warn", "Claude is busy all the time"));
+        assert!(f[0].detail.contains("1.6 processor cores") && f[0].detail.contains("4 minutes"), "{}", f[0].detail);
+        let fix = f[0].fix.as_ref().unwrap();
+        assert_eq!((fix.kind, fix.value.as_str(), fix.label.as_str()), ("program", "app:claude", "Restart Claude"));
+        assert_eq!(f[1].id, "defender-busy");
+        let mut inside = program("ChatGPT", "app", 1.0, vec!["restart"]);
+        inside.inside = Some("3 Codex sessions".into());
+        let fix = restart_fix(&[inside], 77).unwrap();
+        assert_eq!(fix.hint.as_deref(), Some("3 Codex sessions run inside it, and stop when it closes."));
+    }
+
+    #[test]
+    fn extensions_and_drivers() {
+        assert!(too_many_extensions(&("Default".into(), 12, vec![])).is_none());
+        let f = too_many_extensions(&("Default".into(), 38, vec!["AdBlock".into(), "AdBlocker Ultimate".into()])).unwrap();
+        assert_eq!(f.title, "38 Chrome extensions are on in Default");
+        assert!(f.detail.contains("2 of them block ads (AdBlock, AdBlocker Ultimate)"), "{}", f.detail);
+        assert_eq!(driver_page("RTX 2070 SUPER").unwrap().label, "NVIDIA drivers");
+        assert_eq!(driver_page("amdkmdag").unwrap().label, "AMD drivers");
+        assert!(driver_page("Mystery card").is_none());
     }
 }

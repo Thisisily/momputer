@@ -34,7 +34,7 @@ pub struct KillFailure {
 }
 
 /// Processes mom refuses to stop no matter what she's asked.
-fn untouchable(table: &ProcTable) -> HashSet<u32> {
+pub(crate) fn untouchable(table: &ProcTable) -> HashSet<u32> {
     let mut s = table.self_and_ancestors();
     for p in table.procs.values() {
         if agents::agent_process(p).is_some() || classify::is_critical(p) || p.pid <= 4 {

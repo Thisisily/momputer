@@ -405,6 +405,9 @@
       { id: "no-gpu-chrome", level: "warn", title: "Chrome is drawing without your graphics card",
         detail: "Chrome draws video, scrolling and animation on the processor instead, which is why videos stutter. It happens when the graphics driver crashes or updates while Chrome is open, and lasts until Chrome restarts. Chrome has been open 2 days with 79 processes and 14.2 GB of memory; a restart brings every tab back.",
         fix: { label: "Copy chrome://restart", kind: "copy", value: "chrome://restart", hint: "Paste it into Chrome's address bar. Your tabs come back." } },
+      { id: "no-gpu-chatgpt", level: "warn", title: "ChatGPT is drawing without your graphics card",
+        detail: "ChatGPT draws video, scrolling and animation on the processor instead, which is why videos stutter. It happens when the graphics driver crashes or updates while ChatGPT is open, and lasts until ChatGPT restarts. Restarting ChatGPT fixes it.",
+        fix: { label: "Restart ChatGPT", kind: "program", value: "app:chatgpt", hint: "3 Codex sessions run inside it, and stop when it closes." } },
       { id: "gpu-driver", level: "warn", title: "Your graphics driver crashed 6 times in two weeks",
         detail: "All 6 were 7 days ago. The driver was also updated 19 hours ago. Each time, Windows restarts it, and apps that were open can lose the graphics card until they restart. An overclock on the graphics card is the usual cause; otherwise, reinstall the driver from the maker's site.", fix: null },
       { id: "tuners", level: "tip", title: "GPU Tweak III is installed, not running",
@@ -422,6 +425,37 @@
       { name: "Chrome", cpu: 0.4, mem: 14.2 * GB, count: 79 },
     ],
   };
+
+  // Programs: what's running, as one line each.
+  const prog = (name, kind, cpu, mem, count, extra = {}) => ({
+    id: `app:${name.toLowerCase()}`, name, exe: extra.exe || `C:\\Program Files\\${name}\\${name}.exe`, cpu, avgCpu: cpu * 0.9, avgSecs: 240, mem, gpu: extra.gpu ?? null,
+    count, windows: kind === "app" ? 1 : 0, kind, started: now - (extra.age || 3 * 3600), inside: extra.inside || null,
+    can: kind === "app" ? ["restart", "quit", "end"] : kind === "background" ? ["restart", "end"] : [],
+  });
+  const programs = [
+    prog("ChatGPT", "app", 6.2, 2.4 * GB, 16, { inside: "3 Codex sessions", gpu: 2 }),
+    prog("Chrome", "app", 3.1, 12.8 * GB, 70, { gpu: 4, age: 2 * 86400 }),
+    prog("Claude", "app", 2.8, 3.8 * GB, 23, { inside: "2 Claude Code sessions", gpu: 7 }),
+    prog("Spotify", "app", 0.4, 660 * MB, 8),
+    prog("Steam", "app", 0.3, 874 * MB, 10),
+    prog("Razer", "background", 1.8, 989 * MB, 21),
+    prog("IObit Uninstaller", "background", 1.7, 33 * MB, 2),
+    prog("Wallpaper Engine", "background", 0.1, 67 * MB, 1),
+    prog("Microsoft Defender", "security", 1.2, 503 * MB, 1),
+    prog("Windows services", "windows", 0.7, 1.5 * GB, 96),
+    prog("Desktop Window Manager", "windows", 0.9, 230 * MB, 1, { gpu: 3 }),
+    prog("Claude Code", "agent", 0.5, 993 * MB, 2),
+    prog("momputer", "mom", 0.2, 120 * MB, 6),
+  ];
+  const startup = [
+    { id: "run-user:RazerAppEngine", name: "Razer Synapse", entry: "RazerAppEngine", command: '"C:\\Program Files\\Razer\\RazerAppEngine\\RazerAppEngine.exe" --autostart', exe: "C:\\Program Files\\Razer\\RazerAppEngine\\RazerAppEngine.exe", location: "Run (you)", enabled: true, yours: true, running: true, mem: 509 * MB, cpu: 0.6, keep: null },
+    { id: "run-user:Steam", name: "Steam", entry: "Steam", command: '"C:\\Program Files (x86)\\Steam\\steam.exe" -silent', exe: "C:\\Program Files (x86)\\Steam\\steam.exe", location: "Run (you)", enabled: true, yours: true, running: true, mem: 874 * MB, cpu: 0.3, keep: null },
+    { id: "run-machine:BdagentApp", name: "Bitdefender Agent", entry: "BdagentApp", command: "bdagent.exe", exe: "C:\\Program Files\\Bitdefender\\bdagent.exe", location: "Run (all users)", enabled: true, yours: false, running: true, mem: 60 * MB, cpu: 0.1, keep: "Your antivirus. Keep it on." },
+    { id: "run-user:slack", name: "Slack", entry: "com.squirrel.slack.slack", command: "slack.exe --process-start-args --startup", exe: "C:\\Users\\me\\AppData\\Local\\slack\\slack.exe", location: "Run (you)", enabled: true, yours: true, running: false, mem: 0, cpu: 0, keep: null },
+    { id: "run-machine:RazerCortex", name: "Razer Cortex", entry: "RazerCortex", command: "RazerCortex.exe", exe: "C:\\Program Files (x86)\\Razer\\Razer Cortex\\RazerCortex.exe", location: "Run (all users)", enabled: true, yours: false, running: true, mem: 120 * MB, cpu: 0.2, keep: null },
+    { id: "run-user:Discord", name: "Discord", entry: "Discord", command: "Update.exe --processStart Discord.exe", exe: null, location: "Run (you)", enabled: false, yours: true, running: false, mem: 0, cpu: 0, keep: null },
+    { id: "run-user:EADM", name: "EA app", entry: "EADM", command: "EALauncher.exe", exe: "C:\\Program Files\\Electronic Arts\\EA Desktop\\EALauncher.exe", location: "Run (you)", enabled: false, yours: true, running: false, mem: 0, cpu: 0, keep: null },
+  ];
 
   const room = {
     path: "C:\\Workspace\\storefront\\data\\field-notes",
@@ -628,6 +662,21 @@
     },
     uninstall_app: async () => (await wait(200), "Atlas Recorder's uninstaller is open. Follow it to the end."),
     get_health: async () => (await wait(150), JSON.parse(JSON.stringify(health))),
+    get_programs: async () => (await wait(250), JSON.parse(JSON.stringify(programs))),
+    program_action: async ({ id, action }) => {
+      await wait(action === "restart" ? 1800 : 700);
+      const p = programs.find((x) => x.id === id);
+      if (!p || !p.can.includes(action)) return { ok: false, message: "That program isn't running any more." };
+      if (action === "restart") return { ok: true, message: `Restarted ${p.name}.` };
+      programs.splice(programs.indexOf(p), 1);
+      return { ok: true, message: action === "quit" ? `Closed ${p.name}.` : `Ended ${p.name} (${p.count} processes).` };
+    },
+    get_startup: async () => (await wait(250), JSON.parse(JSON.stringify(startup))),
+    set_startup: async ({ id, on }) => {
+      const x = startup.find((y) => y.id === id);
+      x.enabled = on;
+      return on ? `${x.name} will start with Windows again.` : `${x.name} won't start with Windows any more. It's still installed; open it whenever you like.`;
+    },
     get_speed: async () => (await wait(400), { ...JSON.parse(JSON.stringify(speed)), at: Math.floor(Date.now() / 1000) - 5 }),
     room_paths: () => [room.path],
     get_rooms: () => [room],
