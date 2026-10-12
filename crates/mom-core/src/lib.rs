@@ -12,6 +12,7 @@ pub mod codex;
 pub mod config;
 pub mod elevate;
 pub mod containers;
+pub mod files;
 pub mod health;
 pub mod hooks;
 pub mod installed;

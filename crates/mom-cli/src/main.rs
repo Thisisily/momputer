@@ -70,6 +70,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Copies of the same file and big files nobody has opened in a year, in your own folders.
+    Files {
+        #[arg(long)]
+        json: bool,
+    },
     /// A checkup for the whole machine: disks, memory, restarts, startup apps.
     Health {
         #[arg(long)]
@@ -386,6 +391,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Machines { .. })
         | Some(Cmd::Trash { .. })
         | Some(Cmd::Health { .. })
+        | Some(Cmd::Files { .. })
         | Some(Cmd::Integrations { .. })
         | Some(Cmd::Config) => true,
         Some(Cmd::Stop { dry_run, .. }) => *dry_run,
@@ -627,6 +633,30 @@ fn run(cli: Cli) -> Result<i32> {
                 }
             }
         }
+        Some(Cmd::Files { json }) => {
+            let live = !json && std::io::stderr().is_terminal();
+            if !json {
+                eprintln!("{}", st.dim("Looking through your folders… (comparing big files takes a moment)"));
+            }
+            let opts = mom_core::files::ScanOpts::for_paths(&paths);
+            let r = mom_core::files::scan(&paths, &opts, &std::sync::atomic::AtomicBool::new(false), &|p| {
+                if live {
+                    eprint!("\r  {} {} files, {}   ", p.stage, mom_core::util::human_count(p.files), human_bytes(p.bytes));
+                }
+            });
+            if live {
+                eprint!("\r{}\r", " ".repeat(60));
+            }
+            // As administrator mom only looks: the widget's copy of the results is yours to write.
+            if !mom_core::elevate::is_elevated() {
+                mom_core::files::save(&paths, &r);
+            }
+            if json {
+                print_json(&r)?;
+            } else {
+                print_files(&st, &r);
+            }
+        }
         Some(Cmd::Health { json }) => {
             let table = mom_core::procs::Sampler::new().sample();
             let h = mom_core::health::check(&table, &paths);
@@ -754,6 +784,67 @@ const GROUPS: &[(&str, &str)] = &[
     ("windows", "WINDOWS AND BROWSERS"),
     ("personal", "YOUR FILES"),
 ];
+
+fn print_files(st: &Style, r: &mom_core::files::FilesReport) {
+    let big: u64 = r.big.iter().map(|b| b.size).sum();
+    let headline = match (r.wasted, big) {
+        (0, 0) => "No copies and no big forgotten files. Tidy!".to_string(),
+        (w, 0) => format!("Extra copies of your files take up {}.", human_bytes(w)),
+        (0, b) => format!("{} in big files nobody has opened in a year.", human_bytes(b)),
+        (w, b) => format!("Extra copies take up {}, and big files nobody has opened in a year {}.", human_bytes(w), human_bytes(b)),
+    };
+    println!("{}  {}", st.pink(&st.bold("mom")), st.bold(&format!("\"{headline}\"")));
+    let roots: Vec<String> = r.roots.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string())).collect();
+    println!(
+        "{}",
+        st.dim(&format!("  {} files ({}) in {}", mom_core::util::human_count(r.scanned_files), human_bytes(r.scanned_bytes), roots.join(", ")))
+    );
+    const GROUPS: usize = 15;
+    if !r.groups.is_empty() {
+        println!("\n{}", st.bold("Copies"));
+        for g in r.groups.iter().take(GROUPS) {
+            println!("  {}{}", pad(&format!("{} × {}", human_bytes(g.size), g.files.len()), 16), st.dim(&g.kind));
+            for f in g.files.iter().take(4) {
+                let tag = if f.keep { st.green("keep ") } else { st.dim("extra") };
+                println!("    {tag} {}{}", pad(&f.folder, 11), f.path.display());
+            }
+            if g.files.len() > 4 {
+                println!("    {}", st.dim(&format!("and {} more copies", g.files.len() - 4)));
+            }
+        }
+        if r.groups.len() > GROUPS {
+            println!("  {}", st.dim(&format!("…and {} more groups (`mom files --json` lists them all).", r.groups.len() - GROUPS)));
+        }
+    }
+    if !r.big.is_empty() {
+        println!("\n{}", st.bold("Big files nobody has opened in a year"));
+        let now = mom_core::util::now_secs();
+        for b in r.big.iter().take(20) {
+            let (word, last) = if r.access_times { ("opened", b.accessed) } else { ("changed", b.modified) };
+            println!(
+                "  {}{}{}{}",
+                pad(&human_bytes(b.size), 10),
+                pad(&b.kind, 11),
+                pad(&format!("{word} {} ago", human_age(now.saturating_sub(last))), 18),
+                b.path.display()
+            );
+        }
+        if !r.access_times {
+            println!("{}", st.dim(&wrap("Windows doesn't record when files are opened here, so this goes by when they last changed.", 96, "  ")));
+        }
+    }
+    if !r.complete {
+        println!("\n{}", st.yellow("  Stopped before finishing, so this isn't everything."));
+    }
+    println!(
+        "\n{}",
+        st.dim(&wrap(
+            "Nothing was touched. In the widget you tick what goes, and it goes to the Recycle Bin; the last copy of anything always stays.",
+            96,
+            "  "
+        ))
+    );
+}
 
 fn print_trash(st: &Style, spots: &[trash::Spot]) {
     let found: Vec<&trash::Spot> = spots.iter().filter(|s| s.available).collect();
@@ -1015,6 +1106,7 @@ mod tests {
         assert!(ok(&["stop", "leftovers", "--dry-run"]));
         assert!(ok(&["rules", "show"]));
         assert!(ok(&["tidy", "--json"]));
+        assert!(ok(&["files", "--json"]));
         assert!(!ok(&["stop", "leftovers", "--yes"]));
         assert!(!ok(&["tidy", "--apply"]));
         assert!(!ok(&["undo"]));
