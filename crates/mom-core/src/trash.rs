@@ -656,9 +656,11 @@ const DEFS: &[Def] = &[
     Def {
         id: "windows-junk",
         label: "Windows leftovers",
-        detail: "Update files Windows already installed, old error reports, and folders installers left on C:.",
-        what: "Windows Update keeps the files it downloaded after installing them, Windows keeps error reports \
-               about crashes, and some installers (Windows 10 Upgrade, AMD, Adobe) leave a folder at the root of C:. \
+        detail: "Update files Windows already installed, old error reports, and what setup left at the top of your drives.",
+        what: "Windows Update keeps the files it downloaded after installing them, and Windows keeps error reports \
+               about crashes. Windows setup and the update assistant leave their working folders at the top of \
+               whichever drive had room, a disk check leaves the pieces it recovered there (found.000), and a few \
+               installers (AMD, Adobe) leave a folder on C:. Mom looks at the top of every drive built into the PC. \
                Cleaning these needs an administrator, so Windows asks you first.",
         group: "windows",
         action: "delete",

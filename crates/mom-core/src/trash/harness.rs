@@ -62,10 +62,12 @@ struct Source {
     sessions: bool,
     /// Only entries with nothing at all in them count (a folder an older version left behind).
     empty_only: bool,
+    /// Everything found here is one thing to decide about, so one item (forty found.NNN folders).
+    together: bool,
 }
 
 fn src(dir: PathBuf, kind: (&'static str, &'static str), pick: fn(&str) -> bool) -> Source {
-    Source { dir, kind, pick, name: |_, rel| rel.join(" / "), depth: 0, files_only: false, keep_newest: 0, sessions: false, empty_only: false }
+    Source { dir, kind, pick, name: |_, rel| rel.join(" / "), depth: 0, files_only: false, keep_newest: 0, sessions: false, empty_only: false, together: false }
 }
 
 impl Source {
@@ -93,10 +95,33 @@ impl Source {
         self.empty_only = true;
         self
     }
+    fn together(mut self) -> Source {
+        self.together = true;
+        self
+    }
 }
 
 fn any(_: &str) -> bool {
     true
+}
+
+/// "D:\$WINDOWS.~TMP": something at the top of a drive, named with its drive.
+fn at_the_top(drive: &Path, rel: &[String]) -> String {
+    let d = drive.to_string_lossy();
+    format!("{d}{}{}", if d.ends_with(['\\', '/']) { "" } else { "\\" }, rel.join(" / "))
+}
+
+/// Folders Windows setup and the update assistant make at the top of a drive and leave there:
+/// the files of an upgrade that's long done, and what "go back" needed for its ten days.
+const SETUP_FOLDERS: &[&str] = &["$WINDOWS.~TMP", "$WINDOWS.~BT", "$WINDOWS.~WS", "$GetCurrent", "$SysReset", "Windows10Upgrade", "WUDownloadCache"];
+
+fn setup_folder(n: &str) -> bool {
+    SETUP_FOLDERS.iter().any(|f| f.eq_ignore_ascii_case(n))
+}
+
+/// found.000, found.001...: where a disk check (chkdsk) puts the pieces of files it recovered.
+fn check_folder(n: &str) -> bool {
+    n.len() == 9 && n.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("found.")) && n.bytes().skip(6).all(|b| b.is_ascii_digit())
 }
 
 fn session(_: &Path, rel: &[String]) -> String {
@@ -642,12 +667,31 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
         src(wer.join("ReportArchive"), ("Error report", "error reports"), any),
         src(wer.join("ReportQueue"), ("Error report", "error reports"), any),
     ]));
-    list.push(agent("Installers", Spot::Windows, vec![root.join("Windows10Upgrade"), root.join("AMD"), root.join("adobeTemp")]).junk(vec![src(
+    list.push(agent("Installers", Spot::Windows, vec![root.join("AMD"), root.join("adobeTemp")]).junk(vec![src(
         root.clone(),
         ("Installer leftovers", "folders installers left at the root of the drive"),
-        |n| n == "Windows10Upgrade" || n == "AMD" || n == "adobeTemp" || n.ends_with("-install-tmp"),
+        |n| n == "AMD" || n == "adobeTemp" || n.ends_with("-install-tmp"),
     )
-    .named(|_, rel| format!("C:\\{}", rel[0]))]));
+    .named(at_the_top)]));
+    // What Windows itself leaves at the top of a drive. Setup and the update assistant put their
+    // working folders on whichever drive has room, and a disk check leaves what it recovered on
+    // the drive it checked: so every drive built into the PC is looked at, not only C:. Only
+    // these exact names, only at the very top, and a drive's other folders are never opened.
+    for drive in std::iter::once(root).chain(&p.other_drives) {
+        list.push(agent("Windows setup", Spot::Windows, SETUP_FOLDERS.iter().map(|n| drive.join(n)).collect()).junk(vec![src(
+            drive.clone(),
+            ("Setup leftovers", "folders Windows setup and the update assistant left behind"),
+            setup_folder,
+        )
+        .named(at_the_top)]));
+        list.push(agent("Disk check", Spot::Windows, vec![drive.join("found.000")]).junk(vec![src(
+            drive.clone(),
+            ("Recovered fragments", "pieces of files a disk check recovered and nobody claimed"),
+            check_folder,
+        )
+        .named(at_the_top)
+        .together()]));
+    }
     let nvidia = data.join("NVIDIA Corporation");
     list.push(agent("NVIDIA", Spot::AdminApps, vec![nvidia.clone()]).junk(vec![
         src(nvidia.join("NVIDIA app").join("UpdateFramework").join("ota-artifacts").join("grd"), ("Driver installer", "older driver installers"), any)
@@ -772,18 +816,39 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             if careful && linked(&s.dir) {
                 continue;
             }
-            for (path, rel) in walk(&s.dir, s.depth, s.files_only) {
-                if !(s.pick)(rel.last().map(String::as_str).unwrap_or("")) {
-                    continue;
-                }
+            let mut picked: Vec<(PathBuf, Vec<String>)> =
+                walk(&s.dir, s.depth, s.files_only).into_iter().filter(|(_, rel)| (s.pick)(rel.last().map(String::as_str).unwrap_or(""))).collect();
+            if s.together {
+                picked.sort();
+            }
+            for (path, rel) in picked {
                 let name = (s.name)(&s.dir, &rel);
                 list.push((path, if mixed { format!("{} · {name}", a.name) } else { name }));
                 from.push((a, s));
             }
         }
     }
-    let mut found: Vec<(Cand, &Agent, &Source)> =
-        super::cands(list, ctx.now).into_iter().zip(from).map(|(c, (a, s))| (c, a, s)).collect();
+    let each: Vec<(Cand, &Agent, &Source)> = super::cands(list, ctx.now).into_iter().zip(from).map(|(c, (a, s))| (c, a, s)).collect();
+    // What a source keeps together becomes one item: everything it found, named from the first to
+    // the last, as new as its newest part. Cleaning it takes them all.
+    let mut found: Vec<(Cand, &Agent, &Source)> = Vec::new();
+    for (c, a, s) in each {
+        match found.iter_mut().find(|(_, _, other)| s.together && std::ptr::eq(*other, s)) {
+            Some((first, _, _)) => {
+                first.bytes += c.bytes;
+                first.files += c.files;
+                first.links += c.links;
+                first.age = first.age.min(c.age);
+                first.complete &= c.complete;
+                first.targets.extend(c.targets);
+            }
+            None => found.push((c, a, s)),
+        }
+    }
+    for (c, _, _) in found.iter_mut().filter(|(c, _, _)| c.targets.len() > 1) {
+        c.name = format!("{} to {} ({} folders)", c.name, name_of(&c.targets[c.targets.len() - 1]), c.targets.len());
+        c.sub = None;
+    }
     // "Keep the newest": the newest few of each such source stay, whatever their age. Newest by
     // version where the names have one (Photoshop 27 over 26, even if 26 was touched later), else
     // by when it last changed.
@@ -807,6 +872,11 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             Some(inside) => format!("{label}, {inside}"),
             None => label.to_string(),
         });
+        // A folder only an administrator may open measures as nothing. Say that, not "0 B".
+        let shut = |t: &PathBuf| std::fs::symlink_metadata(t).map(|m| m.is_dir()).unwrap_or(false) && std::fs::read_dir(t).is_err();
+        if careful && c.files == 0 && c.targets.iter().any(shut) {
+            c.sub = Some(format!("{label}, size unknown: only an administrator can look inside"));
+        }
         c.kind = Some(s.kind.1);
         c.tool = Some(a.name);
         if s.empty_only {
@@ -1200,6 +1270,61 @@ mod tests {
         assert!(l.join("Atlas").join("Saved").join("SaveGames").join("slot1.sav").exists());
         assert!(l.join("NVIDIA").join("DXCache").join("new.toc").exists());
         assert!(l.join("Slack").join("app-4.41.0").exists() && !l.join("Slack").join("app-4.40.0").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn windows_leftovers_are_found_at_the_top_of_every_drive() {
+        let root = fixture("drives");
+        let mut paths = Paths::under(&root);
+        let (c, d) = (paths.system_drive.clone(), root.join("d"));
+        paths.other_drives = vec![d.clone()];
+        // An upgrade from long ago left its working folder on the second drive; the update
+        // assistant left its own on the first.
+        write(&d.join("$WINDOWS.~TMP").join("Rollback").join("old.wim"), 6000, 400);
+        write(&c.join("Windows10Upgrade").join("setup.exe"), 300, 200);
+        write(&c.join("AMD").join("driver").join("x.cab"), 200, 200);
+        // Last week's upgrade can still be gone back from: its files stay.
+        write(&c.join("$WINDOWS.~BT").join("Sources").join("install.esd"), 900, 5);
+        // What a disk check recovered, three times: one thing to decide about.
+        for n in ["found.000", "found.001", "found.002"] {
+            write(&d.join(n).join("file0000.chk"), 100, 300);
+        }
+        // Never these: a name that only looks alike, a folder of your own that happens to be
+        // called what an installer calls its own on C:, your games, and Windows' own folder.
+        write(&d.join("found.things").join("mine.txt"), 50, 300);
+        write(&d.join("found.0001").join("mine.txt"), 50, 300);
+        write(&d.join("AMD").join("my notes.txt"), 50, 300);
+        write(&d.join("Games").join("save.dat"), 50, 300);
+        write(&d.join("System Volume Information").join("tracking.log"), 50, 300);
+
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("windows-junk", &ctx).unwrap();
+        let mut items: Vec<(String, bool, u64)> = spot.items.iter().map(|i| (i.name.clone(), i.goes, i.bytes)).collect();
+        items.sort();
+        let at = |drive: &std::path::Path, name: &str| drive.join(name).display().to_string();
+        assert_eq!(
+            items,
+            vec![
+                (format!("Disk check · {} to found.002 (3 folders)", at(&d, "found.000")), true, 300),
+                (format!("Installers · {}", at(&c, "AMD")), true, 200),
+                (format!("Windows setup · {}", at(&c, "$WINDOWS.~BT")), false, 900),
+                (format!("Windows setup · {}", at(&c, "Windows10Upgrade")), true, 300),
+                (format!("Windows setup · {}", at(&d, "$WINDOWS.~TMP")), true, 6000),
+            ]
+        );
+        assert_eq!(super::at_the_top(std::path::Path::new("D:\\"), &["$WINDOWS.~TMP".into()]), "D:\\$WINDOWS.~TMP");
+        assert!(super::check_folder("FOUND.017") && !super::check_folder("found.17") && !super::check_folder("found.0é"));
+
+        // In a made-up folder everything is yours to delete, so the clean goes ahead as you.
+        clean("windows-junk", &ctx, None);
+        assert!(!d.join("$WINDOWS.~TMP").exists() && !c.join("Windows10Upgrade").exists());
+        assert!(["found.000", "found.001", "found.002"].iter().all(|n| !d.join(n).exists()), "all three went, as one");
+        assert!(c.join("$WINDOWS.~BT").join("Sources").join("install.esd").exists(), "a go-back that's still good stays");
+        for kept in ["found.things", "found.0001", "AMD", "Games", "System Volume Information"] {
+            assert!(d.join(kept).exists(), "{kept}");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 

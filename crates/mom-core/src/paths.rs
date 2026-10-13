@@ -23,6 +23,10 @@ pub struct Paths {
     pub program_data: PathBuf,
     pub program_files_x86: PathBuf,
     pub system_drive: PathBuf,
+    /// The other drives built into this PC (D:\, E:\...). Windows setup leaves its working
+    /// folders at the top of whichever drive has room, and a disk check leaves what it recovered
+    /// on the drive it checked. None in tests, unless one adds a folder to stand in for a drive.
+    pub other_drives: Vec<PathBuf>,
     /// Folders agents were told to use instead of their usual one (HERMES_HOME and the like),
     /// read from the environment once. Empty in tests, so they never reach the real ones.
     pub agent_env: Vec<(&'static str, PathBuf)>,
@@ -58,11 +62,17 @@ impl Paths {
         // System folders from Windows itself, not from environment variables anyone can set.
         let windows = windows_dir();
         let system_drive = windows.ancestors().last().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("C:\\"));
+        let other_drives = crate::util::fixed_drives()
+            .into_iter()
+            .map(PathBuf::from)
+            .filter(|d| !d.to_string_lossy().eq_ignore_ascii_case(&system_drive.to_string_lossy()))
+            .collect();
         Paths {
             program_data: system_drive.join("ProgramData"),
             program_files_x86: system_drive.join("Program Files (x86)"),
             windows,
             system_drive,
+            other_drives,
             home,
             mom,
             temp: std::env::temp_dir(),
@@ -86,6 +96,7 @@ impl Paths {
             program_data: root.join("programdata"),
             program_files_x86: root.join("program files (x86)"),
             system_drive: root.join("c"),
+            other_drives: vec![],
             agent_env: vec![],
         }
     }

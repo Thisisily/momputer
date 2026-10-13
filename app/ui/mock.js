@@ -232,7 +232,7 @@
     }),
     spot({
       id: "windows-junk", label: "Windows leftovers", group: "windows", action: "delete", safety: "safe", admin: true,
-      what: "Windows Update keeps the files it downloaded after installing them, Windows keeps error reports about crashes, and some installers leave a folder at the root of C:. Cleaning these needs an administrator, so Windows asks you first.",
+      what: "Windows Update keeps the files it downloaded after installing them, Windows keeps error reports about crashes, and Windows setup leaves folders at the top of whichever drive had room. Cleaning these needs an administrator, so Windows asks you first.",
       effect: "Deletes 3 items (1.9 GB) that Windows Update, Windows and Installers left behind and nobody has touched in 67 days, permanently (they don't go to the Recycle Bin): downloaded updates that are installed already, error reports and folders installers left at the root of the drive. Windows and your programs keep working; nothing they still need is in here. Anything newer, or in use, stays.",
       totalBytes: 1.9 * GB, reclaimableBytes: 1.9 * GB, reclaimableItems: 3, keptItems: 0,
       items: [
