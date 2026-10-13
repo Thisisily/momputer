@@ -1,0 +1,108 @@
+{
+  "name": "momputer",
+  "owner": {
+    "name": "Ilya Arbabi"
+  },
+  "metadata": {
+    "description": "Agent Skills that tidy one room of your digital life each. They work without the momputer app."
+  },
+  "plugins": [
+    {
+      "name": "momputer-skills",
+      "source": "./skills",
+      "description": "All eleven skills in one install: look without changing anything, show one page, act only on what you tick.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills",
+      "skills": [
+        "./mom",
+        "./tidy-folders",
+        "./desktop-icons",
+        "./rename-documents",
+        "./disk-space-report",
+        "./backup-checkup",
+        "./inbox-cleanup",
+        "./calendar-fixer",
+        "./drive-audit",
+        "./subscription-audit",
+        "./bookmark-cleanup"
+      ]
+    },
+    {
+      "name": "mom",
+      "source": "./skills/mom",
+      "description": "Teaches an agent to clean up after itself: stop what it started, take out its own trash, put reports where they belong.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/mom"
+    },
+    {
+      "name": "tidy-folders",
+      "source": "./skills/tidy-folders",
+      "description": "Surveys a Windows PC's folders and moves only what you approve into place, with an undo.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/tidy-folders"
+    },
+    {
+      "name": "desktop-icons",
+      "source": "./skills/desktop-icons",
+      "description": "Tidies a cluttered Windows desktop: dead and duplicate shortcuts, loose files and installers.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/desktop-icons"
+    },
+    {
+      "name": "rename-documents",
+      "source": "./skills/rename-documents",
+      "description": "Gives scans and downloads names you can find later, old and new side by side.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/rename-documents"
+    },
+    {
+      "name": "disk-space-report",
+      "source": "./skills/disk-space-report",
+      "description": "Shows where a Windows PC's disk space went, and the safe way to get each part back.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/disk-space-report"
+    },
+    {
+      "name": "backup-checkup",
+      "source": "./skills/backup-checkup",
+      "description": "Answers \"if this disk died today, what would I lose?\".",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/backup-checkup"
+    },
+    {
+      "name": "inbox-cleanup",
+      "source": "./skills/inbox-cleanup",
+      "description": "Reviews two months of Gmail: who fills your inbox, what you never open, what to unsubscribe from.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/inbox-cleanup"
+    },
+    {
+      "name": "calendar-fixer",
+      "source": "./skills/calendar-fixer",
+      "description": "Reviews your Google Calendar: double bookings, no breaks, stale recurring meetings.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/calendar-fixer"
+    },
+    {
+      "name": "drive-audit",
+      "source": "./skills/drive-audit",
+      "description": "Reviews Google Drive: what's shared with anyone, what fills your storage, duplicates.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/drive-audit"
+    },
+    {
+      "name": "subscription-audit",
+      "source": "./skills/subscription-audit",
+      "description": "Finds what you pay for again and again, and what it costs a year.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/subscription-audit"
+    },
+    {
+      "name": "bookmark-cleanup",
+      "source": "./skills/bookmark-cleanup",
+      "description": "Tidies browser bookmarks into a new file you import; never touches the browser's own.",
+      "license": "Apache-2.0",
+      "homepage": "https://github.com/Thisisily/momputer/tree/main/skills/bookmark-cleanup"
+    }
+  ]
+}

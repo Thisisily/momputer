@@ -8,7 +8,13 @@ An agent that runs commands on the Windows PC itself (Claude Code, Codex, or sim
 
 ## Install
 
-Copy the `rename-documents` folder to:
+In Claude Code, one line:
+
+```
+/plugin install rename-documents --marketplace Thisisily/momputer
+```
+
+Or copy the `rename-documents` folder to:
 
 - Claude Code: `~/.claude/skills/rename-documents/` (or `.claude/skills/` in a project)
 - Codex: `~/.agents/skills/rename-documents/` (or `.agents/skills/` in a repo)

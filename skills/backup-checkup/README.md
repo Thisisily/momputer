@@ -10,7 +10,13 @@ An agent that runs commands on the Windows PC itself (Claude Code, Codex, or sim
 
 ## Install
 
-Copy the `backup-checkup` folder to:
+In Claude Code, one line:
+
+```
+/plugin install backup-checkup --marketplace Thisisily/momputer
+```
+
+Or copy the `backup-checkup` folder to:
 
 - Claude Code: `~/.claude/skills/backup-checkup/` (or `.claude/skills/` in a project)
 - Codex: `~/.agents/skills/backup-checkup/` (or `.agents/skills/` in a repo)

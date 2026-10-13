@@ -8,7 +8,13 @@ An agent that runs commands on the Windows PC itself (Claude Code, Codex, or sim
 
 ## Install
 
-Copy the `desktop-icons` folder to:
+In Claude Code, one line:
+
+```
+/plugin install desktop-icons --marketplace Thisisily/momputer
+```
+
+Or copy the `desktop-icons` folder to:
 
 - Claude Code: `~/.claude/skills/desktop-icons/` (or `.claude/skills/` in a project)
 - Codex: `~/.agents/skills/desktop-icons/` (or `.agents/skills/` in a repo)

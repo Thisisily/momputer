@@ -9,7 +9,13 @@ An Agent Skill that reviews the last two months of a Gmail inbox without changin
 
 ## Install
 
-Copy the `inbox-cleanup` folder to:
+In Claude Code, one line:
+
+```
+/plugin install inbox-cleanup --marketplace Thisisily/momputer
+```
+
+Or copy the `inbox-cleanup` folder to:
 
 - Claude Code: `~/.claude/skills/inbox-cleanup/` (or `.claude/skills/` in a project)
 - Codex: `~/.agents/skills/inbox-cleanup/` (or `.agents/skills/` in a repo)

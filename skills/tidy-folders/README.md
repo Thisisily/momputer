@@ -8,7 +8,13 @@ An agent that runs commands on the Windows PC itself (Claude Code, Codex, or sim
 
 ## Install
 
-Copy the `tidy-folders` folder to:
+In Claude Code, one line:
+
+```
+/plugin install tidy-folders --marketplace Thisisily/momputer
+```
+
+Or copy the `tidy-folders` folder to:
 
 - Claude Code: `~/.claude/skills/tidy-folders/` (or `.claude/skills/` in a project)
 - Codex: `~/.agents/skills/tidy-folders/` (or `.agents/skills/` in a repo)

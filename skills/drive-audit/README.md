@@ -9,7 +9,13 @@ An Agent Skill that reviews a Google Drive without changing anything and without
 
 ## Install
 
-Copy the `drive-audit` folder to:
+In Claude Code, one line:
+
+```
+/plugin install drive-audit --marketplace Thisisily/momputer
+```
+
+Or copy the `drive-audit` folder to:
 
 - Claude Code: `~/.claude/skills/drive-audit/` (or `.claude/skills/` in a project)
 - Codex: `~/.agents/skills/drive-audit/` (or `.agents/skills/` in a repo)

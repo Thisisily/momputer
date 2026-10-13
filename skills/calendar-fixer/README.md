@@ -9,7 +9,13 @@ An Agent Skill that reviews six weeks of a Google Calendar (two back, four ahead
 
 ## Install
 
-Copy the `calendar-fixer` folder to:
+In Claude Code, one line:
+
+```
+/plugin install calendar-fixer --marketplace Thisisily/momputer
+```
+
+Or copy the `calendar-fixer` folder to:
 
 - Claude Code: `~/.claude/skills/calendar-fixer/` (or `.claude/skills/` in a project)
 - Codex: `~/.agents/skills/calendar-fixer/` (or `.agents/skills/` in a repo)

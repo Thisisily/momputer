@@ -10,7 +10,13 @@ An agent that runs commands on the Windows PC itself (Claude Code, Codex, or sim
 
 ## Install
 
-Copy the `disk-space-report` folder to:
+In Claude Code, one line:
+
+```
+/plugin install disk-space-report --marketplace Thisisily/momputer
+```
+
+Or copy the `disk-space-report` folder to:
 
 - Claude Code: `~/.claude/skills/disk-space-report/` (or `.claude/skills/` in a project)
 - Codex: `~/.agents/skills/disk-space-report/` (or `.agents/skills/` in a repo)
