@@ -89,6 +89,7 @@ python scripts/apply_plan.py "<out>/plan.json" --approve "TIDY-APPROVE plan=... 
 
 - The undo log goes to `Documents\Tidy-up logs\<date time>\` (`undo-log.csv` and `revert.ps1`). Change it with `--log-dir`.
 - `revert.ps1` is the same fixed script every time. It holds no file names; it reads `undo-log.csv` and moves things back only where the original place is still free. Both undo routes check every row like a plan (local disks only, nothing in Windows, Program Files, ProgramData or AppData, nothing through a link), so an edited log can't send a file somewhere it shouldn't go. Only undo a log this skill wrote on this PC.
+- Anything that can't be examined is refused, not guessed at: a folder that can't be listed, a path Windows can't resolve. Say so if it happens; don't work around it.
 - Links (symlinks, junctions) are never moved, recycled or walked through. A name that ends in a dot or a space is moved under its exact name but can't go to the Recycle Bin; it's skipped with a note.
 - Names are never overwritten: a clash gets " (2)".
 - A move to another drive copies, checks the size, then sends the original to the Recycle Bin. Whole folders only cross drives with `--allow-cross-drive-folders`.
@@ -103,7 +104,7 @@ powershell -ExecutionPolicy Bypass -File "<log folder>\revert.ps1"
 python scripts/apply_plan.py --undo "<log folder>" --apply
 ```
 
-Items sent to the Recycle Bin are listed as MANUAL: the user restores those from the Recycle Bin.
+Items sent to the Recycle Bin are listed as MANUAL: the user restores those from the Recycle Bin. `revert.ps1` also lists a whole folder that went to another drive as MANUAL; the Python undo brings that one back.
 
 Then delete the output folder (`survey.json`, `plan.json`, the page) unless the user wants to keep the page.
 
@@ -127,7 +128,8 @@ Then delete the output folder (`survey.json`, `plan.json`, the page) unless the 
 - `scripts/survey.py`: read-only survey, writes `survey.json`.
 - `scripts/build_page.py`: builds `tidy-plan.html` and `plan.json` from the survey and your notes.
 - `scripts/summarize.py`: short digest of a survey for step 2.
-- `scripts/apply_plan.py`: dry run, apply, undo. Enforces the hard rules.
+- `scripts/apply_plan.py`: dry run, apply, undo. The command you run. It adds program folders and launcher game libraries to the off-limits list and hands the work to `safe_apply.py`.
+- `scripts/safe_apply.py`: the file-moving engine every skill in this collection shares. It enforces the hard rules. Don't edit it.
 - `scripts/revert.ps1`: the fixed revert script copied next to each undo log.
 - `assets/tidy-plan-template.html`: the page. Self-contained, works offline, light and dark.
 - [references/review-guide.md](references/review-guide.md): inspecting the survey, the notes.json format, judgement calls.

@@ -11,6 +11,8 @@ Agent Skills that tidy one room of your digital life each. They all work the sam
 | [`drive-audit`](drive-audit) | Reviews Google Drive: what's shared with anyone who has the link, what fills your storage, duplicates, files nobody touched in a year. |
 | [`disk-space-report`](disk-space-report) | Shows where a Windows PC's disk space went, and the safe way to get each part of it back. It deletes nothing itself. |
 | [`backup-checkup`](backup-checkup) | Answers "if this disk died today, what would I lose?": which folders and code have a second copy, and which don't. |
+| [`desktop-icons`](desktop-icons) | Tidies a cluttered Windows desktop: dead and duplicate shortcuts, loose files and installers. It reads shortcuts without ever running one, and moves only what you tick, with an undo. |
+| [`rename-documents`](rename-documents) | Gives scans and downloads names you can find later (`scan0001.pdf` becomes `2024-03-14 Lanternfall invoice 1182.pdf`). Old and new side by side; renames only what you tick, with an undo. |
 
 ## Install
 
@@ -25,4 +27,4 @@ Then ask for what you want in plain words: "tidy up my Downloads", "clean up my 
 
 Apache License 2.0. Copyright 2026 Ilya Arbabi. See [LICENSE.txt](LICENSE.txt). Free for any use, companies included. (The momputer app in this repository has its own, different license; the skills don't need the app.)
 
-Writing one: [AUTHORING.md](AUTHORING.md).
+Writing one: [AUTHORING.md](AUTHORING.md). Checking one: [tests](tests) (they work in a scratch folder only).

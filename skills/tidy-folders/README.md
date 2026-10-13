@@ -32,7 +32,8 @@ Then ask: "tidy up my Downloads", "where are my tax papers?", "are all my games 
 | `scripts/survey.py` | Read-only survey, writes `survey.json` |
 | `scripts/summarize.py` | Short digest of a survey for the agent to review |
 | `scripts/build_page.py` | Builds the page and `plan.json` |
-| `scripts/apply_plan.py` | Dry run, apply, undo, all guard rails |
+| `scripts/apply_plan.py` | Dry run, apply, undo: the command the agent runs |
+| `scripts/safe_apply.py` | The file-moving engine and all its guard rails, shared unchanged by every skill here that moves files |
 | `scripts/revert.ps1` | Fixed revert script, copied next to each undo log |
 | `assets/tidy-plan-template.html` | The self-contained page (no network, light and dark) |
 | `references/review-guide.md` | Survey fields, `notes.json` format, judgement calls |

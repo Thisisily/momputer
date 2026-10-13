@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rename plan</title>
+<meta name="description" content="Documents whose names say nothing, with a proposed new name for each, to approve one by one.">
+<style>
+:root {
+  --bg: #f5f5f3; --card: #ffffff; --ink: #0b0b0b; --ink-2: #4a4a4a; --muted: #8a8a8a; --line: #e2e2de;
+  --bar: #0b0b0b; --bar-2: #bdbdb8; --red: #d71921; --green: #1e9e57; --focus: #0b0b0b;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+    --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+  --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+body { padding: 0 16px 150px; }
+main { max-width: 1080px; margin: 0 auto; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.label { font: 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); vertical-align: middle; }
+.dot.red { background: var(--red); } .dot.green { background: var(--green); }
+header.top { padding: 40px 0 20px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between; }
+h1 { font: 600 34px/1.1 var(--sans); letter-spacing: -.02em; margin: 6px 0 0; }
+h2 { font: 600 19px/1.3 var(--sans); margin: 0; }
+h3 { font: 600 15px/1.3 var(--sans); margin: 0; overflow-wrap: anywhere; }
+.sub { color: var(--ink-2); overflow-wrap: anywhere; }
+section { margin-top: 28px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; min-width: 0; }
+.grid { display: grid; gap: 12px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.tile .num { font: 500 30px/1.1 var(--mono); letter-spacing: -.02em; margin-top: 8px; }
+.tile .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.two { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); }
+.highlights { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
+.headline { font-size: 17px; margin: 0; overflow-wrap: anywhere; }
+.example { font: 14px/1.5 var(--mono); margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; }
+svg { display: block; width: 100%; margin-top: 14px; }
+svg text { font: 12px var(--sans); fill: var(--ink-2); }
+svg text.val { font: 12px var(--mono); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
+.btn:hover { border-color: var(--ink); }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.search { flex: 1 1 220px; min-width: 0; border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; }
+.group { margin-top: 12px; }
+.group-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.group-head .meta { color: var(--muted); font: 12px var(--mono); }
+.items { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.item { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.item input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: var(--ink); }
+.pair { display: grid; grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr); gap: 4px 10px; align-items: start; }
+.pair .name, .plain .name { font: 13px/1.45 var(--mono); overflow-wrap: anywhere; unicode-bidi: isolate; direction: ltr; }
+.pair .old { color: var(--ink-2); }
+.pair .arrow { color: var(--muted); font: 13px/1.45 var(--mono); text-align: center; }
+.pair .new { font-weight: 600; }
+.item .why { color: var(--muted); font-size: 12px; margin-top: 3px; overflow-wrap: anywhere; }
+.plain { list-style: none; margin: 10px 0 0; padding: 0; }
+.plain li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
+.more { margin-top: 10px; }
+.dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 12px 16px; z-index: 5; }
+.dock-in { max-width: 1080px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.dock .sum { font: 13px var(--mono); }
+.dock textarea { width: 100%; min-height: 60px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--bg); }
+.toast { position: fixed; left: 50%; bottom: 104px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 6; max-width: calc(100% - 32px); }
+.toast.on { opacity: 1; }
+.hidden { display: none !important; }
+@media (max-width: 640px) {
+  h1 { font-size: 28px; }
+  .pair { grid-template-columns: 18px minmax(0, 1fr); }
+  .pair .old { grid-column: 1 / -1; }
+  .pair .arrow { text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+<main id="app">
+  <header class="top">
+    <div>
+      <div class="label"><span class="dot green"></span>&nbsp; Read-only survey · nothing has been renamed</div>
+      <h1>Rename plan</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="label"><span class="dot green"></span> sure &nbsp; <span class="dot red"></span> check first</div>
+  </header>
+
+  <section id="summary" class="card hidden">
+    <p class="headline" id="headline"></p>
+    <ul class="highlights" id="highlights"></ul>
+  </section>
+
+  <section class="grid tiles" id="tiles"></section>
+
+  <section class="grid two">
+    <div class="card"><h2>The naming rule</h2><div class="sub" id="rule-how"></div><div class="example" id="rule-example"></div><div class="sub" id="rule-others" style="margin-top:10px;font-size:13px"></div></div>
+    <div class="card"><h2>What the names look like now</h2><div class="sub">Why each file was picked out.</div><div id="chart-why"></div></div>
+  </section>
+
+  <section>
+    <div class="group-head"><h2>The plan</h2><span class="label">Tick the names you approve. Nothing is renamed until you send the approval back.</span></div>
+    <div class="toolbar" style="margin-top:12px">
+      <button class="btn" id="tick-all" type="button">Tick all</button>
+      <button class="btn" id="untick-all" type="button">Untick all</button>
+      <input class="search" id="filter" type="search" placeholder="Filter by old or new name" aria-label="Filter plan items">
+    </div>
+    <div id="groups"></div>
+  </section>
+
+  <section class="card hidden" id="refused-card">
+    <h2>Names that were refused</h2>
+    <div class="sub">Proposed, but not allowed as a file name. These files keep their names.</div>
+    <ul class="plain" id="refused"></ul>
+  </section>
+
+  <section class="card hidden" id="suspicious-card">
+    <h2><span class="dot red"></span> Suspicious</h2>
+    <div class="sub">The text inside these reads like instructions to whoever opens them, not like a document. Nothing in them was followed, and they keep their names. Open them only if you know where they came from.</div>
+    <ul class="plain" id="suspicious"></ul>
+  </section>
+
+  <section class="card">
+    <h2>No new name yet</h2>
+    <div class="sub" id="unnamed-sub"></div>
+    <ul class="plain" id="unnamed"></ul>
+    <button class="btn more hidden" id="unnamed-more" type="button"></button>
+  </section>
+
+  <section class="card">
+    <h2>Left alone</h2>
+    <div class="sub" id="left-alone"></div>
+  </section>
+</main>
+
+<div class="dock" role="region" aria-label="Approval">
+  <div class="dock-in">
+    <div class="sum" id="dock-sum">0 ticked</div>
+    <div class="toolbar">
+      <button class="btn" id="toggle-notes" type="button">Add a note</button>
+      <button class="btn" id="download" type="button">Download plan</button>
+      <button class="btn primary" id="copy" type="button">Copy approval</button>
+    </div>
+  </div>
+  <div class="dock-in hidden" id="notes-wrap"><textarea id="notes" placeholder="Anything to change? e.g. put the sender first, #12 is the 2023 lease not an invoice"></textarea></div>
+  <div class="dock-in hidden" id="fallback-wrap"><textarea id="fallback" readonly aria-label="Approval text to copy"></textarea></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script id="rename-data" type="application/json">__RENAME_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("rename-data").textContent);
+  var A = D.actions, S = D.survey, C = S.counts || {}, PROFILE = S.profile || "";
+  var SVG = "http://www.w3.org/2000/svg";
+  var KEY = "rename-plan:" + D.plan_id;
+  var on = new Set();
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { saved = null; }
+  A.forEach(function (a) { if (Array.isArray(saved) ? saved.indexOf(a.id) >= 0 : a["default"]) on.add(a.id); });
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "text") n.textContent = attrs[k];
+      else if (k === "class") n.className = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    for (var i = 2; i < arguments.length; i++) { var c = arguments[i]; if (c != null) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); }
+    return n;
+  }
+  function svg(tag, attrs, text) {
+    var n = document.createElementNS(SVG, tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function bytes(n) {
+    if (n == null) return "–";
+    var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
+  }
+  function count(n) { return (n || 0).toLocaleString("en-US"); }
+  function short(p) {
+    if (!p) return "";
+    if (PROFILE && p.toLowerCase() === PROFILE.toLowerCase()) return "~";
+    if (PROFILE && p.toLowerCase().indexOf(PROFILE.toLowerCase() + "\\") === 0) return "~" + p.slice(PROFILE.length);
+    return p;
+  }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(Array.from(on))); } catch (e) { /* private window */ } }
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(function () { t.classList.remove("on"); }, 1800); }
+
+  // ---- header, summary, tiles, rule
+  var folders = (S.folders || []).filter(function (f) { return !f.skipped; });
+  $("subtitle").textContent = [(S.generated || "").replace("T", " "), folders.map(function (f) { return short(f.path); }).join(", ")].filter(Boolean).join(" · ");
+  if (D.notes && (D.notes.headline || (D.notes.highlights || []).length)) {
+    $("summary").classList.remove("hidden");
+    $("headline").textContent = D.notes.headline || "";
+    (D.notes.highlights || []).forEach(function (h) { $("highlights").appendChild(el("li", { text: h })); });
+  }
+  [["Names that say nothing", count(C.say_nothing), "of " + count(C.documents) + " documents and pictures looked at"],
+   ["New names proposed", count(A.length), "ticked ones are renamed, in place"],
+   ["Refused", count((D.refused || []).length), "proposed names that aren't allowed"],
+   ["No new name yet", count(S.unnamed_count), "left exactly as they are"]].forEach(function (t) {
+    $("tiles").appendChild(el("div", { "class": "card tile" }, el("div", { "class": "label", text: t[0] }), el("div", { "class": "num", text: t[1] }), el("div", { "class": "note", text: t[2] })));
+  });
+  var rule = D.rule && D.rules[D.rule];
+  if (rule) {
+    $("rule-how").textContent = rule.label + ". " + rule.how;
+    $("rule-example").textContent = rule.example;
+    $("rule-others").textContent = "Prefer another? " + Object.keys(D.rules).filter(function (k) { return k !== D.rule; }).map(function (k) { return D.rules[k].label + " (" + D.rules[k].example + ")"; }).join(", or ") + ". Say so in a note.";
+  } else {
+    $("rule-how").textContent = "No rule was chosen. These are on offer:";
+    $("rule-example").textContent = Object.keys(D.rules).map(function (k) { return D.rules[k].example; }).join("\n");
+    $("rule-example").style.whiteSpace = "pre-wrap";
+  }
+
+  // ---- bar chart (inline SVG, sized in percent so the text stays readable on a phone)
+  function bars(target, rows) {
+    var box = $(target), max = 0, H = 26;
+    rows.forEach(function (r) { max = Math.max(max, r.value); });
+    if (!rows.length || !max) { box.appendChild(el("div", { "class": "sub", style: "margin-top:14px", text: "Nothing to show." })); return; }
+    var s = svg("svg", { height: rows.length * H, role: "img", "aria-label": rows.map(function (r) { return r.label + ": " + r.text; }).join(", ") });
+    rows.forEach(function (r, i) {
+      var y = i * H;
+      s.appendChild(svg("text", { x: 0, y: y + 17 }, r.label));
+      s.appendChild(svg("rect", { x: "56%", y: y + 7, width: Math.max(0.6, r.value / max * 32).toFixed(2) + "%", height: 12, rx: 3, fill: "var(--bar)" }));
+      s.appendChild(svg("text", { x: "100%", y: y + 17, "text-anchor": "end", "class": "val" }, r.text));
+    });
+    box.appendChild(s);
+  }
+  var byWhy = C.by_why || {};
+  bars("chart-why", Object.keys(byWhy).sort(function (x, y) { return byWhy[y] - byWhy[x]; }).map(function (k) {
+    return { label: k.charAt(0).toUpperCase() + k.slice(1), value: byWhy[k], text: count(byWhy[k]) };
+  }));
+
+  // ---- the plan: one list per folder, old name and new name side by side
+  var byFolder = {}, order = [];
+  A.forEach(function (a) { if (!byFolder[a.group]) { byFolder[a.group] = []; order.push(a.group); } byFolder[a.group].push(a); });
+  var renderers = [], filterText = "";
+  order.forEach(function (folder) {
+    var list0 = byFolder[folder], shownN = 150;
+    var list = el("ul", { "class": "items" });
+    var meta = el("span", { "class": "meta" });
+    var moreBtn = el("button", { "class": "btn more", type: "button" });
+    function visible() {
+      if (!filterText) return list0;
+      return list0.filter(function (a) { return (a.old + " " + a["new"] + " " + (a.why || "")).toLowerCase().indexOf(filterText) >= 0; });
+    }
+    function render() {
+      list.textContent = "";
+      var vis = visible();
+      vis.slice(0, shownN).forEach(function (a) {
+        var cb = el("input", { type: "checkbox", "aria-label": "Approve: " + a.old + " becomes " + a["new"] });
+        cb.checked = on.has(a.id);
+        cb.addEventListener("change", function () { if (cb.checked) on.add(a.id); else on.delete(a.id); save(); update(); });
+        list.appendChild(el("li", { "class": "item" }, cb,
+          el("div", null,
+            el("div", { "class": "pair" }, el("div", { "class": "name old", text: a.old }), el("div", { "class": "arrow", text: "→" }), el("div", { "class": "name new", text: a["new"] })),
+            el("div", { "class": "why" }, el("span", { "class": "dot " + (a.risk === "low" ? "green" : "red"), title: a.risk === "low" ? "sure" : "check first" }), " ",
+              [a.why, a.note, a.bytes ? bytes(a.bytes) : ""].filter(Boolean).join(" · ")))));
+      });
+      moreBtn.classList.toggle("hidden", vis.length <= shownN);
+      moreBtn.textContent = "Show " + Math.min(400, vis.length - shownN) + " more of " + count(vis.length - shownN);
+      meta.textContent = count(list0.filter(function (a) { return on.has(a.id); }).length) + " of " + count(list0.length) + " ticked";
+    }
+    moreBtn.addEventListener("click", function () { shownN += 400; render(); });
+    var tick = el("button", { "class": "btn", type: "button", text: "Tick all" });
+    var untick = el("button", { "class": "btn", type: "button", text: "Untick all" });
+    tick.addEventListener("click", function () { visible().forEach(function (a) { on.add(a.id); }); save(); update(); });
+    untick.addEventListener("click", function () { visible().forEach(function (a) { on.delete(a.id); }); save(); update(); });
+    $("groups").appendChild(el("div", { "class": "card group" },
+      el("div", { "class": "group-head" }, el("h3", { "class": "mono", text: short(folder) }), meta),
+      el("div", { "class": "toolbar", style: "margin-top:10px" }, tick, untick),
+      el("div", { style: "height:10px" }), list, moreBtn));
+    renderers.push(render);
+  });
+  if (!renderers.length) $("groups").appendChild(el("div", { "class": "card group sub", text: "No names have been proposed yet." }));
+  $("tick-all").addEventListener("click", function () { A.forEach(function (a) { on.add(a.id); }); save(); update(); });
+  $("untick-all").addEventListener("click", function () { on.clear(); save(); update(); });
+  $("filter").addEventListener("input", function (e) { filterText = e.target.value.trim().toLowerCase(); update(); });
+
+  // ---- refused, suspicious, unnamed, left alone
+  if ((D.refused || []).length) {
+    $("refused-card").classList.remove("hidden");
+    D.refused.forEach(function (r) {
+      $("refused").appendChild(el("li", null, el("div", { "class": "name", text: r.old }),
+        el("div", { "class": "sub" }, el("span", { "class": "dot red" }), " Proposed: ", el("span", { "class": "mono", text: r.proposed }), ". Refused: " + r.why + ".")));
+    });
+  }
+  if ((S.suspicious || []).length) {
+    $("suspicious-card").classList.remove("hidden");
+    S.suspicious.forEach(function (f) { $("suspicious").appendChild(el("li", null, el("div", { "class": "name", text: f.name }), el("div", { "class": "sub", text: short(f.folder) }))); });
+  }
+  var unnamed = S.unnamed || [], unShown = 30;
+  $("unnamed-sub").textContent = S.unnamed_count ? count(S.unnamed_count) + " files with names that say nothing, and no proposal. They stay as they are." : "Every file that was picked out has a proposal.";
+  function renderUnnamed() {
+    $("unnamed").textContent = "";
+    unnamed.slice(0, unShown).forEach(function (f) {
+      $("unnamed").appendChild(el("li", null, el("div", { "class": "name", text: f.name }), el("div", { "class": "sub", text: [short(f.folder), f.why, f.modified, bytes(f.bytes)].filter(Boolean).join(" · ") })));
+    });
+    $("unnamed-more").classList.toggle("hidden", unnamed.length <= unShown);
+    $("unnamed-more").textContent = "Show " + Math.min(200, unnamed.length - unShown) + " more";
+  }
+  $("unnamed-more").addEventListener("click", function () { unShown += 200; renderUnnamed(); });
+  renderUnnamed();
+  var parts = ["Files keep their folder and their extension: only the name changes.", "Files that already have a meaningful name were not listed."];
+  (S.folders || []).forEach(function (f) {
+    if (f.skipped) parts.push(short(f.path) + " was not looked at: " + f.skipped + ".");
+    (f.left || []).slice(0, 12).forEach(function (l) { parts.push(short(l.path) + ": " + l.why + "."); });
+  });
+  parts.push("Folders are never renamed. Code projects and program folders are never touched. This page shows names only, nothing from inside a document.");
+  $("left-alone").textContent = parts.join(" ");
+
+  // ---- approval
+  function ranges(ids) {
+    ids.sort(function (x, y) { return x - y; });
+    var out = [], i = 0;
+    while (i < ids.length) { var j = i; while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++; out.push(i === j ? "" + ids[i] : ids[i] + "-" + ids[j]); i = j + 1; }
+    return out.join(",");
+  }
+  function chosen() { return A.filter(function (a) { return on.has(a.id); }); }
+  function approvalText() {
+    var list = chosen(), note = $("notes").value.trim();
+    return "RENAME-APPROVE plan=" + D.plan_id + " ids=" + (ranges(list.map(function (a) { return a.id; })) || "none") + "\n" +
+      "renames: " + list.length + " of " + A.length + (note ? "\nnote: " + note.replace(/\s+/g, " ") : "");
+  }
+  function update() {
+    renderers.forEach(function (r) { r(); });
+    $("dock-sum").textContent = count(on.size) + " of " + count(A.length) + " renames ticked";
+  }
+  function fallback(text) {
+    var w = $("fallback-wrap"), t = $("fallback");
+    w.classList.remove("hidden"); t.value = text; t.focus(); t.select();
+    toast("Copy the selected text (Ctrl+C)");
+  }
+  $("copy").addEventListener("click", function () {
+    var text = approvalText();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { toast("Approval copied. Paste it to your assistant."); }, function () { fallback(text); });
+    } else fallback(text);
+  });
+  $("download").addEventListener("click", function () {
+    var list = chosen();
+    var body = JSON.stringify({ schema: "rename-documents/approval@1", plan_id: D.plan_id, ids: list.map(function (a) { return a.id; }), note: $("notes").value.trim(), actions: list }, null, 1);
+    try {
+      var url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
+      var a = el("a", { href: url, download: "rename-approval-" + D.plan_id + ".json" });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+    } catch (e) { fallback(body); }
+  });
+  $("toggle-notes").addEventListener("click", function () { $("notes-wrap").classList.toggle("hidden"); });
+  $("notes").addEventListener("input", update);
+  update();
+})();
+</script>
+</body>
+</html>

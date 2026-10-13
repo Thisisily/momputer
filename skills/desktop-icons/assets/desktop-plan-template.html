@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desktop plan</title>
+<meta name="description" content="What a read-only survey found on this computer's desktop, and a tidy-up plan to approve item by item.">
+<style>
+:root {
+  --bg: #f5f5f3; --card: #ffffff; --ink: #0b0b0b; --ink-2: #4a4a4a; --muted: #8a8a8a; --line: #e2e2de;
+  --bar: #0b0b0b; --bar-2: #bdbdb8; --red: #d71921; --green: #1e9e57; --focus: #0b0b0b;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+    --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+  --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+body { padding: 0 16px 150px; }
+main { max-width: 1080px; margin: 0 auto; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.label { font: 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); vertical-align: middle; }
+.dot.red { background: var(--red); } .dot.green { background: var(--green); }
+header.top { padding: 40px 0 20px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between; }
+h1 { font: 600 34px/1.1 var(--sans); letter-spacing: -.02em; margin: 6px 0 0; }
+h2 { font: 600 19px/1.3 var(--sans); margin: 0; }
+h3 { font: 600 15px/1.3 var(--sans); margin: 0; }
+.sub { color: var(--ink-2); }
+section { margin-top: 28px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; min-width: 0; }
+.grid { display: grid; gap: 12px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.tile .num { font: 500 30px/1.1 var(--mono); letter-spacing: -.02em; margin-top: 8px; }
+.tile .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.two { grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); }
+.highlights { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
+.headline { font-size: 17px; margin: 0; }
+svg { display: block; width: 100%; margin-top: 14px; }
+svg text { font: 12px var(--sans); fill: var(--ink-2); }
+svg text.val { font: 12px var(--mono); }
+.screen { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-top: 14px; }
+.screen svg { margin-top: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; border: 1px solid var(--bar-2); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
+.btn:hover { border-color: var(--ink); }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.search { flex: 1 1 220px; min-width: 0; border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; }
+.group { margin-top: 12px; }
+.group-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.group-head .meta { color: var(--muted); font: 12px var(--mono); }
+.group-desc { color: var(--ink-2); font-size: 13px; margin: 6px 0 10px; }
+.items { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.item input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: var(--ink); }
+.item .path { font: 13px/1.45 var(--mono); overflow-wrap: anywhere; unicode-bidi: isolate; direction: ltr; }
+.item .to { color: var(--ink-2); }
+.item .why { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+.item .detail { font: 12px/1.45 var(--mono); color: var(--ink-2); margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; unicode-bidi: isolate; direction: ltr; }
+.item .size { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
+.plain { list-style: none; margin: 10px 0 0; padding: 0; }
+.plain li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
+.plain .path { font: 13px/1.45 var(--mono); overflow-wrap: anywhere; unicode-bidi: isolate; direction: ltr; }
+.more { margin-top: 10px; }
+.steps { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 14px; }
+.dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 12px 16px; z-index: 5; }
+.dock-in { max-width: 1080px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.dock .sum { font: 13px var(--mono); }
+.dock textarea { width: 100%; min-height: 60px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--bg); }
+.toast { position: fixed; left: 50%; bottom: 104px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 6; max-width: calc(100% - 32px); }
+.toast.on { opacity: 1; }
+.hidden { display: none !important; }
+@media (max-width: 560px) {
+  h1 { font-size: 28px; }
+  .item { grid-template-columns: 22px minmax(0, 1fr); }
+  .item .size { grid-column: 2; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+<main id="app">
+  <header class="top">
+    <div>
+      <div class="label"><span class="dot green"></span>&nbsp; Read-only survey · nothing has been changed</div>
+      <h1>Desktop plan</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="label"><span class="dot green"></span> safe &nbsp; <span class="dot red"></span> check first</div>
+  </header>
+
+  <section id="summary" class="card hidden">
+    <p class="headline" id="headline"></p>
+    <ul class="highlights" id="highlights"></ul>
+  </section>
+
+  <section class="grid tiles" id="tiles"></section>
+
+  <section class="card">
+    <h2>Your desktop as it is</h2>
+    <div class="sub" id="screen-sub"></div>
+    <div class="screen" id="screen-wrap"></div>
+    <div class="legend" id="screen-legend"></div>
+  </section>
+
+  <section class="grid two">
+    <div class="card"><h2>What's on it</h2><div class="sub">Everything sitting on the desktop, by kind.</div><div id="chart-kinds"></div></div>
+    <div class="card"><h2>How long it has sat there</h2><div class="sub">By when each thing was last changed.</div><div id="chart-age"></div></div>
+  </section>
+
+  <section class="card">
+    <h2>The oldest things</h2>
+    <div class="sub">Not touched for the longest. Files and folders first: a shortcut never changes after it's made.</div>
+    <ul class="plain" id="oldest"></ul>
+  </section>
+
+  <section>
+    <div class="group-head"><h2>The plan</h2><span class="label">Tick what you approve. Nothing happens until you send the approval back.</span></div>
+    <div class="toolbar" style="margin-top:12px">
+      <button class="btn" id="tick-all" type="button">Tick all</button>
+      <button class="btn" id="untick-all" type="button">Untick all</button>
+      <input class="search" id="filter" type="search" placeholder="Filter by name" aria-label="Filter plan items">
+    </div>
+    <div id="groups"></div>
+  </section>
+
+  <section class="card" id="for-you-card">
+    <h2>For you to do</h2>
+    <div class="sub">Things this plan can't or shouldn't do for you.</div>
+    <ul class="plain" id="for-you"></ul>
+    <h3 style="margin-top:18px">Lining the icons up</h3>
+    <div class="sub" id="arrange-sub"></div>
+    <ol class="steps" id="arrange-steps"></ol>
+  </section>
+
+  <section class="card">
+    <h2>Left alone</h2>
+    <div class="sub" id="left-alone"></div>
+  </section>
+</main>
+
+<div class="dock" role="region" aria-label="Approval">
+  <div class="dock-in">
+    <div class="sum" id="dock-sum">0 ticked</div>
+    <div class="toolbar">
+      <button class="btn" id="toggle-notes" type="button">Add a note</button>
+      <button class="btn" id="download" type="button">Download plan</button>
+      <button class="btn primary" id="copy" type="button">Copy approval</button>
+    </div>
+  </div>
+  <div class="dock-in hidden" id="notes-wrap"><textarea id="notes" placeholder="Anything to change? e.g. keep the game shortcuts, put loose files in folders on the Desktop instead"></textarea></div>
+  <div class="dock-in hidden" id="fallback-wrap"><textarea id="fallback" readonly aria-label="Approval text to copy"></textarea></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script id="desktop-data" type="application/json">__DESKTOP_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("desktop-data").textContent);
+  var A = D.actions, S = D.survey, C = S.counts || {}, PROFILE = S.profile || "";
+  var SVG = "http://www.w3.org/2000/svg";
+  var GROUPS = [
+    ["dead", "Shortcuts that lead nowhere", "What they pointed at is gone. They go to the Recycle Bin."],
+    ["duplicates", "Extra shortcuts to the same thing", "One stays (it is named on each line). The extras go to the Recycle Bin."],
+    ["empty", "Empty folders", "Nothing inside. Removed."],
+    ["files", "Loose files", D.layout === "desktop" ? "Moved into a few folders on the Desktop." : "Moved off the Desktop into the matching folder, in a subfolder called \"" + (S.library_folder || "From the Desktop") + "\"."],
+    ["folders", "Folders", "Whole folders moved off the Desktop. Unticked to start with: tick the ones you want gone from it."],
+    ["check", "Worth a look first", "Shortcuts that run a command, or aren't what their name says. Nothing here is ticked for you."],
+    ["elsewhere", "Working shortcuts you also have elsewhere", "They work, and the same program is pinned to your taskbar or in your Start menu. Left alone unless you tick them."],
+    ["shortcuts", "Other shortcuts", "Left where they are unless you tick them."],
+    ["custom", "Other suggestions", "Added by your assistant after looking at the survey."]
+  ];
+  var KINDS = { "shortcut": "Shortcuts", "web-link": "Web and game links", "documents": "Documents", "pictures": "Pictures", "videos": "Videos",
+    "audio": "Audio", "archives": "Archives", "installers": "Installers", "programs": "Program files", "folder": "Folders", "other": "Other files" };
+  var KEY = "desktop-plan:" + D.plan_id;
+  var on = new Set();
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { saved = null; }
+  A.forEach(function (a) { if (Array.isArray(saved) ? saved.indexOf(a.id) >= 0 : a["default"]) on.add(a.id); });
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "text") n.textContent = attrs[k];
+      else if (k === "class") n.className = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    for (var i = 2; i < arguments.length; i++) { var c = arguments[i]; if (c != null) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); }
+    return n;
+  }
+  function svg(tag, attrs, text) {
+    var n = document.createElementNS(SVG, tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  function bytes(n) {
+    if (n == null) return "–";
+    var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
+  }
+  function count(n) { return (n || 0).toLocaleString("en-US"); }
+  function short(p) {
+    if (!p) return "";
+    if (PROFILE && p.toLowerCase().indexOf(PROFILE.toLowerCase() + "\\") === 0) return "~" + p.slice(PROFILE.length);
+    return p;
+  }
+  function base(p) { var i = p.lastIndexOf("\\"); return i >= 0 ? p.slice(i + 1) : p; }
+  function dirname(p) { var i = p.lastIndexOf("\\"); return i > 0 ? p.slice(0, i) : p; }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(Array.from(on))); } catch (e) { /* private window */ } }
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(function () { t.classList.remove("on"); }, 1800); }
+
+  // ---- header, summary, tiles
+  var items = S.items || [], screen = S.screen || null;
+  var shown = screen && screen.icons_shown != null ? Math.max(screen.icons_shown, items.length) : items.length;
+  $("subtitle").textContent = [(S.generated || "").replace("T", " "), short((S.desktop || {}).path), S.desktop && S.desktop.in_onedrive ? "kept in OneDrive" : ""].filter(Boolean).join(" · ");
+  if (D.notes && (D.notes.headline || (D.notes.highlights || []).length)) {
+    $("summary").classList.remove("hidden");
+    $("headline").textContent = D.notes.headline || "";
+    (D.notes.highlights || []).forEach(function (h) { $("highlights").appendChild(el("li", { text: h })); });
+  }
+  [["Icons", count(shown), screen && screen.fits ? "about " + count(screen.fits) + " fit on one screen" : "on your desktop"],
+   ["Lead nowhere", count(C.dead), "shortcuts whose target is gone"],
+   ["Extra copies", count(C.duplicate_extras), "shortcuts to something that already has one"],
+   ["Loose files", count(C.loose_files), bytes(C.loose_bytes || 0) + " sitting on the desktop"]].forEach(function (t) {
+    $("tiles").appendChild(el("div", { "class": "card tile" }, el("div", { "class": "label", text: t[0] }), el("div", { "class": "num", text: t[1] }), el("div", { "class": "note", text: t[2] })));
+  });
+
+  // ---- the screen: one square per icon, in the room one screen has
+  (function () {
+    var wrap = $("screen-wrap"), legend = $("screen-legend");
+    if (!screen || !screen.fits) {
+      $("screen-sub").textContent = count(shown) + " icons. How many fit on one screen couldn't be measured here.";
+      wrap.classList.add("hidden");
+      return;
+    }
+    var cols = Math.min(screen.columns, 80), rows = Math.min(screen.rows, 40), fits = cols * rows;
+    var over = Math.max(0, shown - fits);
+    $("screen-sub").textContent = count(shown) + " icons; about " + count(screen.fits) + " fit on one screen (" + screen.columns + " across, " + screen.rows + " down)" +
+      (over ? ". " + count(over) + " don't fit." : ".") + (screen.icons_hidden ? " Your desktop icons are switched off right now (right-click the desktop > View > Show desktop icons)." : "") +
+      (screen.measured ? "" : " Screen size given for a test.");
+    var cw = 12, ch = Math.max(8, Math.round(cw * screen.cell_h / screen.cell_w)), g = 2;
+    var s = svg("svg", { viewBox: "0 0 " + (cols * cw) + " " + (rows * ch), role: "img", "aria-label": count(shown) + " icons in room for " + count(screen.fits) });
+    var order = items.slice().sort(function (x, y) { return (x.where === y.where ? 0 : x.where === "desktop" ? -1 : 1); });
+    for (var i = 0; i < fits; i++) {
+      var col = Math.floor(i / rows), row = i % rows, it = order[i];
+      var filled = i < shown;
+      var isFile = it && !it.shortcut;
+      var r = svg("rect", { x: col * cw + g / 2, y: row * ch + g / 2, width: cw - g, height: ch - g, rx: 1.5,
+        fill: !filled ? "none" : it ? (isFile ? "var(--bar-2)" : "var(--bar)") : "var(--muted)", stroke: filled ? "none" : "var(--line)", "stroke-width": 0.6 });
+      if (it) r.appendChild(svg("title", null, it.name));
+      s.appendChild(r);
+      if (it && it.shortcut && (it.shortcut.status === "dead" || it.shortcut.flag)) s.appendChild(svg("circle", { cx: col * cw + cw / 2, cy: row * ch + ch / 2, r: 2, fill: "var(--red)" }));
+    }
+    wrap.appendChild(s);
+    [["var(--bar)", "shortcut"], ["var(--bar-2)", "file or folder"], ["var(--muted)", "Windows' own (Recycle Bin and the like)"], ["transparent", "free room"]].forEach(function (l) {
+      legend.appendChild(el("span", null, el("i", { style: "background:" + l[0] }), l[1]));
+    });
+    legend.appendChild(el("span", null, el("span", { "class": "dot red" }), " leads nowhere or worth a look"));
+  })();
+
+  // ---- bar charts (inline SVG, sized in percent so the text stays readable on a phone)
+  function bars(target, rows) {
+    var box = $(target), max = 0, H = 26;
+    rows.forEach(function (r) { max = Math.max(max, r.value); });
+    if (!rows.length || !max) { box.appendChild(el("div", { "class": "sub", style: "margin-top:14px", text: "Nothing to show." })); return; }
+    var s = svg("svg", { height: rows.length * H, role: "img", "aria-label": rows.map(function (r) { return r.label + ": " + r.text; }).join(", ") });
+    rows.forEach(function (r, i) {
+      var y = i * H;
+      s.appendChild(svg("text", { x: 0, y: y + 17 }, r.label));
+      s.appendChild(svg("rect", { x: "42%", y: y + 7, width: Math.max(0.6, r.value / max * 38).toFixed(2) + "%", height: 12, rx: 3, fill: "var(--bar)" }));
+      s.appendChild(svg("text", { x: "100%", y: y + 17, "text-anchor": "end", "class": "val" }, r.text));
+    });
+    box.appendChild(s);
+  }
+  var byKind = C.by_kind || {};
+  bars("chart-kinds", Object.keys(byKind).sort(function (x, y) { return byKind[y].count - byKind[x].count; }).map(function (k) {
+    return { label: KINDS[k] || k, value: byKind[k].count, text: count(byKind[k].count) + (byKind[k].bytes && k !== "shortcut" && k !== "web-link" ? " · " + bytes(byKind[k].bytes) : "") };
+  }));
+  var age = C.age || { buckets: [], counts: [] };
+  bars("chart-age", age.buckets.map(function (b, i) { return { label: b, value: age.counts[i], text: count(age.counts[i]) }; }));
+
+  // ---- oldest
+  var old = items.filter(function (it) { return it.where === "desktop"; }).sort(function (x, y) {
+    return (x.shortcut ? 1 : 0) - (y.shortcut ? 1 : 0) || y.idle_days - x.idle_days; }).slice(0, 8);
+  old.forEach(function (it) {
+    $("oldest").appendChild(el("li", null, el("div", { "class": "path", text: it.name }),
+      el("div", { "class": "sub", text: (KINDS[it.kind] || it.kind) + " · last changed " + (it.modified || "?") + (it.bytes ? " · " + bytes(it.bytes) : "") })));
+  });
+  if (!old.length) $("oldest").appendChild(el("li", { "class": "sub", text: "Nothing on your own desktop." }));
+
+  // ---- plan groups
+  var byGroup = {};
+  A.forEach(function (a) { (byGroup[a.group] = byGroup[a.group] || []).push(a); });
+  var renderers = [], filterText = "";
+  GROUPS.forEach(function (g) {
+    var list0 = byGroup[g[0]];
+    if (!list0 || !list0.length) return;
+    var total = list0.reduce(function (s, a) { return s + (a.bytes || 0); }, 0);
+    var shownN = 150;
+    var list = el("ul", { "class": "items" });
+    var meta = el("span", { "class": "meta" });
+    var moreBtn = el("button", { "class": "btn more", type: "button" });
+    function visible() {
+      if (!filterText) return list0;
+      return list0.filter(function (a) { return ((a.name || "") + " " + (a.to || "") + " " + (a.why || "")).toLowerCase().indexOf(filterText) >= 0; });
+    }
+    function render() {
+      list.textContent = "";
+      var vis = visible();
+      vis.slice(0, shownN).forEach(function (a) {
+        var cb = el("input", { type: "checkbox", "aria-label": "Approve: " + a.name });
+        cb.checked = on.has(a.id);
+        cb.addEventListener("change", function () { if (cb.checked) on.add(a.id); else on.delete(a.id); save(); update(); });
+        var verb = a.op === "move" ? "→ " + short(dirname(a.to)) : a.op === "recycle" ? "→ Recycle Bin" : a.op === "remove-empty-dir" ? "→ remove (empty)" : a.op;
+        list.appendChild(el("li", { "class": "item" }, cb,
+          el("div", null,
+            el("div", { "class": "path", text: a.name }),
+            el("div", { "class": "path to", title: a.to || "", text: verb }),
+            el("div", { "class": "why" }, el("span", { "class": "dot " + (a.risk === "low" ? "green" : "red"), title: a.risk === "low" ? "safe" : "check first" }), " ", a.why || ""),
+            a.detail ? el("div", { "class": "detail", text: a.detail }) : null),
+          el("div", { "class": "size", text: a.bytes ? bytes(a.bytes) : "" })));
+      });
+      moreBtn.classList.toggle("hidden", vis.length <= shownN);
+      moreBtn.textContent = "Show " + Math.min(400, vis.length - shownN) + " more of " + count(vis.length - shownN);
+      var ticked = list0.filter(function (a) { return on.has(a.id); }).length;
+      meta.textContent = count(ticked) + " of " + count(list0.length) + " ticked" + (total ? " · " + bytes(total) : "");
+    }
+    moreBtn.addEventListener("click", function () { shownN += 400; render(); });
+    var tick = el("button", { "class": "btn", type: "button", text: "Tick all" });
+    var untick = el("button", { "class": "btn", type: "button", text: "Untick all" });
+    tick.addEventListener("click", function () { visible().forEach(function (a) { on.add(a.id); }); save(); update(); });
+    untick.addEventListener("click", function () { visible().forEach(function (a) { on.delete(a.id); }); save(); update(); });
+    $("groups").appendChild(el("div", { "class": "card group", "data-group": g[0] },
+      el("div", { "class": "group-head" }, el("h3", { text: g[1] }), meta),
+      el("div", { "class": "group-desc", text: g[2] }),
+      el("div", { "class": "toolbar" }, tick, untick),
+      el("div", { style: "height:10px" }), list, moreBtn));
+    renderers.push(render);
+  });
+  if (!renderers.length) $("groups").appendChild(el("div", { "class": "card group sub", text: "Nothing to tidy. The desktop looked fine." }));
+  $("tick-all").addEventListener("click", function () { A.forEach(function (a) { on.add(a.id); }); save(); update(); });
+  $("untick-all").addEventListener("click", function () { on.clear(); save(); update(); });
+  $("filter").addEventListener("input", function (e) { filterText = e.target.value.trim().toLowerCase(); update(); });
+
+  // ---- for you to do
+  var fy = $("for-you");
+  (S.for_you || []).forEach(function (f) { fy.appendChild(el("li", null, el("div", { "class": "path", text: f.name || base(f.path || "") }), el("div", { "class": "sub", text: f.why || "" }))); });
+  (S.twice || []).forEach(function (t) {
+    fy.appendChild(el("li", null, el("div", { "class": "path", text: t.program }),
+      el("div", { "class": "sub", text: "Shortcuts lead to this program in " + t.places.length + " different places. It may be installed twice: " + t.places.map(short).join("; ") + ". Uninstall the one you don't use from Settings > Apps." })));
+  });
+  if (!fy.children.length) fy.appendChild(el("li", { "class": "sub", text: "Nothing waiting for you." }));
+  $("arrange-sub").textContent = "Windows remembers where each icon sits. This plan doesn't move icons around on the screen; it only takes things off the desktop. To line up what's left" +
+    (screen && screen.measured ? (screen.auto_arrange ? " (Auto arrange is already on):" : " (Auto arrange is off at the moment):") : ":");
+  ["Right-click an empty spot on the desktop > View > Auto arrange icons.", "Right-click again > Sort by > Name, or Item type."].forEach(function (t) { $("arrange-steps").appendChild(el("li", { text: t })); });
+
+  // ---- left alone
+  var la = S.left_alone || {}, mine = la.mine || {}, pub = la["public"] || {}, parts = [];
+  if (C["public"]) parts.push(count(C["public"]) + " on the Public Desktop (shared by everyone on this PC; changing it needs administrator rights, so the plan never does).");
+  var hidden = (mine.hidden || 0) + (pub.hidden || 0), links = (mine.links || 0) + (pub.links || 0), odd = (mine.unreadable || 0) + (pub.unreadable || 0) + (mine.odd_names || 0) + (pub.odd_names || 0);
+  if (hidden) parts.push(count(hidden) + " hidden or system files (such as desktop.ini).");
+  if (links) parts.push(count(links) + " links to other folders (never followed or moved).");
+  if (odd) parts.push(count(odd) + " things that couldn't be read.");
+  (la.folders || []).forEach(function (f) { parts.push("\"" + base(f.path) + "\": " + f.why + "."); });
+  if (C.unknown) parts.push(count(C.unknown) + " shortcuts the survey couldn't follow (special Windows links, network places, removable drives). They are not counted as broken.");
+  parts.push("Shortcuts were read, never run. No other file was opened.");
+  $("left-alone").textContent = parts.join(" ");
+
+  // ---- approval
+  function ranges(ids) {
+    ids.sort(function (x, y) { return x - y; });
+    var out = [], i = 0;
+    while (i < ids.length) { var j = i; while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++; out.push(i === j ? "" + ids[i] : ids[i] + "-" + ids[j]); i = j + 1; }
+    return out.join(",");
+  }
+  function chosen() { return A.filter(function (a) { return on.has(a.id); }); }
+  function summary(list) {
+    var mv = 0, rc = 0, em = 0;
+    list.forEach(function (a) { if (a.op === "move") mv++; else if (a.op === "recycle") rc++; else if (a.op === "remove-empty-dir") em++; });
+    return { mv: mv, rc: rc, em: em };
+  }
+  function approvalText() {
+    var list = chosen(), s = summary(list), note = $("notes").value.trim();
+    return "DESKTOP-APPROVE plan=" + D.plan_id + " ids=" + (ranges(list.map(function (a) { return a.id; })) || "none") + "\n" +
+      "to Recycle Bin: " + s.rc + " · moved off the desktop: " + s.mv + " · empty folders removed: " + s.em +
+      (note ? "\nnote: " + note.replace(/\s+/g, " ") : "");
+  }
+  function update() {
+    renderers.forEach(function (r) { r(); });
+    var s = summary(chosen());
+    $("dock-sum").textContent = count(on.size) + " ticked · to Recycle Bin: " + count(s.rc) + " · moved: " + count(s.mv) + " · empty folders: " + count(s.em) + (D.layout === "desktop" ? "" : " · icons left: " + count(Math.max(0, shown - on.size)));
+  }
+  function fallback(text) {
+    var w = $("fallback-wrap"), t = $("fallback");
+    w.classList.remove("hidden"); t.value = text; t.focus(); t.select();
+    toast("Copy the selected text (Ctrl+C)");
+  }
+  $("copy").addEventListener("click", function () {
+    var text = approvalText();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { toast("Approval copied. Paste it to your assistant."); }, function () { fallback(text); });
+    } else fallback(text);
+  });
+  $("download").addEventListener("click", function () {
+    var list = chosen();
+    var body = JSON.stringify({ schema: "desktop-icons/approval@1", plan_id: D.plan_id, ids: list.map(function (a) { return a.id; }), note: $("notes").value.trim(), actions: list }, null, 1);
+    try {
+      var url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
+      var a = el("a", { href: url, download: "desktop-approval-" + D.plan_id + ".json" });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+    } catch (e) { fallback(body); }
+  });
+  $("toggle-notes").addEventListener("click", function () { $("notes-wrap").classList.toggle("hidden"); });
+  $("notes").addEventListener("input", update);
+  update();
+})();
+</script>
+</body>
+</html>

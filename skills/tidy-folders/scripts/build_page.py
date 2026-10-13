@@ -21,13 +21,16 @@ big survey file:
 Python 3.8+, standard library only.
 """
 import argparse
-import hashlib
 import json
 import os
 import sys
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.dont_write_bytecode = True  # leave no __pycache__ behind in the skill folder
+from safe_apply import plan_fingerprint as plan_id  # noqa: E402  (one definition: the apply step recomputes it)
+
 TEMPLATE = os.path.join(HERE, "..", "assets", "tidy-plan-template.html")
 OPS = {"move", "recycle", "remove-empty-dir"}
 
@@ -61,11 +64,6 @@ def apply_notes(actions, notes):
         out.append(a)
         next_id += 1
     return out
-
-
-def plan_id(actions):
-    core = [[a["id"], a["op"], a["from"], a.get("to")] for a in actions]
-    return hashlib.sha256(json.dumps(core, ensure_ascii=False).encode("utf-8")).hexdigest()[:10]
 
 
 def page_view(survey):
