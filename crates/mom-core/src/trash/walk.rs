@@ -280,6 +280,14 @@ pub(super) fn remove_owned(p: &Path) -> bool {
     if !meta.is_dir() || meta.file_attributes() & REPARSE_POINT != 0 || !crate::elevate::open_and_mine(&held) {
         return false;
     }
+    // And it must be the very folder that was found, not another one the same path leads to now:
+    // opening a path follows any link in the folders above it. Asking the open folder where it
+    // really is, and getting the path it was opened by, means nothing above it is a link. With
+    // it held open, none of those folders can be renamed or replaced either, so the path keeps
+    // meaning this folder for as long as mom works in it.
+    if !opened_as_written(&held, p) {
+        return false;
+    }
     let Ok(inside) = std::fs::read_dir(p) else { return false };
     for entry in inside.flatten() {
         remove_without_following(&entry.path());
@@ -287,6 +295,22 @@ pub(super) fn remove_owned(p: &Path) -> bool {
     drop(held);
     let _ = std::fs::remove_dir(p);
     std::fs::symlink_metadata(p).is_err()
+}
+
+/// Does this open folder really live at `path`, spelled that way (but for capitals)?
+#[cfg(windows)]
+fn opened_as_written(held: &std::fs::File, path: &Path) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+    let mut buf = vec![0u16; 32_768];
+    // SAFETY: the handle is open for the length of the call, and `buf` is as long as we say.
+    let n = unsafe { GetFinalPathNameByHandleW(held.as_raw_handle() as _, buf.as_mut_ptr(), buf.len() as u32, 0) } as usize;
+    if n == 0 || n >= buf.len() {
+        return false;
+    }
+    let real = String::from_utf16_lossy(&buf[..n]);
+    let plain = |s: &str| s.strip_prefix(r"\\?\").unwrap_or(s).trim_end_matches('\\').to_ascii_lowercase();
+    plain(&real) == plain(&path.to_string_lossy())
 }
 
 #[cfg(not(windows))]

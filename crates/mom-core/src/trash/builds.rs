@@ -69,8 +69,10 @@ pub(super) fn default_roots(paths: &Paths, rooms: &[PathBuf]) -> Vec<PathBuf> {
             }
         }
     }
+    // Each by where it really is: a Projects folder that is a link to another drive is searched
+    // there, under its real name, so what mom finds and what she later opens are spelled alike.
     let mut seen = HashSet::new();
-    v.into_iter().filter(|p| p.is_dir() && seen.insert(norm_path(&p.to_string_lossy()))).collect()
+    v.into_iter().filter(|p| p.is_dir()).filter_map(|p| crate::util::real_path(&p)).filter(|p| seen.insert(norm_path(&p.to_string_lossy()))).collect()
 }
 
 struct Project {

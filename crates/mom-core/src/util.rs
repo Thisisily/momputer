@@ -303,6 +303,21 @@ pub fn fixed_drives() -> Vec<String> {
     Vec::new()
 }
 
+/// Where a folder really is, with every link on the way followed and every name spelled as it
+/// is on disk: "C:\Users\you\code" for a Projects folder that is a link to it. None for a place
+/// on the network, or one that can't be looked at.
+pub fn real_path(p: &std::path::Path) -> Option<std::path::PathBuf> {
+    let real = std::fs::canonicalize(p).ok()?;
+    let s = real.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        // "\\?\C:\..." is how Windows spells a real local path; "\\?\UNC\..." is a network share.
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => Some(std::path::PathBuf::from(rest)),
+        Some(_) => None,
+        None if s.starts_with(r"\\") => None,
+        None => Some(real),
+    }
+}
+
 /// Truncates on a char boundary, adding an ellipsis.
 pub fn ellipsize(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
