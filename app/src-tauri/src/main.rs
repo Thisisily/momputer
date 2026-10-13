@@ -752,7 +752,7 @@ fn undo_setting(id: String, s: State<'_, S>) -> Res<String> {
 /// the graphics card maker's app.
 #[tauri::command(async)]
 fn open_program(name: String) -> Res<()> {
-    const ALLOWED: &[&str] = &["SystemPropertiesPerformance.exe", "SystemPropertiesAdvanced.exe", "UserAccountControlSettings.exe", "cttune.exe", "eventvwr.exe"];
+    const ALLOWED: &[&str] = &["SystemPropertiesPerformance.exe", "SystemPropertiesAdvanced.exe", "UserAccountControlSettings.exe", "cttune.exe", "eventvwr.exe", "dfrgui.exe", "devmgmt.msc"];
     if let Some(app) = mom_core::speed::gpu_app_path(&name) {
         return mom_core::elevate::open(&app, "");
     }

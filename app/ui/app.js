@@ -1391,6 +1391,7 @@ in ${x.cwd}`)}">
     ["Security", "Protection"],
     ["Updates", "Updates"],
     ["Hardware", "Hardware"],
+    ["Sound", "Sound"],
     ["Performance", "Performance"],
     ["Registry", "Registry leftovers"],
   ];

@@ -86,7 +86,8 @@ const SCRIPT: &str = r#"
 $ErrorActionPreference = 'SilentlyContinue'
 $o = [ordered]@{}
 $d = { param($x) if ($x) { ([datetime]$x).ToString('o') } }
-$o.mem = @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { @{ cap = [int64]$_.Capacity; speed = $_.Speed; conf = $_.ConfiguredClockSpeed; slot = "$($_.DeviceLocator)"; part = "$($_.PartNumber)".Trim(); maker = "$($_.Manufacturer)".Trim() } })
+$o.mem = @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { @{ cap = [int64]$_.Capacity; speed = $_.Speed; conf = $_.ConfiguredClockSpeed; slot = "$($_.DeviceLocator)"; part = "$($_.PartNumber)".Trim(); maker = "$($_.Manufacturer)".Trim(); type = $_.SMBIOSMemoryType; form = $_.FormFactor } })
+$o.optimize = "$((Get-ScheduledTask -TaskPath '\Microsoft\Windows\Defrag\' -TaskName 'ScheduledDefrag').State)"
 $o.disks = @(Get-CimInstance -Namespace root/Microsoft/Windows/Storage -ClassName MSFT_PhysicalDisk | ForEach-Object { @{ id = "$($_.DeviceId)"; name = "$($_.FriendlyName)".Trim(); media = $_.MediaType; bus = $_.BusType; health = $_.HealthStatus; size = [int64]$_.Size } })
 $o.sysdisk = "$((Get-CimInstance -Namespace root/Microsoft/Windows/Storage -ClassName MSFT_Partition -Filter "DriveLetter='$($env:SystemDrive[0])'").DiskNumber)"
 $o.av = @(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct | ForEach-Object { @{ name = $_.displayName; state = $_.productState } })
@@ -104,12 +105,25 @@ $o | ConvertTo-Json -Depth 4 -Compress
 "#;
 
 fn gather() -> System {
-    let facts: Value = run("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT], Duration::from_secs(40))
+    let mut facts: Value = run("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT], Duration::from_secs(40))
         .ok()
         .filter(|o| o.ok())
         .and_then(|o| serde_json::from_str(o.text().trim()).ok())
         .unwrap_or(Value::Null);
+    // What each NVMe drive says about its own health (no administrator needed), next to what
+    // Windows said about it.
+    if let Some(disks) = facts.get_mut("disks").and_then(Value::as_array_mut) {
+        for d in disks.iter_mut().filter(|d| num(d, "bus") == 17) {
+            let health = text(d, "id").parse().ok().and_then(crate::disks::nvme_health).and_then(|h| serde_json::to_value(h).ok());
+            if let (Some(h), Some(o)) = (health, d.as_object_mut()) {
+                o.insert("nvme".into(), h);
+            }
+        }
+    }
     let reg = Reg::read();
+    if let Some(o) = facts.as_object_mut() {
+        o.insert("trimOff".into(), Value::Bool(reg.trim_off));
+    }
     let now = now_secs();
     let gpu = crate::speed::gpu_now();
     let installed: Vec<String> = crate::installed::programs().into_iter().map(|a| a.name).collect();
@@ -118,8 +132,15 @@ fn gather() -> System {
     checks.extend(updates(&facts, &reg, now));
     checks.extend(hardware(&facts, gpu.as_ref(), now));
     checks.extend(performance(&reg));
+    let sound = crate::sound::endpoints();
+    checks.extend(crate::sound::checks(&sound, &installed));
     checks.extend(registry());
-    System { pc: describe(&facts, &reg, gpu.as_ref()), checks, at: now }
+    let mut pc = describe(&facts, &reg, gpu.as_ref());
+    if let Some(s) = crate::sound::summary(&sound) {
+        let at = pc.iter().position(|(k, _)| k == "Board").unwrap_or(pc.len());
+        pc.insert(at, ("Sound".into(), s));
+    }
+    System { pc, checks, at: now }
 }
 
 // ------------------------------------------------------------------ registry facts
@@ -138,6 +159,8 @@ struct Reg {
     game_mode_off: bool,
     max_cpu: Option<u32>,
     reboot_pending: bool,
+    /// Windows has been told not to tell SSDs which blocks are free (TRIM).
+    trim_off: bool,
 }
 
 impl Reg {
@@ -162,6 +185,7 @@ impl Reg {
             game_mode_off: dword_value(crate::health::reg::Hive::CurrentUser, r"Software\Microsoft\GameBar", "AutoGameModeEnabled") == Some(0),
             max_cpu: max_processor_state(),
             reboot_pending: crate::health::reboot_pending(),
+            trim_off: dword_value(Lm, r"SYSTEM\CurrentControlSet\Control\FileSystem", "DisableDeleteNotification") == Some(1),
         }
     }
 
@@ -232,13 +256,25 @@ fn describe(f: &Value, reg: &Reg, gpu: Option<&crate::speed::Gpu>) -> Vec<(Strin
         let same = mem.iter().all(|m| num(m, "cap") == each);
         let speed = mem.iter().map(|m| num(m, "conf")).min().unwrap_or(0);
         let sticks = if same { format!("{} × {}", mem.len(), size(each as u64)) } else { format!("{} sticks", mem.len()) };
-        pc.push(("Memory".into(), format!("{}: {sticks} at {speed} MT/s", size(total as u64))));
+        let kind = memory_kind(num(&mem[0], "type"));
+        let kind = if kind.is_empty() { String::new() } else { format!(" {kind}") };
+        pc.push(("Memory".into(), format!("{}{kind}: {sticks} at {speed} MT/s", size(total as u64))));
     }
-    let gpus = arr(f, "gpu");
-    if let Some(g) = gpus.iter().find(|g| !text(g, "name").to_ascii_lowercase().contains("basic")) {
-        let extra = gpu.map(|g| g.temp.map(|t| format!(", {t} °C")).unwrap_or_default()).unwrap_or_default();
-        let driver = date(g, "date").map(|d| format!(", driver from {}", year(d))).unwrap_or_default();
-        pc.push(("Graphics".into(), format!("{}{driver}{extra}", text(g, "name"))));
+    // Every graphics card: a laptop has one in the processor and often a second, faster one.
+    let cards: Vec<String> = arr(f, "gpu")
+        .iter()
+        .filter(|g| !text(g, "name").is_empty() && !text(g, "name").to_ascii_lowercase().contains("basic"))
+        .map(|g| {
+            let name = text(g, "name");
+            // The live reading belongs to the card that gave it.
+            let live = gpu.filter(|live| name.to_ascii_lowercase().contains(&live.name.to_ascii_lowercase()));
+            let extra = live.and_then(|g| g.temp).map(|t| format!(", {t} °C")).unwrap_or_default();
+            let driver = date(g, "date").map(|d| format!(", driver from {}", year(d))).unwrap_or_default();
+            format!("{name}{driver}{extra}")
+        })
+        .collect();
+    if !cards.is_empty() {
+        pc.push(("Graphics".into(), cards.join(" · ")));
     }
     let disks = arr(f, "disks");
     if !disks.is_empty() {
@@ -258,6 +294,23 @@ fn describe(f: &Value, reg: &Reg, gpu: Option<&crate::speed::Gpu>) -> Vec<(Strin
         pc.push(("Windows".into(), windows_name(reg.build, &reg.version, &reg.edition)));
     }
     pc
+}
+
+/// "DDR4", from the memory type the board reports (SMBIOS). "LP" kinds are soldered on.
+fn memory_kind(t: i64) -> &'static str {
+    match t {
+        20 => "DDR",
+        21 => "DDR2",
+        24 => "DDR3",
+        26 => "DDR4",
+        34 => "DDR5",
+        27 => "LPDDR",
+        28 => "LPDDR2",
+        29 => "LPDDR3",
+        30 => "LPDDR4",
+        35 => "LPDDR5",
+        _ => "",
+    }
 }
 
 /// "64 GB", "16 GB", "1.8 TB": whole numbers where they're whole.
@@ -544,9 +597,19 @@ pub fn rated_speed(part: &str) -> Option<u32> {
             (r"^BLS\d+G4D(\d{2})", 100),
             (r"^F[45]-(\d{4})", 1),
             (r"^CM[A-Z0-9]*X[45]M\d[A-Z](\d{4})C", 1),
-            (r"^K[FH][45](\d{2})C", 100),
-            (r"^HX[45](\d{2})C", 100),
+            (r"^K[FH][45](\d{2})[CS]\d", 100),
+            (r"^HX[345](\d{2})C", 100),
             (r"^T[A-Z0-9]*?(\d{4})HC\d", 1),
+            // Crucial Pro "CP16G56C46U5", ADATA XPG "AX4U360016G18I", Patriot Viper
+            // "PVS416G360C8K", Klevv "KD4AGU880-36A180U", PNY XLR8 "MD16GK2D4360018XR",
+            // Thermaltake "R009D408GX2-3600C18A", Lexar "LD4BU016G-R3600GDXG".
+            (r"^CP\d+G(\d{2})C\d+[US][45]", 100),
+            (r"^AX[45]U(\d{4})", 1),
+            (r"^PV[A-Z]*[45]\d+G(\d{3})C\d", 10),
+            (r"^KD[45][A-Z0-9]+-(\d{2})A\d", 100),
+            (r"^MD\d+G[A-Z0-9]*?D[45](\d{4})\d{2}X", 1),
+            (r"^R\d{3}D[45]\d+GX\d-(\d{4})C\d", 1),
+            (r"^LD[45][A-Z0-9]+-[A-Z](\d{4})", 1),
         ]
         .into_iter()
         .filter_map(|(p, mul)| regex::Regex::new(p).ok().map(|r| (r, mul)))
@@ -576,27 +639,97 @@ fn profile_name(board_maker: &str, cpu: &str, ddr5: bool) -> &'static str {
     }
 }
 
+/// One line about an NVMe drive from its own health page: what's wrong, or that it's well and
+/// how worn it is.
+fn nvme_check(id: &str, name: &str, h: &crate::disks::Nvme) -> Option<Check> {
+    let written = if h.written_bytes >= 1_000_000_000_000 {
+        format!("{:.0} TB", h.written_bytes as f64 / 1e12)
+    } else {
+        format!("{:.0} GB", h.written_bytes as f64 / 1e9)
+    };
+    let on_for = match h.hours {
+        0..=47 => format!("{} hours", h.hours),
+        48..=8759 => format!("{} days", h.hours / 24),
+        _ => format!("{:.1} years", h.hours as f64 / 8760.0),
+    };
+    let facts = format!("{}% of its rated life used, {} °C, {written} written, switched on for {on_for} in all", h.used, h.temp);
+    let key = format!("ssd-health-{id}");
+    let warnings = h.warnings();
+    Some(if !warnings.is_empty() || h.media_errors > 0 {
+        let mut said: Vec<String> = warnings.iter().map(|w| w.to_string()).collect();
+        if h.media_errors > 0 {
+            said.push(format!("it has failed to read or write data {} {}", h.media_errors, if h.media_errors == 1 { "time" } else { "times" }));
+        }
+        check(
+            &key,
+            "Hardware",
+            "warn",
+            format!("{name} is reporting trouble"),
+            format!("The drive itself says so: {}. Copy anything you'd miss somewhere else now, while it still reads. ({facts}.)", said.join(", and ")),
+            None,
+        )
+    } else if h.used >= 90 {
+        check(
+            &key,
+            "Hardware",
+            "warn",
+            format!("{name} has used {}% of its rated life", h.used),
+            format!("An SSD wears a little with every write, and this one is close to what its maker promised. It may go on for a long time yet, but keep a second copy of anything on it and plan for a new one. ({written} written, {} °C.)", h.temp),
+            None,
+        )
+    } else if h.temp >= 70 {
+        check(
+            &key,
+            "Hardware",
+            "warn",
+            format!("{name} is running hot: {} °C", h.temp),
+            "Above about 70 °C an SSD slows itself down to cool off, and heat shortens its life. It often sits right under the graphics card: a small heatsink on it, or more air moving past, fixes it.".into(),
+            None,
+        )
+    } else if h.used >= 70 || h.spare <= h.spare_min.saturating_add(10) {
+        check(
+            &key,
+            "Hardware",
+            "tip",
+            format!("{name} is getting on: {}% of its rated life used", h.used),
+            format!("Nothing is wrong yet. Keep a second copy of what's on it. ({written} written, {}% of its spare blocks left, {} °C.)", h.spare, h.temp),
+            None,
+        )
+    } else {
+        check(&key, "Hardware", "ok", format!("{name} is healthy"), format!("{facts}. No errors."), None)
+    })
+}
+
 fn hardware(f: &Value, gpu: Option<&crate::speed::Gpu>, now: u64) -> Vec<Check> {
     let mut out = Vec::new();
     let mem = arr(f, "mem");
-    if let Some(first) = mem.first() {
+    // Memory soldered to the board (the LP kinds, in thin laptops) can't be changed or tuned.
+    let soldered = mem.first().is_some_and(|m| memory_kind(num(m, "type")).starts_with("LP"));
+    if let Some(first) = mem.first().filter(|_| !soldered) {
         let running = mem.iter().map(|m| num(m, "conf")).filter(|s| *s > 0).min().unwrap_or(0) as u32;
         let rated = mem.iter().filter_map(|m| rated_speed(&text(m, "part"))).min();
-        let ddr5 = running >= 4000 || rated.is_some_and(|r| r >= 4400);
+        // The board says which generation it is; where it doesn't, the speed gives it away.
+        let ddr5 = match memory_kind(num(first, "type")) {
+            "" => running >= 4000 || rated.is_some_and(|r| r >= 4400),
+            kind => kind == "DDR5",
+        };
+        // Laptop sticks (SO-DIMM): many laptops have no setting for it at all.
+        let laptop = num(first, "form") == 12;
         if let Some(rated) = rated.filter(|r| running > 0 && *r as f32 > running as f32 * 1.08) {
             let profile = profile_name(&text(&f["board"], "maker"), &text(&f["cpu"], "name"), ddr5);
             let four = if mem.len() >= 4 { format!(" With {} sticks, if {rated} isn't stable, the next step down is.", mem.len()) } else { String::new() };
+            let ryzen = if text(&f["cpu"], "name").to_ascii_uppercase().contains("RYZEN") { "On a Ryzen, part of the processor runs at memory speed too, so it's real speed. " } else { "" };
+            let (maker, part) = (tidy_maker(&text(first, "maker")), text(first, "part").split('.').next().unwrap_or_default().to_string());
             out.push(check(
                 "memory-speed",
                 "Hardware",
-                "warn",
+                if laptop { "tip" } else { "warn" },
                 format!("Your memory runs at {running} MT/s, but it's made for {rated}"),
-                format!(
-                    "{} {} sticks run at the safe standard speed until their profile is switched on in the BIOS (it's called {profile}). {}It's one setting and costs nothing.{four}",
-                    tidy_maker(&text(first, "maker")),
-                    text(first, "part").split('.').next().unwrap_or_default(),
-                    if text(&f["cpu"], "name").to_ascii_uppercase().contains("RYZEN") { "On a Ryzen, part of the processor runs at memory speed too, so it's real speed. " } else { "" }
-                ),
+                if laptop {
+                    format!("{maker} {part} sticks run at the safe standard speed unless a faster profile is switched on. Some laptops have that setting in the BIOS (it's called {profile}); many don't, and then this is as fast as they go here.")
+                } else {
+                    format!("{maker} {part} sticks run at the safe standard speed until their profile is switched on in the BIOS (it's called {profile}). {ryzen}It's one setting and costs nothing.{four}")
+                },
                 None,
             ));
         }
@@ -645,6 +778,31 @@ fn hardware(f: &Value, gpu: Option<&crate::speed::Gpu>, now: u64) -> Vec<Check> 
             )),
             _ => {}
         }
+        // What an NVMe drive says about itself: wear, heat, spare blocks, errors.
+        if let Ok(h) = serde_json::from_value::<crate::disks::Nvme>(d["nvme"].clone()) {
+            out.extend(nvme_check(&text(&d, "id"), &name, &h));
+        }
+    }
+    let ssds = arr(f, "disks").iter().filter(|d| num(d, "media") == 4 || num(d, "bus") == 17).count();
+    if ssds > 0 && f["trimOff"].as_bool() == Some(true) {
+        out.push(check(
+            "trim-off",
+            "Hardware",
+            "warn",
+            "Windows doesn't tell your SSD which space is free".into(),
+            "That's called TRIM, and it's switched off. Without it an SSD gets slower as it fills and wears out sooner. It's on by default; an old tweak or tool turned it off.".into(),
+            Some(Fix { label: "Copy the fix".into(), kind: "copy", value: "fsutil behavior set DisableDeleteNotify 0".into(), hint: Some("Paste it into a Terminal opened as administrator.".into()) }),
+        ));
+    }
+    if !arr(f, "disks").is_empty() && text(f, "optimize").eq_ignore_ascii_case("Disabled") {
+        out.push(check(
+            "optimize-off",
+            "Hardware",
+            "tip",
+            "Windows has stopped looking after your drives".into(),
+            "Once a week it tidies hard disks and tells SSDs which space is free again. That schedule is switched off, so drives slowly get slower.".into(),
+            Some(Fix { label: "Optimise Drives".into(), kind: "launch", value: "dfrgui.exe".into(), hint: None }),
+        ));
     }
     if let Some(g) = gpu {
         if let (Some(now_w), Some(max_w)) = (g.link_width, g.link_width_max) {
@@ -1028,6 +1186,19 @@ mod tests {
         assert_eq!(rated_speed("KF552C40BBK2-32"), Some(5200));
         assert_eq!(rated_speed("TF3D416G3600HC18J"), Some(3600));
         assert_eq!(rated_speed("M378A2K43CB1-CTD"), None);
+        // More makers.
+        assert_eq!(rated_speed("CP16G56C46U5.M8D1"), Some(5600));
+        assert_eq!(rated_speed("AX4U360016G18I-CBK20"), Some(3600));
+        assert_eq!(rated_speed("AX5U6000C3016G-CLARBK"), Some(6000));
+        assert_eq!(rated_speed("PVS416G360C8K"), Some(3600));
+        assert_eq!(rated_speed("PVV532G560C36K"), Some(5600));
+        assert_eq!(rated_speed("KD4AGU880-36A180U"), Some(3600));
+        assert_eq!(rated_speed("MD16GK2D4360018XR"), Some(3600));
+        assert_eq!(rated_speed("R009D408GX2-3600C18A"), Some(3600));
+        assert_eq!(rated_speed("LD4BU016G-R3600GDXG"), Some(3600));
+        assert_eq!(rated_speed("HMA82GU6CJR8N-XN"), None, "a plain factory stick has no faster profile");
+        assert_eq!(rated_speed("CT16G4DFRA32A.M16FR"), None);
+        assert_eq!((memory_kind(26), memory_kind(34), memory_kind(35), memory_kind(0)), ("DDR4", "DDR5", "LPDDR5", ""));
         assert_eq!(channel("DIMM_A1"), Some('A'));
         assert_eq!(channel("ChannelB-DIMM0"), Some('B'));
         assert_eq!(channel("DIMM 1"), None);
@@ -1056,6 +1227,68 @@ mod tests {
         assert_eq!(pc[1], ("Memory".to_string(), "32 GB: 2 × 16 GB at 2666 MT/s".to_string()));
         assert!(pc.iter().any(|(k, v)| k == "Disks" && v.contains("NVMe SSD, Windows")));
         assert_eq!(pc.last().unwrap().1, "Windows 11 Pro 25H2 (build 26200)");
+    }
+
+    #[test]
+    fn every_kind_of_memory_gets_the_right_words() {
+        let now = crate::speed::parse_time("2026-10-12T00:00:00Z").unwrap();
+        let stick = |part: &str, conf: u32, kind: u32, form: u32, slot: &str| json!({"cap": 17179869184_i64, "conf": conf, "slot": slot, "part": part, "maker": "Kingston", "type": kind, "form": form});
+        // DDR5 on an AMD board is EXPO, whatever the speed says.
+        let f = json!({"mem": [stick("KF556C40BBK2-32", 4800, 34, 8, "DIMM_A1"), stick("KF556C40BBK2-32", 4800, 34, 8, "DIMM_B1")],
+            "board": {"maker": "Gigabyte Technology Co., Ltd.", "product": "B650 AORUS"}, "cpu": {"name": "AMD Ryzen 7 7700X"}});
+        let c = hardware(&f, None, now);
+        let m = c.iter().find(|c| c.id == "memory-speed").unwrap();
+        assert_eq!((m.level, m.title.as_str()), ("warn", "Your memory runs at 4800 MT/s, but it's made for 5600"));
+        assert!(m.detail.contains("EXPO"), "{}", m.detail);
+        assert_eq!(describe(&f, &Reg::default(), None)[1].1, "32 GB DDR5: 2 × 16 GB at 4800 MT/s");
+        // A laptop stick: said gently, because many laptops have no setting for it.
+        let f = json!({"mem": [stick("KF432S20IB/16", 2666, 26, 12, "ChannelA-DIMM0"), stick("KF432S20IB/16", 2666, 26, 12, "ChannelB-DIMM0")],
+            "board": {"maker": "LENOVO", "product": "LNVNB161216"}, "cpu": {"name": "Intel(R) Core(TM) i7-11800H"}});
+        let m = hardware(&f, None, now).into_iter().find(|c| c.id == "memory-speed").unwrap();
+        assert_eq!(m.level, "tip");
+        assert!(m.detail.contains("many don't"), "{}", m.detail);
+        // Soldered memory: nothing to say, and no advice to add a stick.
+        let f = json!({"mem": [stick("H9JCNNNCP3MLYR-N6E", 4267, 35, 12, "Motherboard")], "board": {"maker": "Dell Inc.", "product": "0X"}, "cpu": {"name": "Intel(R) Core(TM) Ultra 7"}});
+        assert!(hardware(&f, None, now).iter().all(|c| !c.id.starts_with("memory")));
+        assert_eq!(describe(&f, &Reg::default(), None)[1].1, "16 GB LPDDR5: 1 × 16 GB at 4267 MT/s");
+    }
+
+    #[test]
+    fn drives_say_how_they_are() {
+        let now = crate::speed::parse_time("2026-10-12T00:00:00Z").unwrap();
+        let nvme = |used: u8, temp: i32, critical: u8, errors: u64| json!({"critical": critical, "temp": temp, "spare": 100, "spareMin": 10, "used": used, "writtenBytes": 173_000_000_000_000_u64, "hours": 31_394, "unsafeShutdowns": 107, "mediaErrors": errors});
+        let pc = |health: Value, trim_off: bool, optimize: &str| json!({
+            "disks": [{"id": "1", "name": "Lanternfall NV2 1TB", "media": 4, "bus": 17, "health": 0, "size": 1000204886016_i64, "nvme": health},
+                      {"id": "0", "name": "Copperline Blue 1TB", "media": 3, "bus": 11, "health": 0, "size": 1000204886016_i64}],
+            "sysdisk": "1", "trimOff": trim_off, "optimize": optimize});
+        let find = |f: &Value, id: &str| hardware(f, None, now).into_iter().find(|c| c.id == id);
+        let ok = find(&pc(nvme(12, 59, 0, 0), false, "Ready"), "ssd-health-1").unwrap();
+        assert_eq!((ok.level, ok.title.as_str()), ("ok", "Lanternfall NV2 1TB is healthy"));
+        assert_eq!(ok.detail, "12% of its rated life used, 59 °C, 173 TB written, switched on for 3.6 years in all. No errors.");
+        assert_eq!(find(&pc(nvme(12, 74, 0, 0), false, "Ready"), "ssd-health-1").unwrap().title, "Lanternfall NV2 1TB is running hot: 74 °C");
+        assert_eq!(find(&pc(nvme(93, 40, 0, 0), false, "Ready"), "ssd-health-1").unwrap().level, "warn");
+        assert_eq!(find(&pc(nvme(75, 40, 0, 0), false, "Ready"), "ssd-health-1").unwrap().level, "tip");
+        let bad = find(&pc(nvme(30, 40, 4, 2), false, "Ready"), "ssd-health-1").unwrap();
+        assert_eq!((bad.level, bad.title.as_str()), ("warn", "Lanternfall NV2 1TB is reporting trouble"));
+        assert!(bad.detail.contains("it says it's worn or no longer reliable, and it has failed to read or write data 2 times"), "{}", bad.detail);
+        // A hard disk has no health page: nothing is said about it.
+        assert!(find(&pc(nvme(12, 59, 0, 0), false, "Ready"), "ssd-health-0").is_none());
+        // TRIM switched off, and the weekly tidy switched off.
+        let f = pc(nvme(12, 59, 0, 0), true, "Disabled");
+        assert_eq!(find(&f, "trim-off").unwrap().level, "warn");
+        assert_eq!(find(&f, "optimize-off").unwrap().fix.unwrap().value, "dfrgui.exe");
+        let f = pc(nvme(12, 59, 0, 0), false, "Ready");
+        assert!(find(&f, "trim-off").is_none() && find(&f, "optimize-off").is_none());
+    }
+
+    #[test]
+    fn every_graphics_card_is_listed() {
+        let f = json!({"gpu": [
+            {"name": "Intel(R) UHD Graphics", "date": "2025-03-01T00:00:00.0000000+00:00"},
+            {"name": "AMD Radeon RX 7700S", "date": "2026-01-10T00:00:00.0000000+00:00"},
+            {"name": "Microsoft Basic Render Driver"}]});
+        let pc = describe(&f, &Reg::default(), None);
+        assert_eq!(pc[0], ("Graphics".to_string(), "Intel(R) UHD Graphics, driver from 2025 · AMD Radeon RX 7700S, driver from 2026".to_string()));
     }
 
     #[test]

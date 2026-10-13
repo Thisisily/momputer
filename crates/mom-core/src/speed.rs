@@ -147,7 +147,12 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
             fix: Some(Fix { label: "Power settings".into(), kind: "open", value: "ms-settings:powersleep".into(), hint: None }),
         });
     }
-    Speed { findings, busy: busy(&programs, 6), gpu: slow.gpu, at: now }
+    // A card that doesn't say how busy it is itself: Windows' counters do, program by program.
+    let mut gpu = slow.gpu;
+    if let Some(g) = gpu.as_mut().filter(|g| g.busy.is_none()) {
+        g.busy = Some(programs.iter().filter_map(|p| p.gpu).sum::<f32>().clamp(0.0, 100.0).round() as u32);
+    }
+    Speed { findings, busy: busy(&programs, 6), gpu, at: now }
 }
 
 // ------------------------------------------------------------------ apps that lost the graphics card
@@ -929,8 +934,53 @@ fn too_many_extensions(e: &(String, usize, Vec<String>)) -> Option<Finding> {
     })
 }
 
-/// NVIDIA's own tool, when it's there. Other cards: nothing (no harm done).
+/// The graphics card: NVIDIA's own tool says the most (temperature, power limit, its slot).
+/// Any other card (AMD, Intel) goes by its name; Windows' own counters say how busy it is, and
+/// nothing says how hot it is without the maker's software.
 fn read_gpu() -> Option<Gpu> {
+    read_nvidia().or_else(|| {
+        let name = display_adapters().into_iter().max_by_key(|n| card_rank(n))?;
+        Some(Gpu { name, temp: None, busy: None, power_limit: None, default_power_limit: None, link_width: None, link_width_max: None })
+    })
+}
+
+/// A card you add (2) before graphics built into the processor (1): a laptop has both, and the
+/// added one is the one games use.
+fn card_rank(name: &str) -> u8 {
+    let n = name.to_ascii_lowercase();
+    let built_in = n.contains("uhd") || n.contains("iris") || n.contains("hd graphics") || n.contains("radeon(tm) graphics") || n.contains("radeon graphics") || n.contains("vega");
+    if built_in {
+        1
+    } else {
+        2
+    }
+}
+
+/// Every graphics card's name, from the registry's list of display adapters (not Windows' own
+/// stand-in, and not the pretend ones remote-desktop tools add).
+#[cfg(windows)]
+fn display_adapters() -> Vec<String> {
+    use crate::health::reg::{string_values, subkeys, Hive::LocalMachine as Lm};
+    const CLASS: &str = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+    subkeys(Lm, CLASS)
+        .into_iter()
+        .filter(|k| k.len() == 4 && k.chars().all(|c| c.is_ascii_digit()))
+        .filter_map(|k| string_values(Lm, &format!(r"{CLASS}\{k}")).into_iter().find(|(n, _)| n.eq_ignore_ascii_case("DriverDesc")).map(|(_, v)| v))
+        .filter(|n| is_real_card(n))
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn display_adapters() -> Vec<String> {
+    Vec::new()
+}
+
+fn is_real_card(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    !n.trim().is_empty() && !["basic", "remote", "virtual", "mirror", "parsec", "indirect", "idd", "citrix", "displaylink"].iter().any(|w| n.contains(w))
+}
+
+fn read_nvidia() -> Option<Gpu> {
     let o = run(
         "nvidia-smi",
         &["--query-gpu=name,temperature.gpu,utilization.gpu,power.limit,power.default_limit,pcie.link.width.current,pcie.link.width.max", "--format=csv,noheader,nounits"],
