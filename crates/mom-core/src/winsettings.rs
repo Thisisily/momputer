@@ -1106,9 +1106,11 @@ fn leftovers(m: &dyn Machine, out: &mut Vec<Finding>) {
             .settings(ENV_EDITOR),
         );
     }
-    // Compatibility settings and startup entries for programs that are gone.
+    // Compatibility settings and startup entries for programs that are gone. Yours are yours to
+    // remove; the ones for every user of the PC need an administrator, so Windows asks first.
+    let remove = |n: usize| if n == 1 { "Remove it" } else { "Remove them" };
     for (hive, id) in [(CU, "compat-orphans-user"), (LM, "compat-orphans-machine")] {
-        let gone: Vec<String> = m.raw_values(hive, LAYERS).into_iter().filter_map(|(exe, _)| gone(m, &exe)).collect();
+        let gone: Vec<String> = if hive == LM { machine_compat_orphans(m) } else { m.raw_values(hive, LAYERS).into_iter().filter_map(|(exe, _)| gone(m, &exe)).collect() };
         if gone.is_empty() {
             continue;
         }
@@ -1121,16 +1123,15 @@ fn leftovers(m: &dyn Machine, out: &mut Vec<Finding>) {
             "None",
             "Leftovers from programs you uninstalled. Harmless clutter.",
         );
-        if hive == CU {
-            f = f.fix("Remove them", false, None);
-        }
+        f = f.fix(remove(gone.len()), hive == LM, None);
         out.push(f);
     }
-    let orphans = |hive: Hive, keys: &[&str]| -> Vec<String> {
-        keys.iter().flat_map(|k| text_values(m, hive, k)).filter_map(|(name, cmd)| run_target_gone(m, &cmd).map(|_| name)).collect()
-    };
-    for (hive, keys, id) in [(CU, &[RUN][..], "startup-orphans-user"), (LM, &[RUN, RUN_32][..], "startup-orphans-machine")] {
-        let gone = orphans(hive, keys);
+    for (hive, id) in [(CU, "startup-orphans-user"), (LM, "startup-orphans-machine")] {
+        let gone: Vec<String> = if hive == LM {
+            machine_startup_orphans(m).into_iter().map(|(_, name)| name).collect()
+        } else {
+            text_values(m, CU, RUN).into_iter().filter_map(|(name, cmd)| run_target_gone(m, &cmd).map(|_| name)).collect()
+        };
         if gone.is_empty() {
             continue;
         }
@@ -1143,11 +1144,38 @@ fn leftovers(m: &dyn Machine, out: &mut Vec<Finding>) {
             "None",
             "Windows tries to start them at every sign-in and quietly fails. Left by programs you uninstalled.",
         );
-        if hive == CU {
-            f = f.fix("Remove them", false, None);
-        }
+        f = f.fix(remove(gone.len()), hive == LM, None);
         out.push(f);
     }
+}
+
+/// Variables that mean the same place for every user of the PC. A path that goes through any
+/// other one (%USERPROFILE%, %APPDATA%...) is somewhere else for the administrator who'd do the
+/// removing than for you, so mom doesn't judge it "gone" for the whole PC.
+const SAME_FOR_EVERYONE: &[&str] = &[
+    "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "CommonProgramFiles", "CommonProgramFiles(x86)", "CommonProgramW6432", "ProgramData", "ALLUSERSPROFILE", "PUBLIC",
+    "SystemRoot", "windir", "SystemDrive",
+];
+
+/// Does `text` mean the same thing whoever reads it: no %VARIABLE% but the ones every user shares?
+fn same_for_everyone(text: &str) -> bool {
+    text.split('%').skip(1).step_by(2).all(|var| SAME_FOR_EVERYONE.iter().any(|v| v.eq_ignore_ascii_case(var)))
+}
+
+/// Startup entries for every user (the two Run keys only administrators can change) whose
+/// program is gone: (key, name).
+fn machine_startup_orphans(m: &dyn Machine) -> Vec<(&'static str, String)> {
+    [RUN, RUN_32]
+        .into_iter()
+        .flat_map(|key| text_values(m, LM, key).into_iter().map(move |(name, cmd)| (key, name, cmd)))
+        .filter(|(_, _, cmd)| same_for_everyone(cmd) && run_target_gone(m, cmd).is_some())
+        .map(|(key, name, _)| (key, name))
+        .collect()
+}
+
+/// Compatibility settings for every user whose program is gone: the programs, by path.
+fn machine_compat_orphans(m: &dyn Machine) -> Vec<String> {
+    m.raw_values(LM, LAYERS).into_iter().map(|(exe, _)| exe).filter(|exe| same_for_everyone(exe) && gone(m, exe).is_some()).collect()
 }
 
 fn plural_folders(n: usize) -> String {
@@ -1273,6 +1301,9 @@ fn admin_changes(m: &dyn Machine, id: &str) -> Option<Vec<Change>> {
         "service-shutdown-wait" => vec![set(LM, CONTROL, "WaitToKillServiceTimeout", Raw::string("5000"))],
         "update-policy-off" => vec![delete(LM, UPDATE_POLICY, "NoAutoUpdate")],
         "system-path-missing" => vec![without_gone(m, LM, SYSTEM_ENV)?],
+        // Read from keys only administrators can change, and judged again by the administrator's mom.
+        "startup-orphans-machine" => machine_startup_orphans(m).into_iter().map(|(key, name)| delete(LM, key, &name)).collect(),
+        "compat-orphans-machine" => machine_compat_orphans(m).into_iter().map(|exe| delete(LM, LAYERS, &exe)).collect(),
         _ => {
             let name = id.strip_prefix("service-off:")?;
             let s = SERVICES_WATCHED.iter().find(|s| s.fix && s.name == name)?;
@@ -1294,6 +1325,8 @@ pub fn is_admin_fix(id: &str) -> bool {
             | "service-shutdown-wait"
             | "update-policy-off"
             | "system-path-missing"
+            | "startup-orphans-machine"
+            | "compat-orphans-machine"
     ) || id.strip_prefix("service-off:").is_some_and(|n| SERVICES_WATCHED.iter().any(|s| s.fix && s.name == n))
 }
 
@@ -2123,11 +2156,50 @@ mod tests {
         assert_eq!(get(&m, "env-missing").now, r"JAVA_HOME → C:\Program Files\Java\jdk-old");
         assert_eq!(get(&m, "compat-orphans-user").now, "game.exe");
         assert_eq!(get(&m, "startup-orphans-user").now, "Updater");
+        assert!(get(&m, "startup-orphans-user").fix.is_some_and(|f| !f.admin && f.label == "Remove it"));
         // Removing the gone folders keeps the rest, in order, as the same type.
         let fix = user_changes(&m, "user-path-missing").unwrap();
         assert_eq!(fix, vec![set(CU, USER_ENV, "Path", Raw::text(REG_EXPAND_SZ, r"C:\Tools\bin;;\\server\share;%NOT_SET%\x;E:\usb\bin"))]);
         m.files.insert(r"c:\users\pat\.oldtool\bin".into());
         assert!(!ids(&m).contains(&"user-path-missing".to_string()));
+    }
+
+    #[test]
+    fn leftovers_for_every_user_go_too_with_an_administrator() {
+        let mut m = Fake::new().file(r"C:\Program Files\Atlas\atlas.exe");
+        m.env.insert("ProgramFiles".into(), r"C:\Program Files".into());
+        m.env.insert("USERPROFILE".into(), r"C:\Users\pat".into());
+        // In the startup list for every user: two whose program is gone (one of them in the 32-bit
+        // list, one spelled with a variable every user shares), and four that stay.
+        m.put(LM, RUN, "NimbusAgent", Raw::string(r#""C:\Program Files\Nimbus\Security App\agent.exe" --tray"#));
+        m.put(LM, RUN_32, "CopperlineUpdate", Raw::text(REG_EXPAND_SZ, r"%ProgramFiles%\Copperline\update.exe"));
+        m.put(LM, RUN, "Atlas", Raw::string(r"C:\Program Files\Atlas\atlas.exe"));
+        m.put(LM, RUN, "PerUser", Raw::text(REG_EXPAND_SZ, r"%USERPROFILE%\AppData\Local\Gone\gone.exe"));
+        m.put(LM, RUN, "SecurityHealth", Raw::string(r"rundll32.exe C:\gone.dll,Start"));
+        m.put(LM, RUN, "OnAStick", Raw::string(r"E:\portable\tool.exe"));
+        m.put(LM, LAYERS, r"C:\Games\Old\game.exe", Raw::string("~ RUNASADMIN"));
+        m.put(LM, LAYERS, r"C:\Program Files\Atlas\atlas.exe", Raw::string("~ HIGHDPIAWARE"));
+        let startup = get(&m, "startup-orphans-machine");
+        assert_eq!(startup.now, "NimbusAgent, CopperlineUpdate");
+        assert!(startup.fix.as_ref().is_some_and(|f| f.admin && f.label == "Remove them"), "something to do, and Windows asks first");
+        let compat = get(&m, "compat-orphans-machine");
+        assert_eq!(compat.now, "game.exe");
+        assert!(compat.fix.as_ref().is_some_and(|f| f.admin && f.label == "Remove it"));
+        assert!(is_admin_fix("startup-orphans-machine") && is_admin_fix("compat-orphans-machine") && !is_admin_fix("startup-orphans-user"));
+        // What an administrator's mom would change: exactly those, each in its own list.
+        assert_eq!(admin_changes(&m, "startup-orphans-machine").unwrap(), vec![delete(LM, RUN, "NimbusAgent"), delete(LM, RUN_32, "CopperlineUpdate")]);
+        assert_eq!(admin_changes(&m, "compat-orphans-machine").unwrap(), vec![delete(LM, LAYERS, r"C:\Games\Old\game.exe")]);
+        // Done, the findings are gone and everything else is as it was.
+        let said = fix_elevated_with(&m, &m, "startup-orphans-machine").unwrap();
+        assert!(said.contains("NimbusAgent was") && said.contains("agent.exe"), "{said}");
+        fix_elevated_with(&m, &m, "compat-orphans-machine").unwrap();
+        assert!(!ids(&m).iter().any(|id| id.ends_with("-orphans-machine")));
+        let left: Vec<String> = text_values(&m, LM, RUN).into_iter().map(|(name, _)| name).collect();
+        assert_eq!(left, ["Atlas", "PerUser", "SecurityHealth", "OnAStick"]);
+        assert!(text_values(&m, LM, RUN_32).is_empty() && m.raw_values(LM, LAYERS).len() == 1);
+        // A path through a variable that's yours alone is never judged for the whole PC.
+        assert!(same_for_everyone(r"%ProgramFiles%\x.exe") && same_for_everyone(r"C:\x.exe") && same_for_everyone(r"%programdata%\a\%SystemRoot%"));
+        assert!(!same_for_everyone(r"%USERPROFILE%\x.exe") && !same_for_everyone(r"%ProgramFiles%\%APPDATA%\x.exe") && !same_for_everyone(r"%LOCALAPPDATA%\x"));
     }
 
     #[test]
