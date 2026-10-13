@@ -8,6 +8,7 @@ photographed; the composed pictures (docs/art/*.html) are pages too. Nothing is 
 so when the app changes, run this again.
 
 Needs: Python 3.8+, Microsoft Edge, and the websocket-client package (pip install websocket-client).
+The site's pictures (site/shots/) are cut from the ones in docs/, which also needs Pillow.
 """
 import base64
 import functools
@@ -49,7 +50,52 @@ JOBS = [
     ("showcase", "/docs/art/showcase.html", 2000, 1125, 1, "dark", [1.5]),
 ]
 # Pictures the install page keeps its own copies of.
-COPIES = [("docs/social-preview.png", "site/og.png"), ("docs/screenshot-dark.png", "site/screenshot.png")]
+COPIES = [("docs/social-preview.png", "site/og.png")]
+
+# The site's own pictures, in site/shots/: cut from the screenshots above and saved as lossless
+# WebP (smaller than a scaled-down copy, and it stays sharp). Nothing is resized, except that
+# BIG MODE also gets a half-size copy for phones.
+BELOW_MOM = (0, 584, 840, 1520)  # the tabs and what's under them, without mom's card
+# name, picture in docs/, box to keep (None = all of it), widths to save (None = as it is)
+SITE_SHOTS = [
+    ("widget-dark", "screenshot-dark", None, [None]),
+    ("widget-light", "screenshot-light", None, [None]),
+    ("running", "screenshot-dark", BELOW_MOM, [None]),
+    ("speed", "screenshot-speed", BELOW_MOM, [None]),
+    ("upkeep", "screenshot-light", BELOW_MOM, [None]),
+    ("checkup", "screenshot-health", BELOW_MOM, [None]),
+    ("rooms", "screenshot-rooms", BELOW_MOM, [None]),
+    ("rules", "screenshot-rules", BELOW_MOM, [None]),
+    ("details", "screenshot-details", (0, 100, 840, 1520), [None]),
+    ("big-dark", "screenshot-big", None, [None, 1280]),
+    ("big-light", "screenshot-big-light", None, [None, 1280]),
+]
+
+
+def site_shots(only):
+    """Cuts the site's pictures from the ones in docs/. Needs Pillow; without it they stay as they are."""
+    jobs = [j for j in SITE_SHOTS if not only or any(w in j[1] for w in only)]
+    if not jobs:
+        return
+    try:
+        from PIL import Image
+    except ImportError:
+        print("site/shots/ not remade: that needs Pillow (pip install pillow)")
+        return
+    out = os.path.join(ROOT, "site", "shots")
+    os.makedirs(out, exist_ok=True)
+    for name, source, box, widths in jobs:
+        picture = Image.open(os.path.join(ROOT, "docs", source + ".png")).convert("RGB")
+        if box:
+            picture = picture.crop(box)
+        for width in widths:
+            if width:
+                small = picture.resize((width, round(picture.height * width / picture.width)), Image.LANCZOS)
+                small.save(os.path.join(out, f"{name}-{width}.webp"), quality=86, method=6)
+                print(f"site/shots/{name}-{width}.webp  {small.width} x {small.height}")
+            else:
+                picture.save(os.path.join(out, name + ".webp"), lossless=True, quality=100, method=6)
+                print(f"site/shots/{name}.webp  {picture.width} x {picture.height}")
 
 
 class Quiet(http.server.SimpleHTTPRequestHandler):
@@ -108,6 +154,7 @@ def main():
             if not only or any(w in src for w in only):
                 shutil.copyfile(os.path.join(ROOT, src), os.path.join(ROOT, dst))
                 print(f"{dst}  (copy of {src})")
+        site_shots(only)
     finally:
         edge.terminate()
         try:

@@ -22,6 +22,17 @@
   const meta = $("dl-meta");
   const alt = $("dl-alt");
 
+  // The page's other download buttons (the top bar, the first install step) go where the main one goes.
+  const follow = () => {
+    for (const a of document.querySelectorAll("a[data-dl]")) {
+      a.href = dl.href;
+      const light = a.querySelector(".led");
+      if (light) light.className = led.className;
+      const words = a.querySelector("[data-dl-label]");
+      if (words) words.textContent = label.textContent;
+    }
+  };
+
   // Phones, Macs and Linux get a gentle note: momputer is for Windows.
   const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
   if (!/^win/i.test(platform) && !/Windows NT/i.test(navigator.userAgent)) $("not-windows").hidden = false;
@@ -65,6 +76,7 @@
     } else {
       $("hash-cmd").textContent = `Get-FileHash ${file}`;
     }
+    follow();
   }
 
   // No release published yet (or one without an installer): send people to the releases page.
@@ -79,6 +91,7 @@
       ".",
     );
     alt.hidden = false;
+    follow();
   }
 
   // GitHub didn't answer (offline, blocked, or too many questions this hour).
@@ -87,6 +100,7 @@
     led.className = "led";
     label.textContent = "Download from GitHub";
     meta.replaceChildren("Couldn't ask GitHub for the newest version, so this opens its releases page. Pick the file ending in -setup.exe.");
+    follow();
   }
 
   const abort = new AbortController();

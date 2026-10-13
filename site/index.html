@@ -4,14 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>momputer: a mom for you, your computer and your AIs</title>
-  <meta name="description" content="She turns off what AI agents left running, frees up disk space, and checks your drives, memory, sound and Windows settings. Download momputer for Windows and install it in three steps.">
+  <meta name="description" content="She turns off what AI agents left running, frees up disk space, checks your drives, memory, sound and Windows settings, and tidies your folders. A widget for Windows 10 and 11, free for personal use.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#ececec" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <link rel="canonical" href="https://thisisily.github.io/momputer/">
   <meta property="og:type" content="website">
+  <meta property="og:url" content="https://thisisily.github.io/momputer/">
   <meta property="og:title" content="momputer: a mom for you, your computer and your AIs">
-  <meta property="og:description" content="She turns off what AI agents left running, frees up disk space, and checks your drives, memory, sound and Windows settings. For Windows 10 and 11.">
+  <meta property="og:description" content="She turns off what AI agents left running, frees up disk space, checks your drives, memory, sound and Windows settings, and tidies your folders. For Windows 10 and 11.">
   <meta property="og:image" content="https://thisisily.github.io/momputer/og.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
   <meta property="og:image:alt" content="Mom, a cartoon granny with her hair in a bun and giant round glasses, next to the dot-matrix word momputer">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -22,32 +26,43 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <a class="skip" href="#install">Skip to how to install</a>
+  <a class="skip" href="#main">Skip to content</a>
 
-  <header class="bar wrap">
-    <a class="brand" href="./" aria-label="momputer home">
-      <span class="led green" aria-hidden="true"></span>
-      <span class="wordmark dot">momputer</span>
-    </a>
-    <nav class="nav" aria-label="On this page">
-      <a href="#install" class="wide-only">Install</a>
-      <a href="#faq" class="wide-only">Questions</a>
-      <a href="https://github.com/Thisisily/momputer" class="gh">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.17c-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
-        <span>GitHub</span>
+  <header class="top">
+    <div class="bar wrap">
+      <a class="brand" href="./" aria-label="momputer home">
+        <span class="led green" aria-hidden="true"></span>
+        <span class="wordmark dot">momputer</span>
       </a>
-    </nav>
+      <nav class="nav" aria-label="On this page">
+        <a href="#tour">What she does</a>
+        <a href="#agents">For agents</a>
+        <a href="#never">Promises</a>
+        <a href="#install">Install</a>
+        <a href="#faq">Questions</a>
+      </nav>
+      <div class="bar-end">
+        <a class="gh" href="https://github.com/Thisisily/momputer" aria-label="momputer on GitHub">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2.17c-3.2.7-3.88-1.36-3.88-1.36-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+          <span class="gh-label">GitHub</span>
+        </a>
+        <a class="primary compact" id="bar-dl" data-dl href="https://github.com/Thisisily/momputer/releases/latest" hidden>
+          <span class="led" aria-hidden="true"></span>
+          <span>Download</span>
+        </a>
+      </div>
+    </div>
   </header>
 
-  <main class="wrap">
+  <main class="wrap" id="main" tabindex="-1">
     <section class="hero card" aria-labelledby="title">
       <div class="hero-text">
         <div class="hello">
           <div class="screen"><img src="mom.svg" width="112" height="112" alt="Mom: a cartoon granny with her hair in a bun and giant round glasses, smiling"></div>
           <p class="wordmark-big dot" aria-hidden="true">momputer</p>
         </div>
-        <h1 id="title">A mom for you, your computer and your AIs.</h1>
-        <p class="lead">She turns off what Claude Code, Codex and friends left running, frees up disk space, and checks your drives, memory, sound and Windows settings. A little widget by the clock, and BIG MODE when you want the whole picture.</p>
+        <h1 id="title"><span class="vh">momputer: </span>A mom for you, your computer and your AIs.</h1>
+        <p class="lead">She turns off what Claude Code, Codex and friends left running, frees up disk space, checks your drives, memory, sound and Windows settings, and tidies your folders. She always shows you first.</p>
 
         <div class="get">
           <a class="primary" id="dl" href="https://github.com/Thisisily/momputer/releases/latest">
@@ -62,13 +77,240 @@
         <ul class="lights" aria-label="In short">
           <li><span class="led green" aria-hidden="true"></span>Free for personal use</li>
           <li><span class="led green" aria-hidden="true"></span>Sends nothing about you</li>
-          <li><span class="led green" aria-hidden="true"></span>Asks before it cleans</li>
+          <li><span class="led green" aria-hidden="true"></span>Asks before she cleans</li>
         </ul>
       </div>
 
-      <figure class="shot">
-        <img src="screenshot.png" width="840" height="1520" alt="The widget: mom saying 8 leftovers, one tap and they're gone, a Clean up 8 leftovers button, and the programs Claude left running, each with a red light and a Stop button">
+      <figure class="hero-shot">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="shots/widget-dark.webp">
+          <img src="shots/widget-light.webp" width="840" height="1520" fetchpriority="high" alt="The momputer widget. Mom smiles from her round screen next to a dot-matrix 8, the words 8 leftovers, one tap and they're gone, and a Clean up 8 leftovers button. Below are the tabs Running, Upkeep, Rooms and House rules.">
+        </picture>
       </figure>
+    </section>
+
+    <section class="why" aria-label="Why mom">
+      <p class="statement">AI agents start dev servers, watchers and headless browsers, and nobody turns them off. Mom knows which agent started what, shows you what was left behind, and cleans it up.</p>
+      <ul class="legend">
+        <li><span class="led green" aria-hidden="true"></span>Green lights are in use.</li>
+        <li><span class="led red" aria-hidden="true"></span>Red ones were left behind.</li>
+      </ul>
+    </section>
+
+    <section class="section" id="tour" aria-labelledby="tour-title">
+      <div class="section-head">
+        <h2 id="tour-title">What she does</h2>
+        <p>A look around the widget.</p>
+      </div>
+
+      <div class="tour">
+        <article class="tile card wide">
+          <div class="tile-text">
+            <h3>Running</h3>
+            <p>Everything your agents started, who started it, and one button to stop what was left behind. Speed says why the PC feels slow right now, with a fix for each reason.</p>
+            <details class="more">
+              <summary>More<span class="vh"> about Running</span></summary>
+              <ul>
+                <li>Programs, Startup and Browsers show what's open, what starts with Windows, and every browser extension, with a switch for each.</li>
+                <li>If leftovers start using a lot of CPU, she tells you. If you let her, she turns them off herself.</li>
+              </ul>
+            </details>
+          </div>
+          <div class="tile-shots two">
+            <img src="shots/running.webp" width="840" height="936" loading="lazy" alt="The Running tab. Under Left behind, four dev servers and watchers Claude left in a project called storefront, each with a red light, its memory, its age and a Stop button.">
+            <img src="shots/speed.webp" width="840" height="936" loading="lazy" alt="The Speed tab: 2 things are slowing your PC down. Chrome is drawing without your graphics card, with a button that copies chrome://restart.">
+          </div>
+        </article>
+
+        <article class="tile card">
+          <div class="tile-text">
+            <h3>Upkeep</h3>
+            <p>What can be deleted, and exactly what it is, before anything goes.</p>
+            <details class="more">
+              <summary>More<span class="vh"> about Upkeep</span></summary>
+              <ul>
+                <li>Storage: agents' scratch folders, old build folders, developer and browser caches, old installers.</li>
+                <li>Apps: the apps and Steam games you haven't opened in a year, with how big each one is and where it lives.</li>
+                <li>Files: copies of the same file, and big files nobody opened in a year.</li>
+                <li>Old conversations aren't deleted. Mom moves them to another drive and leaves a link, so your agents still open them.</li>
+              </ul>
+            </details>
+          </div>
+          <div class="tile-shots">
+            <img src="shots/upkeep.webp" width="840" height="936" loading="lazy" alt="The Upkeep tab on Storage: 27.9 GB mom can free up, then a list with old conversations, Claude Code scratch and Codex leftovers, each with its size.">
+          </div>
+        </article>
+
+        <article class="tile card">
+          <div class="tile-text">
+            <h3>Checkup</h3>
+            <p>Drives, memory, graphics, sound, updates and Windows settings: what's wrong, and the button that fixes it.</p>
+            <details class="more">
+              <summary>More<span class="vh"> about the checkup</span></summary>
+              <ul>
+                <li>An SSD's own health report: how much of its rated life is used, and how hot it runs.</li>
+                <li>Memory running below the speed it's made for.</li>
+                <li>Sound devices an uninstalled app left behind.</li>
+                <li>Fixes to your own settings are backed up and can be undone.</li>
+              </ul>
+            </details>
+          </div>
+          <div class="tile-shots">
+            <img src="shots/checkup.webp" width="840" height="936" loading="lazy" alt="The checkup in Upkeep: dot meters for free space on drives C and D and for memory in use. The last dots of drive C are red because it's nearly full.">
+          </div>
+        </article>
+
+        <article class="tile card">
+          <div class="tile-text">
+            <h3>Rooms</h3>
+            <p>Point her at a messy folder. She grades it and tidies it, with undo.</p>
+            <details class="more">
+              <summary>More<span class="vh"> about Rooms</span></summary>
+              <ul>
+                <li>She spots look-alike folders, screenshot piles, empty folders and misspelled names.</li>
+                <li>You get a plan to apply and undo with one click, or a chore list to paste to your agent.</li>
+                <li>She never moves your projects. She only tidies inside them.</li>
+              </ul>
+            </details>
+          </div>
+          <div class="tile-shots">
+            <img src="shots/rooms.webp" width="840" height="936" loading="lazy" alt="The Rooms tab on a folder called field-notes, graded F. Mom says let's clean this folder together, and lists what's wrong: a misspelled folder name, loose report files and look-alike folders.">
+          </div>
+        </article>
+
+        <article class="tile card">
+          <div class="tile-text">
+            <h3>House rules</h3>
+            <p>One set of rules every agent is given, and checked against.</p>
+            <details class="more">
+              <summary>More<span class="vh"> about House rules</span></summary>
+              <ul>
+                <li>Stop what you start. Reports go in <code>Documents/</code>. One thing, one folder.</li>
+                <li>Mom writes them into Claude Code's, Codex's and Gemini's instructions, in a marked block she can take out again.</li>
+                <li>The Skills view lists the eleven skills, with what to say.</li>
+              </ul>
+            </details>
+          </div>
+          <div class="tile-shots">
+            <img src="shots/rules.webp" width="840" height="936" loading="lazy" alt="The House rules tab with its two views, Rules and Skills. Mom's house rules begin: stop what you start, and don't start a second copy.">
+          </div>
+        </article>
+
+        <article class="tile card full">
+          <div class="tile-text">
+            <h3><span class="badge dot">BIG MODE</span></h3>
+            <p>One button turns the widget into a full window, with your PC on mom's desk, drawn with the parts it really has. Each part has a light. Tap one and mom tells you what's wrong and how to fix it.</p>
+          </div>
+          <div class="tile-shots">
+            <picture>
+              <source media="(prefers-color-scheme: dark)" srcset="shots/big-dark-1280.webp 1280w, shots/big-dark.webp 2560w" sizes="(min-width: 1264px) 1116px, calc(100vw - 52px)">
+              <img src="shots/big-light-1280.webp" srcset="shots/big-light-1280.webp 1280w, shots/big-light.webp 2560w" sizes="(min-width: 1264px) 1116px, calc(100vw - 52px)" width="2560" height="1640" loading="lazy" alt="BIG MODE: a full window with mom on a monitor on her desk, next to an open PC tower with a small light on each part. A card tells you about the part you picked, and the widget's lists run down the right side.">
+            </picture>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="agents" aria-labelledby="agents-title">
+      <div class="section-head">
+        <h2 id="agents-title">For your agents</h2>
+        <p>Agents can ask mom themselves, and she checks in on them.</p>
+      </div>
+
+      <div class="pair">
+        <article class="card block">
+          <h3>The <code>mom</code> command</h3>
+          <p>What the widget knows, in a terminal. The read-only commands take <code>--json</code> for scripts and agents.</p>
+          <dl class="cmds">
+            <div><dt><code>mom leftovers</code></dt><dd>only what was left behind</dd></div>
+            <div><dt><code>mom stop mine</code></dt><dd>stop what your session started</dd></div>
+            <div><dt><code>mom trash</code></dt><dd>what can go, and what each clean-up does</dd></div>
+            <div><dt><code>mom pc</code></dt><dd>what the PC is, and its protection, updates and hardware</dd></div>
+            <div><dt><code>mom tidy &lt;folder&gt;</code></dt><dd>grade a folder and list what to fix</dd></div>
+            <div><dt><code>mom undo</code></dt><dd>undo the last tidy-up</dd></div>
+          </dl>
+          <p class="go"><a href="https://github.com/Thisisily/momputer/blob/main/docs/in-detail.md#the-mom-command">Every command</a></p>
+        </article>
+
+        <article class="card block">
+          <h3>Check-ins</h3>
+          <p>Before an agent says it's done, mom checks in and asks it to stop what it started.</p>
+          <ul class="rows">
+            <li><b>When a session starts</b> <span>She hands the agent the house rules.</span></li>
+            <li><b>When the agent thinks it's done</b> <span>She asks about servers still running and new clutter in the project. She mentions each thing once.</span></li>
+            <li><b>When the session ends</b> <span>She notes what it left behind.</span></li>
+          </ul>
+          <p class="small">They're hooks, for Claude Code and Codex. Switch them on under House rules, or run <code>mom install claude-hooks codex-hooks</code>.</p>
+        </article>
+      </div>
+
+      <article class="card block skills">
+        <div class="skills-head">
+          <p class="readout" aria-hidden="true"><span class="dot">11</span></p>
+          <div>
+            <h3>Eleven skills</h3>
+            <p>Each one tidies one room of your digital life. It looks first, shows one page of what it found, and acts only on what you tick. They work without momputer, in Claude Code or Codex.</p>
+          </div>
+        </div>
+
+        <div class="skills-install">
+          <p class="small">In Claude Code, all of them in one line:</p>
+          <div class="code">
+            <pre><code id="skills-cmd">/plugin install momputer-skills --marketplace Thisisily/momputer</code></pre>
+            <button class="copy" type="button" data-for="skills-cmd">Copy</button>
+          </div>
+        </div>
+
+        <ul class="skill-list">
+          <li><b>Mom</b> <span>Teaches your agent to clean up after itself.</span> <span class="say">Say: "Clean up after yourself"</span></li>
+          <li><b>Tidy folders</b> <span>Puts loose papers, old installers and stray games where they belong.</span> <span class="say">Say: "Tidy up my Downloads"</span></li>
+          <li><b>Desktop icons</b> <span>Clears dead shortcuts, duplicates and loose files off your desktop.</span> <span class="say">Say: "Clean up my desktop"</span></li>
+          <li><b>Rename documents</b> <span>Gives scans and downloads names you can find later.</span> <span class="say">Say: "Rename my scans so I can find them"</span></li>
+          <li><b>Disk space report</b> <span>Shows where your disk space went and the safe way to get it back.</span> <span class="say">Say: "Where did my disk space go?"</span></li>
+          <li><b>Backup checkup</b> <span>Tells you what you'd lose if this disk died today.</span> <span class="say">Say: "Are my files backed up?"</span></li>
+          <li><b>Inbox cleanup</b> <span>Reviews two months of Gmail and shows what to unsubscribe from.</span> <span class="say">Say: "Clean up my Gmail"</span></li>
+          <li><b>Calendar fixer</b> <span>Finds double bookings, days with no breaks and stale recurring meetings.</span> <span class="say">Say: "Fix my calendar"</span></li>
+          <li><b>Drive audit</b> <span>Shows what you share with anyone on Google Drive, and what fills it.</span> <span class="say">Say: "Audit my Google Drive"</span></li>
+          <li><b>Subscription audit</b> <span>Finds what you pay for every month and what it costs a year.</span> <span class="say">Say: "What am I subscribed to?"</span></li>
+          <li><b>Bookmark cleanup</b> <span>Finds duplicate, dead and never-opened bookmarks.</span> <span class="say">Say: "Clean up my bookmarks"</span></li>
+          <li class="skill-more"><a href="https://github.com/Thisisily/momputer/tree/main/skills">All eleven on GitHub, and other ways to install them</a></li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="section" id="never" aria-labelledby="never-title">
+      <div class="section-head">
+        <h2 id="never-title">What mom will never do</h2>
+        <p>She shows you first, every time.</p>
+      </div>
+
+      <div class="never">
+        <div class="never-main">
+          <ul class="card block rows promises">
+            <li><b>Delete anything without showing you first</b> <span>Every clean-up lists what goes and what stays. You press, then you confirm.</span></li>
+            <li><b>Throw your own files away for good</b> <span>Those go to the Recycle Bin.</span></li>
+            <li><b>Stop Windows' own processes, or an agent itself</b> <span>Or anything you marked "keep".</span></li>
+            <li><b>Follow a link while she deletes a folder</b> <span>What the link points to is left alone.</span></li>
+            <li><b>Use administrator rights without asking</b> <span>A few clean-ups need them. When you press their button, Windows asks you first.</span></li>
+            <li><b>Send anything about you or your PC anywhere</b> <span>The one thing she asks the internet is right below.</span></li>
+          </ul>
+
+          <article class="card block privacy">
+            <p class="readout" aria-hidden="true"><span class="dot">1</span></p>
+            <div>
+              <h3>One question a day</h3>
+              <p>It's the one thing she asks the internet: is there a newer version? One request to GitHub, the same from every copy. A switch in Settings turns it off.</p>
+            </div>
+          </article>
+
+          <p class="go"><a href="https://github.com/Thisisily/momputer/blob/main/docs/in-detail.md#what-mom-will-never-do">The full list</a></p>
+        </div>
+
+        <figure class="card proof">
+          <img src="shots/details.webp" width="840" height="1420" loading="lazy" alt="The details of a clean-up, before anything is deleted: a bar showing 1.2 GB can go and 14 GB stays, a card saying what the button does, and a tick box beside each folder that goes, with an Untick all button.">
+          <figcaption>Before you press: what goes, what stays, and what the button does.</figcaption>
+        </figure>
+      </div>
     </section>
 
     <section class="section" id="install" aria-labelledby="install-title">
@@ -80,7 +322,13 @@
         <li class="card step">
           <span class="step-num dot" aria-hidden="true">1</span>
           <h3>Download</h3>
-          <p>Press <b>Download for Windows</b> above. If you end up on GitHub's releases page, open <b>Assets</b> and pick the file ending in <code>-setup.exe</code>.</p>
+          <p>
+            <a class="primary compact" data-dl href="https://github.com/Thisisily/momputer/releases/latest">
+              <span class="led" aria-hidden="true"></span>
+              <span data-dl-label>Download for Windows</span>
+            </a>
+          </p>
+          <p>If you end up on GitHub's releases page, open <b>Assets</b> and pick the file ending in <code>-setup.exe</code>.</p>
           <p class="small">If your browser says the file isn't commonly downloaded, that's only because it's new: choose <b>Keep</b>.</p>
         </li>
         <li class="card step">
@@ -102,27 +350,43 @@
           <span class="step-num dot" aria-hidden="true">3</span>
           <h3>Say hi to mom</h3>
           <p>She lives in the tray, by the clock. If you don't see her, click the little <b>^</b> arrow there.</p>
+          <div class="mock tray" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></svg>
+            <span class="tray-mom"><img src="mom.svg" width="28" height="28" loading="lazy" alt=""><span class="led green"></span></span>
+            <span class="tray-clock">10:24</span>
+          </div>
           <p><b>Click</b> her to open the widget. <b>Right-click</b> her for "Clean up leftovers". Closing the widget just tucks it away; she keeps watching.</p>
+          <p>The arrows in the widget's title bar are BIG MODE.</p>
         </li>
       </ol>
+
+      <div class="after">
+        <article class="card block verify" id="verify" aria-labelledby="verify-title">
+          <div class="verify-head">
+            <h3 id="verify-title">Check the download</h3>
+            <span class="tag">optional</span>
+          </div>
+          <p>Every release comes with <a id="sums" href="https://github.com/Thisisily/momputer/releases/latest"><code>SHA256SUMS.txt</code></a>, a fingerprint for each file. To check yours, open PowerShell (Start, type <b>PowerShell</b>) and run:</p>
+          <div class="code">
+            <pre><code id="hash-cmd">Get-FileHash "$HOME\Downloads\momputer_*-setup.exe"</code></pre>
+            <button class="copy" type="button" id="copy" data-for="hash-cmd">Copy</button>
+          </div>
+          <p id="hash-says">The <b>Hash</b> it prints should match the line for that file in <code>SHA256SUMS.txt</code>. Capital or small letters don't matter.</p>
+        </article>
+
+        <article class="card block updates" id="updates" aria-labelledby="updates-title">
+          <h3 id="updates-title">Updates</h3>
+          <p>When a newer version is out, a red light shows on the <b>i</b> in the widget's title bar, with the button to get it.</p>
+          <p class="i-light" aria-hidden="true"><span class="i-btn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M12 11.2v5.3"/><path d="M12 7.7h.01"/></svg><span class="led red"></span></span></p>
+          <p class="small">Mom asks GitHub once a day. A switch in Settings turns that off.</p>
+        </article>
+      </div>
     </section>
 
-    <section class="section card verify" id="verify" aria-labelledby="verify-title">
-      <div class="verify-head">
-        <h2 id="verify-title">Check the download</h2>
-        <span class="tag">optional</span>
-      </div>
-      <p>Every release comes with <a id="sums" href="https://github.com/Thisisily/momputer/releases/latest"><code>SHA256SUMS.txt</code></a>, a fingerprint for each file. To check yours, open PowerShell (Start, type <b>PowerShell</b>) and run:</p>
-      <div class="code">
-        <pre><code id="hash-cmd">Get-FileHash "$HOME\Downloads\momputer_*-setup.exe"</code></pre>
-        <button class="copy" type="button" id="copy" data-for="hash-cmd">Copy</button>
-      </div>
-      <p id="hash-says">The <b>Hash</b> it prints should match the line for that file in <code>SHA256SUMS.txt</code>. Capital or small letters don't matter.</p>
-    </section>
-
-    <section class="section" id="faq" aria-labelledby="faq-title">
+    <section class="section faq-sec" id="faq" aria-labelledby="faq-title">
       <div class="section-head">
         <h2 id="faq-title">Questions</h2>
+        <p>Something else? <a href="https://github.com/Thisisily/momputer/issues">Ask on GitHub</a>.</p>
       </div>
       <div class="faq">
         <details class="card">
@@ -131,13 +395,35 @@
           <p class="small">The license is <a href="https://github.com/Thisisily/momputer/blob/main/LICENSE">PolyForm Noncommercial 1.0.0</a>.</p>
         </details>
         <details class="card">
+          <summary>Does it run on Mac or Linux?</summary>
+          <p>No. momputer is for Windows 10 and 11. macOS and Linux are on the roadmap.</p>
+        </details>
+        <details class="card">
+          <summary>Do I need an account?</summary>
+          <p>No. There's nothing to sign up for and nothing to sign in to.</p>
+        </details>
+        <details class="card">
+          <summary>Why does Windows say "unknown publisher"?</summary>
+          <p>The builds aren't code-signed yet, so Windows can't show who made them. Choose <b>More info</b>, then <b>Run anyway</b>.</p>
+          <p>Releases are built from the repository by GitHub Actions. To be sure your file matches the one in the release, <a href="#verify">check the download</a>.</p>
+        </details>
+        <details class="card">
           <summary>Does it need administrator rights?</summary>
           <p>Only to install, once. momputer installs for everyone on the PC, in Program Files, so Windows asks.</p>
-          <p>Mom herself never runs as administrator. A few clean-ups need one (like Windows Update's leftover downloads); when you press their button, Windows asks you first.</p>
+          <p>Mom herself never runs as administrator. A few clean-ups need those rights (like Windows Update's leftover downloads); when you press their button, Windows asks you first.</p>
         </details>
         <details class="card">
           <summary>Does it send anything anywhere?</summary>
           <p>Nothing about you or your PC. The one thing momputer asks the internet is whether there's a newer version: one request to GitHub a day, the same from every copy. A switch in Settings turns that off. Links in the widget open in your browser.</p>
+        </details>
+        <details class="card">
+          <summary>Which agents does she know?</summary>
+          <p>Claude Code, Codex, Cursor, Gemini CLI and GitHub Copilot, plus Goose, Amp and others.</p>
+          <p>Agents leave a marker on everything they launch. Mom reads those markers, and only those: never the rest of a program's environment. <a href="https://github.com/Thisisily/momputer/blob/main/docs/in-detail.md#how-mom-knows-who-did-it">How she knows who started what</a>.</p>
+        </details>
+        <details class="card">
+          <summary>Do the skills need momputer?</summary>
+          <p>No. They work without it, in Claude Code or Codex. They're under the Apache License 2.0: free for any use, companies included.</p>
         </details>
         <details class="card">
           <summary>How do I uninstall it?</summary>
@@ -153,11 +439,19 @@
   </main>
 
   <footer class="foot wrap">
-    <div class="foot-mom"><img src="mom.svg" width="40" height="40" alt=""></div>
-    <p>momputer is made by <a href="https://github.com/Thisisily">Ilya Arbabi</a>. Source, issues and releases are on <a href="https://github.com/Thisisily/momputer">GitHub</a>.</p>
-    <p class="small">Free for personal use under <a href="https://github.com/Thisisily/momputer/blob/main/LICENSE">PolyForm Noncommercial 1.0.0</a>. Set in Geist and Doto (SIL Open Font License).</p>
+    <div class="foot-mom"><img src="mom.svg" width="48" height="48" loading="lazy" alt=""></div>
+    <p>momputer is made by <a href="https://github.com/Thisisily">Ilya Arbabi</a>. Mom says hi c:</p>
+    <ul class="foot-links">
+      <li><a href="https://github.com/Thisisily/momputer">GitHub</a></li>
+      <li><a href="https://github.com/Thisisily/momputer/releases">Releases</a></li>
+      <li><a href="https://github.com/Thisisily/momputer/tree/main/skills">Skills</a></li>
+      <li><a href="https://github.com/Thisisily/momputer/blob/main/docs/in-detail.md">Every detail</a></li>
+    </ul>
+    <p class="small">Free for personal use under <a href="https://github.com/Thisisily/momputer/blob/main/LICENSE">PolyForm Noncommercial 1.0.0</a>. For work at a company, <a href="https://github.com/Thisisily/momputer/issues/new?template=commercial-license.yml">ask for a commercial license</a>.</p>
+    <p class="small">Set in Geist and Doto (SIL Open Font License).</p>
   </footer>
 
   <script src="install.js"></script>
+  <script src="site.js"></script>
 </body>
 </html>
