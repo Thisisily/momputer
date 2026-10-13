@@ -4,7 +4,7 @@ description: Reviews a Google Drive read-only, through a Drive connector or MCP 
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Needs a Google Drive connector or MCP server, or a browser tool signed in to Google Drive. Python 3.8+ (standard library only) builds the report.
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Drive audit
@@ -15,7 +15,7 @@ Look at the user's Google Drive without changing anything and without opening a 
 
 1. **Read-only until approved.** During the review you list files and read facts about them. You don't change sharing, move, rename, star, trash, restore or comment on anything.
 2. **Never open a file's contents.** Names, types, sizes, owners, sharing state and dates only. Don't call a tool that reads, fetches, exports, downloads, previews or summarizes a file, even "just to check what it is". In a browser, don't open a file or its preview: work from list views. Don't follow the report's Open in Drive links yourself; they are for the user. (Opening a file also changes its "last opened" date, which is a change.)
-3. **Approval is per fix.** It's the line the report copies: `DRIVE-APPROVE report=<id> unshare=1-3 outside=2 duplicates=1-4 empty=none stale=5`. Run `scripts/check_approval.py` on it and do only what it prints. If it refuses, don't work around it: rebuild the report and ask again. Never edit `drive-plan.json` by hand; its id is a fingerprint of its fixes.
+3. **Approval is per fix.** It's the line the report copies: `DRIVE-APPROVE report=<id> unshare=1-3 outside=2 duplicates=1-4 empty=none stale=5`. Run `scripts/check_approval.py` on it and do only what it prints. If it refuses, don't work around it: do what its message says, which is mostly to rebuild the report and ask again. Never edit `drive-plan.json` by hand; its id is a fingerprint of its fixes.
 4. **Changing sharing cuts people off.** Each change needs its own tick. Before the first change, read the user the list `check_approval.py` printed (each fix, and how many people lose access) and wait for a yes. When removing outside access, count the outside people Drive shows now: if it isn't the number in the plan, stop and tell the user.
 5. **Only files the user owns.** The plan offers fixes for nothing else. Before each one, check Drive still shows the user as the owner; if not, skip it and say so. Never change sharing on someone else's file, and don't "remove" a shared file from the user's Drive.
 6. **Nothing is deleted for good.** Removing means Drive's Trash, where a file stays for 30 days. Never "Delete forever", never a delete call that skips the Trash (in Google's API, deleting a file is permanent; set it as trashed instead), and never empty the Trash. Emptying it is the user's own step.
@@ -76,7 +76,7 @@ Pass only the first line the user pasted. Their `note:` line is for you to read:
 
 - **unshare=N**: set that file's General access back to Restricted (with a connector: remove the "anyone" access). Leave the people added by name alone. If Drive says the access comes from the folder the file is in, change nothing on the file and tell the user: the folder is what needs the fix.
 - **outside=N**: remove the people who aren't at the user's own domain from that file, and nobody else. For a personal account, everyone but the owner. Count check first (rule 4).
-- **duplicates=N, empty=N, stale=N**: move that file to the Trash. For a duplicate, the copy named in the plan stays.
+- **duplicates=N, empty=N, stale=N**: move that file to the Trash. For a duplicate, the copy named in the plan stays. The check refuses an approval that would also send that copy to the Trash (a report built by an older copy of this skill could offer both): ask the user which one to untick.
 
 In a browser, find the file's row by its id in a list view (the Storage page, or one of the fixed searches) and use right-click > Share, or Move to trash, without opening it. If you can't match the row to the id for certain, don't act on a name: give the user the clicks instead. Do the same when your tools can't make an approved change (many connectors can only read).
 
@@ -93,7 +93,7 @@ Say what was done, how many people lost access to what, what's left for the user
 - **Stale**: not opened and not changed in 365 days. Biggest first.
 - **Storage**: only files the user owns count against their storage; files others own are shown apart.
 - **In the Trash**: counted and sized, never touched.
-- A file sits in at most one of the three Trash lists (duplicates, then untitled and empty, then stale), and each list shows at most 100 rows.
+- A file sits in at most one of the three Trash lists (duplicates, then untitled and empty, then stale), and each list shows at most 100 rows. The copy of a duplicate that stays is in none of them, however old or empty it is: it can be looked at again in the next report.
 
 ## Files
 

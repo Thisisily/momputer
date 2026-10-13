@@ -4,7 +4,7 @@ description: Gives scanned and downloaded documents names a person can find late
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline. Naming scans and photos of documents needs an agent that can look at a PDF or image.
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Rename documents

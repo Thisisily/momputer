@@ -34,7 +34,7 @@ Work in a new tab in the user's signed-in browser. Read; don't press buttons on 
 
 1. **Open the schedule.** `https://calendar.google.com/calendar/u/0/r/agenda/2026/10/13` lists events as text from that date (`/r/week/...` and `/r/day/...` show a week or a day). If the user has several accounts, confirm `/u/0/` is the right one. Make sure only the user's own calendars are switched on in the left panel, or note which rows belong to which calendar; don't switch calendars off yourself without saying so (it changes what they see).
 2. **Read rows as text.** Each gives the time, the title and the calendar. Invitations not yet answered are drawn hollow (an outline with no fill), and the row's accessible name usually says an answer is needed.
-3. **Guests and answers.** These are only in an event's details. Open one, read the guest summary ("6 guests, 3 yes, 1 no, 2 awaiting"), the organizer, the place and whether a video link is there, then close it with Escape. Press nothing inside: not Yes, No or Maybe, not the pencil, not the bin, and no link in the description. For a busy calendar do this only for the events that matter (unanswered, overlapping, outside working hours, repeating).
+3. **Guests and answers.** These are only in an event's details. Open one, read the guest summary ("6 guests, 3 yes, 1 no, 2 awaiting"), the organizer, the place and whether a video link is there (for an all-day event, also whether it shows as Busy or Free), then close it with Escape. Press nothing inside: not Yes, No or Maybe, not the pencil, not the bin, and no link in the description. For a busy calendar do this only for the events that matter (unanswered, overlapping, outside working hours, repeating).
 4. **Settings (read only).** `https://calendar.google.com/calendar/u/0/r/settings` shows the time zone, working hours and whether speedy meetings is on.
 5. **Ids.** The browser doesn't show event ids. Give each event your own (`b1`, `b2`, ...) and keep the day, time and title to find it again. For a repeating meeting use one made-up `series_id` for all its dates.
 
@@ -49,7 +49,7 @@ When a calendar holds more than a few hundred events in the window, or the brows
 - `series`: one row per repeating meeting worth a look, with `next` (its next date), since its single dates aren't listed.
 - `"complete": false`.
 
-A date that has a `days` row uses those numbers for the charts, the free-block check and the back-to-back table. Events listed on that date are still checked for clashes, answers, links and the rest. Clashes between two events you didn't list can't be found; the page says so.
+A date that has a `days` row uses those numbers for the charts, the free-block check and the back-to-back table. Events listed on that date are still checked for clashes, answers, links and the rest. Clashes between two events you didn't list can't be found; the page says so. No new time is suggested on a date that has a `days` row, or past the window's last day: the script can't see where those days are free. The plan then has no time for that meeting, and you ask the user for one.
 
 ## calendar.json format
 
@@ -111,8 +111,8 @@ A `series` row for a meeting whose dates you didn't list (the counted form) carr
 - `my_response`: `accepted`, `declined`, `tentative` or `needsAction`. Leave it out for an event with no guests.
 - `attendees`: counts, the user included. `total` 0 or 1 means it's just them. Give the answer counts when you have them; without them the report won't say "nobody has accepted".
 - All-day events: dates with no time (`"start": "2026-11-03", "end": "2026-11-04"`; the end is the day after, as Google gives it) or `"all_day": true`.
-- `kind`: `event`, `focus`, `out_of_office`, or `working_location`, `birthday`, `task` (those last three are ignored).
-- `busy`: `false` for an event marked Free.
+- `kind`: `event`, `focus`, `out_of_office`, `from_gmail` (a booking Calendar added from a mail), or `working_location`, `birthday`, `task` (those last three are ignored and never count as busy time).
+- `busy`: `false` for an event marked Free (in Google's own data, `transparency` is `transparent`; the script reads that field too). Read it, don't leave it out: with nothing given an event counts as busy. A new time is never suggested on top of busy time the user hasn't declined, whatever its kind, and a busy all-day event keeps its whole day clear. Most all-day events are marked Free.
 - `location` and `video` are text someone else typed. Pass them through as they are. The script shows a link only for `https` on meet.google.com, zoom.us, teams.microsoft.com, teams.live.com, webex.com and whereby.com (subdomains of zoom.us and webex.com included), and plain text for everything else.
 - `series[].ends`: `"never"` when the repeat rule has no end, a date when it has one. Leave it out when you don't know.
 - `headline` and `highlights` are yours: one sentence and up to six short findings, written after you've looked at the numbers.

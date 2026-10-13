@@ -18,6 +18,10 @@ big survey file:
       "add": [{"op": "move", "from": "...", "to": "...", "why": "...", "risk": "low"}]
     }
 
+A file added for the Recycle Bin is looked at here (its size, when it last changed): the apply
+step lets it go only if it is still that file. Copies of another file are the survey's to find;
+it names the copy that stays, and the apply step reads both before one goes.
+
 Python 3.8+, standard library only.
 """
 import argparse
@@ -29,7 +33,7 @@ from datetime import datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.dont_write_bytecode = True  # leave no __pycache__ behind in the skill folder
-from safe_apply import plan_fingerprint as plan_id  # noqa: E402  (one definition: the apply step recomputes it)
+from safe_apply import file_facts, plan_fingerprint as plan_id  # noqa: E402  (one definition: the apply step recomputes it)
 
 TEMPLATE = os.path.join(HERE, "..", "assets", "tidy-plan-template.html")
 OPS = {"move", "recycle", "remove-empty-dir"}
@@ -61,6 +65,13 @@ def apply_notes(actions, notes):
             a["to"] = extra["to"]
         if extra.get("is_dir") or os.path.isdir(extra["from"]):
             a["is_dir"] = True
+        elif a["op"] == "recycle":
+            # What the file is now: the apply step lets it go only if that is still so. One that
+            # can't be read here gets no such line, and the apply step leaves it alone.
+            try:
+                a.update(file_facts(extra["from"]))
+            except (OSError, ValueError, TypeError):
+                pass
         out.append(a)
         next_id += 1
     return out

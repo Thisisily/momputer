@@ -278,6 +278,28 @@ def check_plan(plan):
     return bad
 
 
+def trash_clashes(rows):
+    """Trash fixes that can't go together, as sentences. `rows` is [("stale=3", row), ...].
+
+    A duplicate's row promises that one copy stays (`keep_file`). If that copy is itself among
+    the rows, the promise is broken: of two copies, none would be left. The same file twice is
+    a slip too. The builder checks every Trash row it writes this way, and check_approval.py
+    checks the ones a person ticked, which covers a plan written before the kept copy was left
+    out of the other lists."""
+    going, bad = {}, []
+    for at, r in rows:
+        if r.get("action") != "trash":
+            continue
+        if r.get("file") in going:
+            bad.append("%s and %s are the same file" % (going[r.get("file")], at))
+        going.setdefault(r.get("file"), at)
+    for at, r in rows:
+        keep = r.get("keep_file") if r.get("action") == "trash" else ""
+        if keep and keep in going:
+            bad.append("%s would move to the Trash the copy that %s keeps" % (going[keep], at))
+    return bad
+
+
 def check_links(obj):
     """Every other link in the data (the tables) must be a file link this script built, or empty."""
     bad = []
@@ -394,7 +416,7 @@ def build(box):
             groups.setdefault(("same contents", f["checksum"], f["size"]), []).append(f)
         elif f["type"] not in NATIVE and f["name_key"]:
             groups.setdefault(("same name and size", f["name_key"], f["size"]), []).append(f)
-    duplicates, in_trash_list, dup_groups, wasted = [], set(), 0, 0
+    duplicates, in_trash_list, stays, dup_groups, wasted = [], set(), set(), 0, 0
     for (how, _, size), g in sorted(groups.items(), key=lambda kv: (-kv[0][2] * (len(kv[1]) - 1), kv[0][1])):
         if len(g) < 2:
             continue
@@ -406,6 +428,9 @@ def build(box):
             if not fixable(f):
                 continue
             in_trash_list.add(id(f))
+            # This row says the kept copy stays, so the kept copy is offered for the Trash nowhere
+            # below, however old or empty it is: ticking both would leave no copy at all.
+            stays.add(id(keep))
             duplicates.append(row(f, "trash", ["%s as \"%s\"%s, which stays" % (how.capitalize(), clip(keep["name"], 50),
                                                                                 " (last touched %s)" % iso(keep["last"]) if keep["last"] else "")],
                                   keep_file=keep["id"] if keep["ok"] else "", **loses(f)))
@@ -413,7 +438,7 @@ def build(box):
     # ---- 4. untitled and empty
     empty = []
     for f in sorted(stuff, key=lambda f: (f["last"] or date.min, f["id"])):
-        if id(f) in in_trash_list or not fixable(f):
+        if id(f) in in_trash_list or id(f) in stays or not fixable(f):
             continue
         blank = f["empty"] or (f["size_known"] and f["size"] == 0 and f["type"] not in NATIVE)
         nameless = bool(UNTITLED.fullmatch(f["name"])) or f["name"] == "(no name)"
@@ -425,7 +450,8 @@ def build(box):
     # ---- 5. stale: not opened and not changed for over a year
     old = [f for f in stuff if untouched(f)]
     stale = [row(f, "trash", [untouched(f)], **loses(f))
-             for f in sorted(old, key=lambda f: (-f["size"], f["last"], f["id"])) if fixable(f) and id(f) not in in_trash_list]
+             for f in sorted(old, key=lambda f: (-f["size"], f["last"], f["id"]))
+             if fixable(f) and id(f) not in in_trash_list and id(f) not in stays]
 
     lists, more = {}, {}
     for key, rows in (("unshare", unshare), ("outside", outside), ("duplicates", duplicates), ("empty", empty), ("stale", stale)):
@@ -535,6 +561,10 @@ def build(box):
     bad = check_plan(plan) + check_links(report["tables"])
     if bad:
         sys.exit("refusing to write the report: something isn't in a safe form: %s" % "; ".join(bad[:3]))
+    # And no two Trash fixes on the page undo each other's promise, even with everything ticked.
+    clash = trash_clashes([("%s=%d" % (key, r["n"]), r) for key in ("duplicates", "empty", "stale") for r in lists[key]])
+    if clash:
+        sys.exit("refusing to write the report: %s." % "; ".join(clash[:3]))
     report["report_id"] = plan_id(plan)
     return report
 

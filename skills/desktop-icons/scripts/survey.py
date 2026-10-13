@@ -32,7 +32,7 @@ from urllib.parse import unquote, urlsplit
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.dont_write_bytecode = True  # leave no __pycache__ behind in the skill folder
-from safe_apply import known_folders, norm, under  # noqa: E402  (the same idea of "your folders" as the apply step)
+from safe_apply import file_facts, known_folders, norm, under  # noqa: E402  (the same idea of "your folders" as the apply step)
 
 IS_WIN = os.name == "nt"
 SCHEMA = "desktop-icons/survey@1"
@@ -704,7 +704,16 @@ def list_desktop(path, where, prober, now, counter):
         if is_dir:
             item["folder"] = folder_info(e.path)
             item["bytes"] = item["folder"]["bytes"]
-        elif kind in ("shortcut", "web-link"):
+        else:
+            # What the file is now. The apply step sends it to the Recycle Bin only if it is still
+            # that (see safe_apply.py); one that changed while this was looking gets no such line.
+            try:
+                facts = file_facts(e.path)
+            except (OSError, ValueError):
+                facts = None
+            if facts and facts["bytes"] == st.st_size:
+                item["mtime_ns"] = facts["mtime_ns"]
+        if kind in ("shortcut", "web-link"):
             item["shortcut"] = read_shortcut(e.path, e.name, st.st_size, item["cloud"], prober)
         if spelled_out(e.name) != e.name:
             item["shown"] = spelled_out(e.name)  # what the pages print instead of the name itself
@@ -803,6 +812,8 @@ def survey(args):
     def add(group, op, it, why, default, risk, to=None, **more):
         s = {"id": len(suggestions) + 1, "item": it["id"], "group": group, "op": op, "from": it["path"], "bytes": it["bytes"],
              "why": why, "default": default, "risk": risk}
+        if op == "recycle" and "mtime_ns" in it:
+            s["mtime_ns"] = it["mtime_ns"]
         if to:
             s["to"] = to
         s.update(more)

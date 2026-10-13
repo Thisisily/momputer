@@ -31,6 +31,10 @@ if IS_WIN:
     import ctypes
     import winreg
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.dont_write_bytecode = True  # leave no __pycache__ behind in the skill folder
+from safe_apply import file_facts  # noqa: E402  (what the apply step compares before a file goes to the Recycle Bin)
+
 SCHEMA = "tidy-folders/survey@1"
 
 # Windows file attribute bits (from winnt.h)
@@ -1009,6 +1013,7 @@ class Survey:
                                                 "Admin", "Personal"]) or os.path.join(docs, "Important")
         targets = {"Documents": docs, "Important": important_root, "Pictures": pics, "Videos": vids, "Music": music}
         out, claimed, planned = [], set(), set()
+        stays = set()  # the copy that stays for each duplicate in this plan: never offered to the Recycle Bin itself
         nid = [0]
 
         def dest(folder, name):
@@ -1023,6 +1028,18 @@ class Survey:
         def add(group, op, src, to=None, why="", default=True, risk="low", nbytes=0, extra=None):
             if norm(src) in claimed:
                 return
+            if op == "recycle" and not (extra or {}).get("is_dir"):
+                # The apply step lets a file go only if it is still what it is now (see safe_apply.py), so
+                # the plan says what that is. One that changed while this was looking is left out.
+                try:
+                    facts = file_facts(src)
+                except (OSError, ValueError):
+                    return
+                if norm(src) in stays or facts["bytes"] != nbytes:
+                    return
+                extra = dict(extra or {}, mtime_ns=facts["mtime_ns"])
+                if extra.get("keep"):
+                    stays.add(norm(extra["keep"]))
             claimed.add(norm(src))
             nid[0] += 1
             s = {"id": nid[0], "group": group, "op": op, "from": src, "bytes": nbytes, "why": why,

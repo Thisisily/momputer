@@ -4,7 +4,7 @@ description: Surveys a Windows PC's personal folders read-only (Desktop, Documen
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline.
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Tidy folders
@@ -93,6 +93,7 @@ python scripts/apply_plan.py "<out>/plan.json" --approve "TIDY-APPROVE plan=... 
 - `revert.ps1` is the same fixed script every time. It holds no file names; it reads `undo-log.csv` and moves things back only where the original place is still free. Both undo routes check every row like a plan (local disks only, nothing in Windows, Program Files, ProgramData or AppData, never a main folder itself, nothing through a link), so an edited log can't send a file somewhere it shouldn't go. Only undo a log this skill wrote on this PC.
 - Anything that can't be examined is refused, not guessed at: a folder that can't be listed, a path Windows can't resolve. Say so if it happens; don't work around it.
 - Links (symlinks, junctions) are never moved, recycled or walked through. A name that ends in a dot or a space is moved under its exact name but can't go to the Recycle Bin; it's skipped with a note.
+- A file goes to the Recycle Bin only if it is still the file the plan saw (same size, same last-changed time). A duplicate goes only if it and the copy that stays hold the same bytes at that moment, and the copy that stays is never recycled in the same run. Otherwise it's skipped with a note; survey again if the user still wants it gone.
 - Names are never overwritten: a clash gets " (2)".
 - A move to another drive copies, checks the size, then sends the original to the Recycle Bin. Whole folders only cross drives with `--allow-cross-drive-folders`.
 - Windows shows its own warning if something is too big for the Recycle Bin. Let the user answer it.

@@ -64,10 +64,12 @@ HABIT_KEYS = {"speedy", "working_hours", "focus", "answer", "review", "timezone"
 RESPONSES = {"accepted": "accepted", "yes": "accepted", "declined": "declined", "no": "declined",
              "tentative": "tentative", "maybe": "tentative", "needsaction": "needs_action",
              "needs_action": "needs_action", "unanswered": "needs_action", "invited": "needs_action"}
+# "other" is a note on the calendar, never time that's taken: where the person works that day, a
+# birthday, a task. A booking Calendar added from a mail (a flight, a table) is time like any event's.
 KINDS = {"": "event", "event": "event", "default": "event", "focus": "focus", "focustime": "focus",
          "focus_time": "focus", "out_of_office": "out_of_office", "outofoffice": "out_of_office",
          "working_location": "other", "workinglocation": "other", "birthday": "other", "reminder": "other",
-         "task": "other", "from_gmail": "other", "fromgmail": "other"}
+         "task": "other", "from_gmail": "from_gmail", "fromgmail": "from_gmail"}
 DAY_KEYS = {"mon": 0, "monday": 0, "tue": 1, "tuesday": 1, "wed": 2, "wednesday": 2, "thu": 3, "thursday": 3,
             "fri": 4, "friday": 4, "sat": 5, "saturday": 5, "sun": 6, "sunday": 6}
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -237,6 +239,14 @@ def working(cal):
     return ws, we, (days or set(WORK_DAYS)), bool(w)
 
 
+def marked_free(raw):
+    """Is this event marked Free? "busy": false, or the way Google's own data says it
+    ("transparency": "transparent"). With neither given it counts as busy."""
+    busy = raw.get("busy")
+    return ((busy is not None and str(busy).lower() in ("false", "free", "transparent", "0", "none"))
+            or str(raw.get("transparency") or "").lower() == "transparent")
+
+
 def norm_calendars(cal):
     out = {}
     for c in cal.get("calendars") if isinstance(cal.get("calendars"), list) else []:
@@ -311,7 +321,7 @@ def norm_event(raw, cals, default_cal, suspicious):
         "series_started": parse_day(raw.get("series_started")), "series_ends": raw.get("series_ends"),
         "where": {"text": text, "link": link},
         "has_where": bool(text or link or raw.get("has_video")),
-        "busy": str(raw.get("busy", True)).lower() not in ("false", "free", "transparent", "0", "none"),
+        "busy": not marked_free(raw),
         "cancelled": str(raw.get("status") or "").lower() == "cancelled",
         "tz": tz if isinstance(tz, str) and SAFE_TZ.fullmatch(tz) else "",
     }
@@ -459,6 +469,13 @@ def build(cal):
     def fixable(e):
         return e["ok"] and e["kind"] == "event" and not e["cancelled"]
 
+    def takes_time(e):
+        """Does this event hold the person's time? Anything marked busy that they haven't declined:
+        a meeting, a solo block, focus time, an Out of office block, an all-day event not marked
+        Free. This is about where something new may go. It is asked apart from counted() and
+        meeting(), which are about the meeting numbers and leave most of these out."""
+        return e["busy"] and not e["cancelled"] and e["resp"] != "declined" and e["kind"] != "other"
+
     # ---- duplicates: same title and time, different events, on the person's own calendars
     groups, copies, dup_groups = {}, set(), []
     for e in events:
@@ -471,10 +488,14 @@ def build(cal):
         copies.update(id(x) for x in g[1:])
         dup_groups.append((g[0], g[1:]))
 
-    # ---- what each day holds, in minutes from midnight
-    busy_day, meet_day = {}, {}
+    # ---- what each day holds, in minutes from midnight. Two maps, asked separately: the time
+    # that's taken (where nothing new is suggested), and the meetings (what the numbers count).
+    # An all-day event runs from midnight to midnight on every date it covers; its end is the
+    # day after its last one.
+    taken_day, meet_day = {}, {}
     for e in events:
-        if e["all_day"] or not counted(e) or id(e) in copies:
+        takes, meets = takes_time(e), meeting(e)
+        if id(e) in copies or not (takes or meets):
             continue
         d = max(e["start"].date(), d0 - one)
         last = min((e["end"] - timedelta(minutes=1)).date(), d1 + timedelta(days=14))
@@ -483,9 +504,9 @@ def build(cal):
             s = max(0, int((e["start"] - midnight).total_seconds() // 60))
             en = min(1440, int((e["end"] - midnight).total_seconds() // 60))
             if en > s:
-                if e["busy"]:
-                    busy_day.setdefault(d, []).append((s, en, e))
-                if meeting(e):
+                if takes:
+                    taken_day.setdefault(d, []).append((s, en, e))
+                if meets:
                     meet_day.setdefault(d, []).append((s, en, e))
             d += one
 
@@ -569,14 +590,19 @@ def build(cal):
     reserved = {}
 
     def find_slot(e):
-        """The first free stretch of the same length inside working hours, on the person's own calendar."""
+        """The first stretch of the same length, inside working hours, that nothing takes: no busy
+        event of any kind, no time already offered to another meeting. Only on a day this script
+        saw in full: not past the last day gathered, and not one the agent only counted (its
+        meetings aren't listed, so where it's free isn't known). None when there is no such stretch."""
         need = minutes_of(e)
         if need > we - ws:
             return None
         d = max(e["start"].date(), today + one)
         for _ in range(10):
-            if working_day(d):
-                taken = [(s, en) for s, en, x in busy_day.get(d, []) if x is not e] + reserved.get(d, [])
+            if d > d1:
+                break
+            if working_day(d) and d not in given:
+                taken = [(s, en) for s, en, x in taken_day.get(d, []) if x is not e] + reserved.get(d, [])
                 t = ws
                 for s, en in merged(taken) + [[we, we]]:
                     if min(s, we) - t >= need:
@@ -670,7 +696,7 @@ def build(cal):
                                        why=["%d to %d minutes: it ends %s instead of %s, which leaves a gap before %s"
                                             % (dur, dur - cut, hm(new_end), hm(e["end"]), said(evs[i + 1][2]["title"]))]))
             end = r["end"]
-            if primary and end + BREAK <= we and all(not (s < end + BREAK and end < en) for s, en, _ in busy_day.get(d, [])):
+            if primary and end + BREAK <= we and all(not (s < end + BREAK and end < en) for s, en, _ in taken_day.get(d, [])):
                 a, b = base + timedelta(minutes=end), base + timedelta(minutes=end + BREAK)
                 breaks.append({"calendar": primary["key"], "calendar_name": primary["name"], "title": "Break",
                                "start": stamp(a), "end": stamp(b), "when": "%s, %s–%s" % (day_label(d), hm(a), hm(b)),

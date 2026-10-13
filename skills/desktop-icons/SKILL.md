@@ -4,7 +4,7 @@ description: Tidies a cluttered Windows desktop. Surveys the user's own Desktop 
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline.
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Desktop icons
@@ -89,6 +89,7 @@ python scripts/apply_plan.py "<out>/desktop-plan.json" --approve "DESKTOP-APPROV
 - The undo log goes to `Documents\Tidy-up logs\<date time>\` (`undo-log.csv` and `revert.ps1`). Change it with `--log-dir`. It is always a new folder (a name that is taken gets " (2)"): use the one the command prints.
 - Names are never overwritten: a clash gets " (2)".
 - Links (symlinks, junctions) on the desktop are left alone, and so is anything that can't be examined.
+- A shortcut goes to the Recycle Bin only if it is still the file the survey saw (same size, same last-changed time). One that changed is skipped with a note; survey again if the user still wants it gone.
 - Don't pass `--within`: the command sets its own limits.
 
 ### 6. Report, hand over the undo, clean up

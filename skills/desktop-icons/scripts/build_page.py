@@ -97,6 +97,8 @@ def build_actions(survey, notes):
              "why": str(extra.get("why", ""))[:300], "default": bool(extra.get("default", False)), "risk": "medium"}
         if extra["op"] == "move":
             a["to"] = extra["to"]
+        if extra["op"] == "recycle" and "mtime_ns" in item:
+            a["mtime_ns"] = item["mtime_ns"]  # with "bytes": what the file was when the survey saw it
         if item["kind"] == "folder":
             a["is_dir"] = True
         out = [x for x in out if norm(x["from"]) != norm(item["path"])]  # the assistant's line replaces the survey's for that thing

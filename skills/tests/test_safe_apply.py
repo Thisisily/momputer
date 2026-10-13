@@ -334,10 +334,24 @@ try:
     bad_real = [b for b in bad if b[0] in real_places]
     bad_here = [b for b in bad if b[0] not in real_places]
 
+    def as_seen(a):
+        """A file for the Recycle Bin, with what it is now (its size, when it last changed): what a
+        skill's own plan builder writes. Only for a file in the work folder, and not where the action
+        already says, or is marked "unseen" to stand for a plan that doesn't say."""
+        a = dict(a)
+        src = a.get("from")
+        if (a.pop("unseen", False) or a.get("op") != "recycle" or "mtime_ns" in a or not isinstance(src, str)
+                or not_in_work_folder([src]) or not os.path.isfile(X + src)):
+            return a
+        try:
+            return dict(sa.file_facts(src), **a)
+        except OSError:
+            return a
+
     def make_plan(file_name, actions, schema=None, dry_only=False):
         if not dry_only:
             only_in_work_folder(file_name, actions)
-        actions = [dict(a, id=i + 1) for i, a in enumerate(actions)]
+        actions = [as_seen(dict(a, id=i + 1)) for i, a in enumerate(actions)]
         plan = {"schema": schema or os.path.basename(SKILL) + "/plan@1", "plan_id": sa.plan_fingerprint(actions), "actions": actions}
         path = os.path.join(T, file_name)
         json.dump(plan, open(path, "w", encoding="utf-8"), ensure_ascii=False)
@@ -855,6 +869,206 @@ try:
     empty_bin()
     os.remove(page)
     shutil.rmtree(companion)
+
+    # ------------------------------------------------------------ 9a. still the file the plan saw; a copy only while the other one stays
+    print("\n-- 9a. a file goes only if it is still what the plan saw, and a copy only while the other one stays")
+    twins, elsewhere = os.path.join(doc, "Twins"), os.path.join(doc, "Kept elsewhere")
+    stay, dup, dup2 = os.path.join(twins, "report.pdf"), os.path.join(dl, "report (1).pdf"), os.path.join(dl, "report (2).pdf")
+    blank, blank2 = os.path.join(dl, "blank.txt"), os.path.join(twins, "blank.txt")
+    again = os.path.join(dl, "report again.pdf")
+    WHEN = 1700000000 * 10 ** 9  # when every file here says it was last changed
+    scenes = [0]
+
+    def put(path, data, same_time=True):
+        if os.path.dirname(path) and not os.path.isdir(os.path.dirname(path)):
+            os.makedirs(os.path.dirname(path))
+        with open(X + path, "wb") as f:
+            f.write(data)
+        if same_time:
+            os.utime(X + path, ns=(WHEN, WHEN))
+
+    def scene(actions, change=None, apply=True, during=None, after=None):
+        """Made anew each time: three files that hold the same bytes, and two empty ones. A plan for
+        `actions` is written, `change` is made behind its back, and the plan is run (for real only
+        against the pretend Recycle Bin; `during` is called as each thing goes there, `after` when the
+        run is over). Everything is then put back. Returns ({id: lines}, what went to the pretend
+        bin, in order, the whole output)."""
+        scenes[0] += 1
+        for p in (stay, dup, dup2):
+            put(p, b"R" * 40000)
+        for p in (blank, blank2):
+            put(p, b"")
+        path, _, ok = make_plan("plan-twins-%d.json" % scenes[0], actions)
+        if change:
+            change()
+        went = []
+
+        def recycle_noting(p):
+            if during:
+                during()
+            went.append(os.path.basename(p))
+            return pretend_recycle(p)
+
+        try:
+            with patched(sa, "recycle", recycle_noting):
+                out, _ = in_process([path, "--approve", ok, "--root", root, "--log-dir", os.path.join(T, "log-twins-%d" % scenes[0])]
+                                    + (["--apply"] if apply else []))
+        finally:
+            if after:
+                after()
+            empty_bin()
+            for d in (twins, elsewhere):
+                if os.path.isdir(d) and not sa.is_link(d):
+                    shutil.rmtree(d)
+            for p in (dup, dup2, blank, again):
+                if os.path.lexists(X + p):
+                    os.remove(X + p)
+        return by_id(out), went, out
+
+    def stays_put(lines, aid, word, statuses=("SKIP", "REFUSED")):
+        """Action `aid` has exactly one line, with one of those statuses and that word in it."""
+        return any(only(lines, aid, status, word) for status in statuses)
+
+    as_copy = [{"op": "recycle", "from": dup, "keep": stay}]
+    tried, free_after = [], []
+
+    def try_the_one_that_stays():
+        """As the copy goes: can the one that stays be written to, renamed or deleted?"""
+        got = []
+        for what in (lambda: open(X + stay, "r+b").close(), lambda: os.rename(X + stay, X + stay + ".moved"), lambda: os.remove(X + stay)):
+            try:
+                what()
+                got.append("done")
+            except OSError:
+                got.append("refused")
+        tried.append(got)
+
+    def is_it_free():
+        try:
+            open(X + stay, "r+b").close()
+            free_after.append(True)
+        except OSError:
+            free_after.append(False)
+
+    lines, went, out = scene(as_copy, during=try_the_one_that_stays, after=is_it_free)
+    check("a copy goes to the Recycle Bin while the other one, the same byte for byte, stays: and that one can't be written to, renamed or "
+          "deleted until the copy has gone, and can afterwards",
+          only(lines, 1, "DONE") and went == ["report (1).pdf"] and tried == [["refused"] * 3] and free_after == [True], (tried, free_after, out))
+    lines, went, out = scene(as_copy, apply=False)
+    check("a dry run reads both as well, and says it would go", only(lines, 1, "WOULD") and not went, out)
+
+    changes = (
+        ("the copy was rewritten, with the same size and the same time on it", lambda: put(dup, b"N" * 40000), "no longer the same"),
+        ("the copy was rewritten, with the same size", lambda: put(dup, b"N" * 40000, False), "changed since the survey"),
+        ("the copy has grown", lambda: put(dup, b"R" * 40001), "changed since the survey"),
+        ("the one that was to stay is gone", lambda: os.remove(X + stay), "no longer there"),
+        ("the one that was to stay was rewritten, with the same size and time", lambda: put(stay, b"N" * 40000), "no longer the same"),
+        ("the one that was to stay is one byte different at the very end", lambda: put(stay, b"R" * 39999 + b"S"), "no longer the same"),
+        ("the one that was to stay is shorter now", lambda: put(stay, b"R" * 100), "no longer the same"),
+        ("the one that was to stay is empty now", lambda: put(stay, b""), "empty file"),
+        ("the one that was to stay is a folder now", lambda: (os.remove(X + stay), os.makedirs(stay)), "a link or a folder"),
+    )
+    for what, change, word in changes:
+        seen = []
+        for for_real_too in (False, True):
+            lines, went, out = scene(as_copy, change, apply=for_real_too)
+            seen.append((stays_put(lines, 1, word) and not went, out))
+        check("%s: the copy stays where it is, in a dry run and for real" % what, all(ok for ok, _ in seen), [o for ok, o in seen if not ok])
+
+    writing = []
+    lines, went, out = scene(as_copy, lambda: writing.append(open(X + dup, "r+b")), after=lambda: writing.pop().close())
+    check("a copy somebody is writing to at that moment stays where it is", stays_put(lines, 1, "in use") and not went, out)
+
+    def another_name():
+        os.link(X + dup, X + again)
+
+    try:
+        lines, went, out = scene([{"op": "recycle", "from": dup, "keep": again}], another_name)
+        linked = True
+    except OSError:
+        linked = False
+        note("this disk has no hard links: 'the same file under another name' was tried with the name in capitals only")
+    if linked:
+        check("the same file under a second name is not a copy of itself", stays_put(lines, 1, "same file under another name") and not went, out)
+    lines, went, out = scene([{"op": "recycle", "from": dup, "keep": dup.upper()}])
+    check("nor is the file itself, with its name in capitals", stays_put(lines, 1, "same file under another name") and not went, out)
+
+    # A plan can hold anything where the copy that stays should be named. None of these is opened or
+    # asked about (dry runs only, as for every hostile path here).
+    for what, keep in (("a share", "\\\\files.example\\share\\report.pdf"), ("not a full path", "Twins\\report.pdf"), ("nothing", ""),
+                       ("a number", 7), ("null", None), ("a list", [stay]), ("a device path", "\\\\.\\C:\\report.pdf")):
+        lines, went, out = scene([{"op": "recycle", "from": dup, "keep": keep}], apply=False)
+        check("the copy that stays named as %s: refused" % what, stays_put(lines, 1, "full path", ("REFUSED",)), out)
+    lines, went, out = scene([{"op": "recycle", "from": twins, "keep": stay}])
+    check("a folder doesn't go as a copy of anything", stays_put(lines, 1, "only a file", ("REFUSED",)) and not went, out)
+
+    lines, went, out = scene([{"op": "recycle", "from": blank, "keep": blank2}])
+    check("an empty file is not a copy of another empty file", stays_put(lines, 1, "empty file", ("REFUSED",)) and not went, out)
+    lines, went, out = scene([{"op": "recycle", "from": blank}])
+    check("an empty file the plan saw as empty can go (0 bytes is a size, not 'unknown')", only(lines, 1, "DONE") and went == ["blank.txt"], out)
+    lines, went, out = scene([{"op": "recycle", "from": blank}], lambda: put(blank, b"written since"))
+    check("...and stays if it has been written to since, even with the same time on it", stays_put(lines, 1, "changed since the survey") and not went, out)
+
+    unsaid = (("nothing about the file", {"unseen": True}), ("only its size, as plans made before this did", {"unseen": True, "bytes": 40000}),
+              ("a size that is text", {"bytes": "40000", "mtime_ns": WHEN}), ("True for a size", {"bytes": True, "mtime_ns": WHEN}),
+              ("a size below nothing", {"bytes": -1, "mtime_ns": WHEN}), ("a time that is not a whole number", {"bytes": 40000, "mtime_ns": float(WHEN)}))
+    for what, said in unsaid:
+        seen = []
+        for base in ({"op": "recycle", "from": dup}, {"op": "recycle", "from": dup, "keep": stay}):
+            lines, went, out = scene([dict(base, **said)])
+            seen.append((stays_put(lines, 1, "doesn't say what this file was", ("REFUSED",)) and not went, out))
+        check("a plan that says %s: the file stays, copy or not" % what, all(ok for ok, _ in seen), [o for ok, o in seen if not ok])
+
+    # One of every pair is always left, whatever else the same run was asked to do.
+    def both_ways(actions, dry_words, real_words, gone):
+        """`actions` in a dry run and for real: {id: (status, word)} each, and what went for real."""
+        ok, outs = True, []
+        for for_real_too, words in ((False, dry_words), (True, real_words)):
+            lines, went, out = scene(actions, apply=for_real_too)
+            for aid, (status, word) in words.items():
+                ok = ok and only(lines, aid, status if for_real_too or status != "DONE" else "WOULD", word)
+            ok = ok and went == (gone if for_real_too else [])
+            outs.append(out)
+        return ok, outs
+
+    ok, outs = both_ways(as_copy + [{"op": "recycle", "from": stay}], {1: ("DONE", ""), 2: ("SKIP", "it is the copy that stays")},
+                         {1: ("DONE", ""), 2: ("SKIP", "it is the copy that stays")}, ["report (1).pdf"])
+    check("the one that stays is not sent to the Recycle Bin later in the same run", ok, outs)
+    ok, outs = both_ways(as_copy + [{"op": "recycle", "from": twins}], {1: ("DONE", ""), 2: ("SKIP", "holds the copy that stays")},
+                         {1: ("DONE", ""), 2: ("SKIP", "holds the copy that stays")}, ["report (1).pdf"])
+    check("...nor is the folder it is in", ok, outs)
+    ok, outs = both_ways([{"op": "recycle", "from": stay}] + as_copy, {1: ("DONE", ""), 2: ("SKIP", "goes to the Recycle Bin in this run as well")},
+                         {1: ("DONE", ""), 2: ("SKIP", "no longer there")}, ["report.pdf"])
+    check("if the one that was to stay goes first, the copy stays (and the dry run says so too)", ok, outs)
+    ok, outs = both_ways([{"op": "recycle", "from": twins}] + as_copy, {1: ("DONE", ""), 2: ("SKIP", "goes to the Recycle Bin in this run as well")},
+                         {1: ("DONE", ""), 2: ("SKIP", "no longer there")}, ["Twins"])
+    check("...the same when it goes inside its folder", ok, outs)
+    ok, outs = both_ways([{"op": "recycle", "from": dup, "keep": dup2}, {"op": "recycle", "from": dup2, "keep": dup}],
+                         {1: ("DONE", ""), 2: ("SKIP", "it is the copy that stays")}, {1: ("DONE", ""), 2: ("SKIP", "it is the copy that stays")}, ["report (1).pdf"])
+    check("two files each named as the other's copy: one goes, one is left", ok, outs)
+    ok, outs = both_ways(as_copy + [{"op": "recycle", "from": dup2, "keep": stay}], {1: ("DONE", ""), 2: ("DONE", "")}, {1: ("DONE", ""), 2: ("DONE", "")},
+                         ["report (1).pdf", "report (2).pdf"])
+    check("two copies of the one that stays both go", ok, outs)
+    ok, outs = both_ways([{"op": "move", "from": stay, "to": os.path.join(elsewhere, "report.pdf")}] + as_copy, {1: ("DONE", ""), 2: ("DONE", "")},
+                         {1: ("DONE", ""), 2: ("DONE", "")}, ["report (1).pdf"])
+    check("the one that stays may be moved earlier in the same run: it is read where it went", ok, outs)
+    ok, outs = both_ways([{"op": "move", "from": twins, "to": elsewhere}] + as_copy, {1: ("DONE", ""), 2: ("DONE", "")},
+                         {1: ("DONE", ""), 2: ("DONE", "")}, ["report (1).pdf"])
+    check("...or the folder it is in", ok, outs)
+
+    with_keep = [{"id": 1, "op": "recycle", "from": dup, "keep": stay}]
+    for p in (stay, dup):
+        put(p, b"R" * 40000)
+    kp, kplan, kapprove = make_plan("plan-kept-edited.json", as_copy)
+    kplan["actions"][0]["keep"] = dup2
+    json.dump(kplan, open(kp, "w", encoding="utf-8"), ensure_ascii=False)
+    out, code = in_process([kp, "--approve", kapprove, "--root", root, "--log-dir", os.path.join(T, "log-kept-edited")])
+    shutil.rmtree(twins)
+    os.remove(dup)
+    check("the plan's id covers the copy that stays: naming another one after approval is refused, like any other edit",
+          "changed after" in out and code is not None and len({sa.plan_fingerprint(with_keep), sa.plan_fingerprint([dict(with_keep[0], keep=dup2)]),
+                                                                sa.plan_fingerprint([{"id": 1, "op": "recycle", "from": dup}])}) == 3, out)
+    check("after all of that the made-up profile is as it was", tree(root) == held, [e for e in tree(root) if e not in held][:6])
 
     # ------------------------------------------------------------ 10. the log folder is always new
     print("\n-- 10. a run's undo log goes into a new folder: an older log is never added to, or replayed")

@@ -4,7 +4,7 @@ description: Reviews a Google Calendar read-only (the next four weeks, plus the 
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Needs a Google Calendar connector or MCP server, or a browser tool signed in to Google Calendar. Python 3.8+ (standard library only) builds the report.
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Calendar fixer
@@ -97,6 +97,7 @@ Say what was done, who was told, what's left for the user and anything that was 
 - **Meeting**: a timed event with at least one other person that the user hasn't declined. Solo blocks and focus time count as busy but not as meetings.
 - **Clash**: two busy events at the same time, at least one of them a meeting. An unanswered one is handled as an invitation. Otherwise the one to move is the tentative one, then the user's own, then the smaller.
 - **Back to back**: 3 or more meetings in a row, or 2 hours, with gaps of 5 minutes or less. Shortening is offered for the user's own meetings (30 to 25 minutes, longer ones 10 minutes less); a 15-minute break is offered after the run when that time is free.
+- **A new time**: the first stretch of the same length, inside working hours, that no busy event covers, from the meeting's own day on (tomorrow at the earliest). Busy is anything the user hasn't declined that isn't marked Free: meetings, solo blocks, focus time, Out of office, an all-day event (its whole day). Never on a day off, a day that was only counted, or past the last day gathered. With none in ten days the plan has no time.
 - **Outside working hours**: starts before the day does, ends after it, falls on a non-working day, a listed day off, or inside an Out of office event.
 - **No free two hours**: a working day whose longest gap between meetings, inside working hours, is under 2 hours.
 - **Stale series**: the user declined the last 2 or more and accepted none; or nobody else has accepted; or it has run for over 2 years with no end date.

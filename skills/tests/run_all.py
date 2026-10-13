@@ -45,6 +45,10 @@ def main(argv=None):
             jobs.append(("test_%s" % name, ["test_%s.py" % name, scratch] + extra))
             for part in parts:
                 jobs.append(("test_%s_%s" % (name, part), ["test_%s_%s.py" % (name, part), scratch] + keep))
+    # two that only read what was gathered and write a report: one test each, end to end
+    for name in ("calendar_fixer", "drive_audit"):
+        if os.path.isdir(os.path.join(SKILLS, name.replace("_", "-"))):
+            jobs.append(("test_%s" % name, ["test_%s.py" % name, scratch] + extra))
     results = []
     for label, cmd in jobs:
         print("\n" + "=" * 100 + "\n" + label + "\n" + "=" * 100, flush=True)

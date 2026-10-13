@@ -17,3 +17,18 @@ jobs:
       - name: Build the app
         shell: pwsh
         run: ./scripts/build.ps1 -NoBundle
+
+  # The skills' own tests: made-up folders, calendars and listings in a scratch folder under
+  # Temp, nothing else. Standard-library Python, and the runner's own Edge for the pages.
+  skills:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Test the skills
+        shell: pwsh
+        run: |
+          # Temp by its full name: the runner spells it with a short one, which the skills refuse to work under.
+          $temp = python -I -c "import os, tempfile; print(os.path.realpath(tempfile.gettempdir()))"
+          $scratch = Join-Path $temp "skill-tests"
+          New-Item -ItemType Directory -Force $scratch | Out-Null
+          python -I skills/tests/run_all.py $scratch

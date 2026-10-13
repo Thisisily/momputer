@@ -21,8 +21,8 @@
       "Where are my tax papers?",
       "Are all my games in the Games folder?"
     ],
-    "version": "1.0.0",
-    "hash": "dd5bdc4dc56f9d70"
+    "version": "1.0.1",
+    "hash": "41dd446f1f8e96c5"
   },
   {
     "name": "desktop-icons",
@@ -33,8 +33,8 @@
       "Clean up my desktop",
       "Which of my desktop shortcuts are broken?"
     ],
-    "version": "1.0.0",
-    "hash": "5d3df131949652d3"
+    "version": "1.0.1",
+    "hash": "48795657394a08ba"
   },
   {
     "name": "rename-documents",
@@ -45,8 +45,8 @@
       "Rename my scans so I can find them",
       "Give the PDFs in Downloads proper names"
     ],
-    "version": "1.0.0",
-    "hash": "83c94499694e8fb7"
+    "version": "1.0.1",
+    "hash": "9cd9fa4de2f5e306"
   },
   {
     "name": "disk-space-report",
@@ -93,8 +93,8 @@
       "Fix my calendar",
       "Where am I double booked?"
     ],
-    "version": "1.0.0",
-    "hash": "05893163902bc17b"
+    "version": "1.0.1",
+    "hash": "444c917ab35b6309"
   },
   {
     "name": "drive-audit",
@@ -105,8 +105,8 @@
       "Audit my Google Drive",
       "What am I sharing publicly?"
     ],
-    "version": "1.0.0",
-    "hash": "1300e4e5f91afc83"
+    "version": "1.0.1",
+    "hash": "fe77dd9b45b45110"
   },
   {
     "name": "subscription-audit",

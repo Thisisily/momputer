@@ -16,8 +16,13 @@ The plan file:
 
     {"schema": "<skill-name>/plan@1", "plan_id": plan_fingerprint(actions), "actions": [
       {"id": 1, "op": "move", "from": "<full path>", "to": "<full path>"},
-      {"id": 2, "op": "recycle", "from": "<full path>", "bytes": 1234},
-      {"id": 3, "op": "remove-empty-dir", "from": "<full path>"}]}
+      {"id": 2, "op": "recycle", "from": "<full path>", "bytes": 1234, "mtime_ns": 1790000000000000000},
+      {"id": 3, "op": "recycle", "from": "<full path>", "bytes": 1234, "mtime_ns": 1790000000000000000,
+       "keep": "<full path of the copy that stays>"},
+      {"id": 4, "op": "remove-empty-dir", "from": "<full path>"}]}
+
+"bytes" and "mtime_ns" say what a file was when the plan was made: file_facts(path) gives both.
+"keep" is for a file that goes because it is a copy of another.
 
 Rules it enforces, whatever the plan says:
   * only ids from this plan, and only if the approval names this plan_id; the id is a
@@ -56,8 +61,18 @@ Rules it enforces, whatever the plan says:
     ending in a dot or space can't be mistaken for its neighbour
   * moves never overwrite: an existing name gets " (2)"
   * "recycle" goes to the Recycle Bin (Windows asks before anything would be
-    deleted for good); files are skipped if they changed since the survey; only what the
-    plan names goes, never the folder Windows pairs with a saved web page
+    deleted for good); only what the plan names goes, never the folder Windows pairs with
+    a saved web page
+  * a file goes there only if it is still the file the plan was made about: the plan says
+    its size and when it was last changed ("bytes" and "mtime_ns"; an empty file is 0
+    bytes, not "unknown"), and both must still be so. A plan that doesn't say is refused
+    for that file: there is nothing to check it against
+  * a file that goes because it is a copy ("keep" names the copy that stays) goes only if
+    the two are read, there and then, and hold the same bytes. The copy that stays has to
+    be a file of its own on this PC: not a link, not the same file under another name,
+    not empty (every empty file is "the same" as every other). It is held open, so it
+    can't be changed, renamed or deleted, until the other is in the Recycle Bin, and
+    nothing later in the run may send it there: one copy is always left
   * "remove-empty-dir" re-checks that nothing is inside, then deletes the folder in the one
     way Windows refuses for a folder that is not empty
   * a move to another drive copies, checks the size, then recycles the original
@@ -122,8 +137,9 @@ def under(path_n, roots_n):
 
 
 def plan_fingerprint(actions):
-    """The plan id: a hash of what the plan would do. Edit an action and the id no longer matches."""
-    core = [[a["id"], a["op"], a["from"], a.get("to")] for a in actions]
+    """The plan id: a hash of what the plan would do. Edit an action and the id no longer matches.
+    The copy that stays ("keep") is part of what a plan would do, where one is named."""
+    core = [[a["id"], a["op"], a["from"], a.get("to")] + ([a["keep"]] if "keep" in a else []) for a in actions]
     return hashlib.sha256(json.dumps(core, ensure_ascii=False).encode("utf-8")).hexdigest()[:10]
 
 
@@ -469,6 +485,150 @@ def recycle(path):
     if cancelled:
         return "cancelled"
     return None if not exists(path) else "still there after recycling"
+
+
+# ---------------------------------------------------------------- still what the plan saw
+# A plan is made, read and approved, and only then carried out: the files it names can change in
+# between. So a file goes to the Recycle Bin only if it is still the file the plan was written
+# about, and one that goes because it is a copy only if both hold the same bytes as it goes.
+READ, WRITE, DELETE = 1, 2, 4  # what others may do to a file while it is held open (DELETE: delete or rename it)
+
+
+def is_count(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def file_facts(path):
+    """What a plan says about a file it would send to the Recycle Bin: its size and when it was
+    last changed, as Windows has them now. Whoever writes a plan puts both in the action
+    (action.update(file_facts(path))); they are read again, and compared, before the file goes."""
+    st = os.stat(xp(path))
+    return {"bytes": st.st_size, "mtime_ns": st.st_mtime_ns}
+
+
+def not_as_surveyed(a, path):
+    """None if the file at `path` is still the one action `a` was written about, else (status, note).
+    A plan that doesn't say what the file was leaves nothing to compare: the file stays."""
+    if not is_count(a.get("bytes")) or not is_count(a.get("mtime_ns")):
+        return "REFUSED", "the plan doesn't say what this file was when it was looked at; make the plan again"
+    try:
+        now = file_facts(path)
+    except (OSError, ValueError):
+        return "REFUSED", "can't be examined; left alone"
+    if now["bytes"] != a["bytes"] or now["mtime_ns"] != a["mtime_ns"]:
+        return "SKIP", "changed since the survey"
+    return None
+
+
+def handle_id(handle):
+    """Which file an open handle is on: (volume, file number), or None. Two names for one file give
+    the same answer."""
+    import ctypes
+    info = (ctypes.c_uint32 * 13)()  # BY_HANDLE_FILE_INFORMATION: the volume is 8th, the file number the last two
+    if not _kernel32().GetFileInformationByHandle(handle, info):
+        return None
+    return info[7], info[11], info[12]
+
+
+def file_id(path):
+    """Which file `path` is (the thing by that name itself, never what a link leads to), or None."""
+    if not IS_WIN:
+        try:
+            st = os.lstat(path)
+        except OSError:
+            return None
+        return st.st_dev, st.st_ino
+    import ctypes
+    k = _kernel32()
+    # FILE_READ_ATTRIBUTES; shared for everything; OPEN_EXISTING; FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT
+    h = k.CreateFileW(xp(path), 0x80, READ | WRITE | DELETE, None, 3, 0x02000000 | 0x00200000, None)
+    if h is None or h == ctypes.c_void_p(-1).value:
+        return None
+    try:
+        return handle_id(h)
+    finally:
+        k.CloseHandle(h)
+
+
+class Opened:
+    """A file opened for reading by its exact name, and held: until close(), others may do to it
+    only what `share` allows. OSError if it can't be opened that way (somebody is writing to it,
+    say). `id` says which file it is, `where` where it really is (None if Windows won't say)."""
+
+    def __init__(self, path, share):
+        if not IS_WIN:
+            self.f = open(path, "rb")
+            st = os.fstat(self.f.fileno())
+            self.id, self.where = (st.st_dev, st.st_ino), os.path.realpath(path)
+            return
+        import ctypes
+        import msvcrt
+        k = _kernel32()
+        h = k.CreateFileW(xp(path), 0x80000000, share, None, 3, 0x08000000, None)  # GENERIC_READ; OPEN_EXISTING; read start to end
+        if h is None or h == ctypes.c_void_p(-1).value:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            self.id, self.where = handle_id(h), final_name(h, 0)
+            self.f = os.fdopen(msvcrt.open_osfhandle(h, os.O_RDONLY | os.O_BINARY), "rb")  # closing the file closes the handle
+        except OSError:
+            k.CloseHandle(h)
+            raise
+
+    def size(self):
+        return os.fstat(self.f.fileno()).st_size
+
+    def close(self):
+        self.f.close()
+
+
+def same_bytes(a, b):
+    """True if two files, each open at its start, hold the same bytes to the end."""
+    while True:
+        x, y = a.read(1 << 20), b.read(1 << 20)
+        if x != y:
+            return False
+        if not x:
+            return True
+
+
+def copy_that_stays(src, keep, hold):
+    """For a file that goes to the Recycle Bin because it is a copy of `keep`: both are read, there
+    and then. (None, the kept copy, open) if `keep` is a file of its own that holds the same bytes
+    as `src`, else ((status, note), None). With `hold` the kept copy comes back held, so nobody
+    can change, rename or delete it: close it once `src` is in the Recycle Bin. Without (a dry
+    run), nothing is held back from anyone and the caller closes it straight away.
+
+    `src` itself can't stay held while it goes: Windows takes it by name. It is read with writing
+    shut out; whatever it holds an instant later is what lands in the Recycle Bin, where it can
+    be got back, and the copy that stays is held all the while."""
+    if not isinstance(keep, str) or not re.match(r"^[A-Za-z]:\\", keep) or not on_local_drive(keep):
+        return ("REFUSED", "the plan doesn't name the copy that stays by its full path on a disk in this PC"), None
+    there = state(keep)
+    if there == "absent":
+        return ("SKIP", "the copy that was to stay is no longer there"), None
+    if there == "unknown" or is_link(keep) or os.path.isdir(xp(keep)):
+        return ("REFUSED", "the copy that was to stay is a link or a folder, or can't be examined"), None
+    mine = kept = None
+    try:
+        try:
+            mine = Opened(src, READ | DELETE if hold else READ | WRITE | DELETE)
+            kept = Opened(keep, READ if hold else READ | WRITE | DELETE)
+        except OSError:
+            return ("SKIP", "it, or the copy that was to stay, is in use or can't be read right now"), None
+        if mine.id is None or kept.id is None:
+            return ("REFUSED", "can't be examined; left alone"), None
+        if mine.id == kept.id:
+            return ("REFUSED", "the copy that was to stay is this same file under another name"), None
+        if mine.size() == 0 or kept.size() == 0:
+            return ("REFUSED", "an empty file is not a copy of anything; left alone"), None
+        if mine.size() != kept.size() or not same_bytes(mine.f, kept.f):
+            return ("SKIP", "no longer the same as the copy that was to stay"), None
+        staying, kept = kept, None
+        return None, staying
+    finally:
+        for f in (mine, kept):
+            if f:
+                f.close()
 
 
 # ---------------------------------------------------------------- pins
@@ -1027,6 +1187,65 @@ def run_apply(args, places=None, check=None):
                 final_at = os.path.join(os.path.dirname(final_at), os.path.basename(final))
         return final, "its new name kept being taken"
 
+    # What this run has sent to the Recycle Bin (a dry run: would have), and the copies that stay
+    # for those that went as copies. A copy that stays is not sent there later in the same run,
+    # by itself or inside a folder: of every pair, one is always left.
+    stays = {}                   # which file -> where it really is
+    binned, binned_dirs = set(), []  # which files; and where the folders really were
+    went = []                    # (from, to) of each move this run made: a copy that stays may have been moved by one
+
+    def now_at(path):
+        """Where something the plan names is now, if a move earlier in this run took it, or a
+        folder it is in, somewhere else."""
+        if isinstance(path, str):
+            for was, to in went:
+                n = norm(path)
+                if n == norm(was):
+                    path = to
+                elif under(n, [norm(was)]):
+                    path = to + os.path.normpath(path)[len(was):]
+        return path
+
+    def may_go(a, src_at, is_dir, hold):
+        """Whether what action `a` sends to the Recycle Bin may go, as things stand now. Returns
+        (None, the copy that stays, what is going) or ((status, note), None, None). The copy that
+        stays is an Opened file, or None for something that doesn't go as a copy: see
+        copy_that_stays() for `hold`, and for when to close it."""
+        if is_dir:
+            there = real_folder(src_at)
+            if "keep" in a or there is None:
+                return ("REFUSED", "only a file can go as a copy of another" if "keep" in a else CANT_RESOLVE), None, None
+            if any(under(norm(p), [norm(there)]) for p in stays.values()):
+                return ("SKIP", "holds the copy that stays of a file this run sent to the Recycle Bin"), None, None
+            return None, None, there
+        no = not_as_surveyed(a, src_at)
+        if no:
+            return no, None, None
+        which = file_id(src_at)
+        if which is None:
+            return ("REFUSED", "can't be examined; left alone"), None, None
+        if which in stays:
+            return ("SKIP", "it is the copy that stays of a file this run sent to the Recycle Bin"), None, None
+        if "keep" not in a:
+            return None, None, which
+        no, kept = copy_that_stays(src_at, now_at(a["keep"]), hold)
+        if no:
+            return no, None, None
+        if kept.where is None or kept.id in binned or any(under(norm(kept.where), [d]) for d in binned_dirs):
+            kept.close()
+            return (("REFUSED", "the copy that was to stay is " + CANT_RESOLVE) if kept.where is None else
+                    ("SKIP", "the copy that was to stay goes to the Recycle Bin in this run as well")), None, None
+        return None, kept, which
+
+    def sent(which, kept):
+        """Note what has just gone (`which`, from may_go) and, if it went as a copy, the copy that stays."""
+        if isinstance(which, str):
+            binned_dirs.append(norm(which))
+        else:
+            binned.add(which)
+        if kept:
+            stays[kept.id] = kept.where
+
     halted = False
     # Empty-folder removals last, so moves that empty a folder don't race them
     order = sorted(actions, key=lambda a: (a["op"] == "remove-empty-dir", a["id"]))
@@ -1098,13 +1317,12 @@ def run_apply(args, places=None, check=None):
                                 continue
                     except OSError as ex:
                         failed = str(ex)
+                    if not failed:
+                        went.append((src, final))
                     halted = finish(pins, aid, op, src, final, note, failed)
             except OSError as ex:
                 log.add(aid, op, src, final, "FAILED", str(ex))
         elif op == "recycle":
-            if not is_dir and a.get("bytes") and os.path.getsize(xp(src)) != a["bytes"]:
-                log.add(aid, op, src, "", "SKIP", "changed since the survey")
-                continue
             if is_dir and tree_info(src)[3]:
                 log.add(aid, op, src, "", "REFUSED", "holds a link to another folder, or something that can't be "
                                                      "examined; delete it by hand")
@@ -1113,17 +1331,31 @@ def run_apply(args, places=None, check=None):
                 log.add(aid, op, src, "", "SKIP", "name ends in a dot or space, or is too long, for the Recycle Bin")
                 continue
             if dry:
-                log.add(aid, op, src, "", "WOULD", "to the Recycle Bin")
-                continue
-            with Pins() as pins:
-                no = pinned(pins, a, (src, src_at))
+                no, kept, which = may_go(a, src_at, is_dir, False)
+                if kept:
+                    kept.close()
                 if no:
                     log.add(aid, op, src, "", *no)
                     continue
-                err = recycle(src_at)
+                log.add(aid, op, src, "", "WOULD", "to the Recycle Bin")
+                sent(which, kept)
+                continue
+            with Pins() as pins:
+                no, kept, which = pinned(pins, a, (src, src_at)), None, None
+                if not no:  # read again, now that the folder it is in can't be swapped for another
+                    no, kept, which = may_go(a, src_at, is_dir, True)
+                if no:
+                    log.add(aid, op, src, "", *no)
+                    continue
+                try:
+                    err = recycle(src_at)
+                finally:
+                    if kept:
+                        kept.close()  # the copy that stays was held until here
                 if err:
                     log.add(aid, op, src, "", "FAILED", err)
                 else:
+                    sent(which, kept)
                     halted = finish(pins, aid, op, src, "", "in the Recycle Bin")
         elif op == "remove-empty-dir":
             files, _, subdirs, has_link = tree_info(src) if is_dir else (1, 0, [], False)

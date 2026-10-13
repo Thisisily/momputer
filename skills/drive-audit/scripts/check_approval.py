@@ -8,7 +8,9 @@ Run it before acting on anything. It changes nothing, anywhere. It refuses when:
   * the plan file no longer matches its own id (it was edited after the report was built);
   * the line names a different report;
   * a number isn't in the plan, or a word isn't one this report writes;
-  * a file id, a search or a link in the plan isn't in a safe form.
+  * a file id, a search or a link in the plan isn't in a safe form;
+  * two ticks undo each other: one would move to the Trash the copy that the other keeps
+    (a report built before this check could offer both).
 
 Otherwise it prints one block per approved fix: what to do, to which file id, and who loses access.
 Pass only the first line of what the person pasted. Their note is for you to read, not for this script.
@@ -23,7 +25,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.dont_write_bytecode = True  # leave no __pycache__ behind in the skill folder
-from build_report import LIST_ACTIONS, check_plan, plan_id  # noqa: E402  (the id is a hash of the plan's fixes)
+from build_report import LIST_ACTIONS, check_plan, plan_id, trash_clashes  # noqa: E402  (the id is a hash of the plan's fixes)
 
 LINE = re.compile(r"DRIVE-APPROVE report=([0-9a-f]{10})((?: [a-z]+=(?:none|\d{1,4}(?:-\d{1,4})?(?:,\d{1,4}(?:-\d{1,4})?)*))*)")
 DO = {"unshare": "set General access to Restricted (remove the 'anyone with the link' access). Leave the people added by name alone",
@@ -90,6 +92,11 @@ def main(argv=None):
             if (word, n) in [(w, k) for w, k, _ in picked]:
                 refuse("%s=%d is there twice. Ask the person to press Copy approval again." % (word, n))
             picked.append((word, n, lists[word][n - 1]))
+
+    # Everything ticked, taken together: a duplicate's kept copy must still be there afterwards.
+    clash = trash_clashes([("%s=%d" % (word, n), r) for word, n, r in picked])
+    if clash:
+        refuse("%s. Ask the person which of the two to untick, then to press Copy approval again." % clash[0])
 
     cuts = sum(1 for _, _, r in picked if r.get("cuts"))
     print("Report %s matches the plan file. %d approved, %d of them end someone's access." % (real, len(picked), cuts))

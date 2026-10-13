@@ -5,7 +5,9 @@
 It makes a pretend profile (Desktop, Documents, Downloads...) in a work folder inside <scratch
 folder>, with loose papers, an old installer, a duplicate, an empty folder and awkward names.
 Then: survey -> page -> dry run -> apply -> revert.ps1 -> apply -> --undo, checking the tree
-comes back exactly. Nothing outside the work folder is touched, and nothing is sent to the real
+comes back exactly; and the same plan again after files changed behind its back, checking that
+no copy goes unless the other one is still there and still the same. Nothing outside the work
+folder is touched, and nothing is sent to the real
 Recycle Bin: the engine's Recycle Bin call is swapped for one that moves the file to a folder
 inside the work folder.
 
@@ -163,6 +165,9 @@ try:
         "Documents\\kept\\report.docx": b"docx",
         "Downloads\\big copy (1).pdf": b"D" * 40000,
         "Documents\\kept\\big copy.pdf": b"D" * 40000,
+        # the same old installer downloaded twice: one goes as a copy of the other, and the other is then not offered as an old installer
+        "Downloads\\Nimbus setup.exe": b"MZ" * 30000,
+        "Downloads\\Nimbus setup (1).exe": b"MZ" * 30000,
     }
     for rel, data in files.items():
         os.utime(X + write(os.path.join(root, rel), data), (old, old))
@@ -190,6 +195,19 @@ try:
           plan["schema"] == "tidy-folders/plan@1" and plan["plan_id"] == sa.plan_fingerprint(plan["actions"]) and build_page.plan_id is sa.plan_fingerprint)
     check("the survey found each kind of thing: %s" % ", ".join(groups),
           groups == ["archives", "documents", "duplicates", "empty", "important", "installers", "music", "pictures", "videos"], groups)
+    to_bin = [a for a in plan["actions"] if a["op"] == "recycle"]
+    copies = [a for a in to_bin if a["group"] == "duplicates"]
+
+    def as_it_is(a):
+        st = os.stat(X + a["from"])
+        return type(a.get("bytes")) is int and type(a.get("mtime_ns")) is int and (a["bytes"], a["mtime_ns"]) == (st.st_size, st.st_mtime_ns)
+
+    check("the plan says what each file for the Recycle Bin is now (its size, when it last changed): the apply step compares before one goes",
+          len(to_bin) == 4 and all(as_it_is(a) for a in to_bin), to_bin)
+    check("each copy names the one that stays, and the one that stays is never offered to the Recycle Bin itself",
+          sorted((os.path.basename(a["from"]), os.path.relpath(a.get("keep", ""), root)) for a in copies)
+          == [("Nimbus setup (1).exe", "Downloads\\Nimbus setup.exe"), ("big copy (1).pdf", "Documents\\kept\\big copy.pdf")]
+          and not {sa.norm(a["keep"]) for a in copies} & {sa.norm(a["from"]) for a in to_bin}, to_bin)
     html = open(page, encoding="utf-8").read()
     check("hostile text is escaped in the page", html.count("</script>") == 2 and "<img" not in html and " " not in html)
     check("no file contents in the survey, the plan or the page", not any(SECRET in open(p, encoding="utf-8").read() for p in (survey_json, plan_json, page)))
@@ -239,7 +257,7 @@ try:
         check("apply (%d): everything done, nothing failed or refused; %d went to the (pretend) Recycle Bin" % (round_no, n_recycle),
               "EXIT" not in text and "FAILED" not in text and "REFUSED" not in text and len(binned) == n_recycle and now != before, text[-1200:])
         check("apply (%d): Desktop and Downloads hold no loose files any more; papers are under Documents\\Important" % round_no,
-              os.listdir(os.path.join(root, "Desktop")) == [] and sorted(os.listdir(os.path.join(root, "Downloads"))) == ["bundle"]
+              os.listdir(os.path.join(root, "Desktop")) == [] and sorted(os.listdir(os.path.join(root, "Downloads"))) == ["Nimbus setup.exe", "bundle"]
               and os.path.isdir(os.path.join(root, "Documents", "Important")) and not os.path.exists(os.path.join(root, "Pictures", "empty one")),
               (os.listdir(os.path.join(root, "Desktop")), os.listdir(os.path.join(root, "Downloads"))))
         if way_back == "revert.ps1":
@@ -251,6 +269,39 @@ try:
         restore_bin()
         check("%s (and the pretend Recycle Bin emptied back): the tree is exactly as it was, empty folders too" % way_back, tree(root) == before,
               [e for e in tree(root) if e not in before][:6] + [e for e in before if e not in tree(root)][:6])
+    print("\n-- 2a. the same plan, after files changed behind its back")
+    # Days can pass between the survey and the apply. A copy goes only if it and the one that stays
+    # still hold the same bytes then: an old plan can't send the last copy of anything to the bin.
+    pdf, kept_pdf = os.path.join(root, "Downloads", "big copy (1).pdf"), os.path.join(root, "Documents", "kept", "big copy.pdf")
+    kept_exe = os.path.join(root, "Downloads", "Nimbus setup.exe")
+    just_copies = "TIDY-APPROVE plan=%s ids=%s" % (plan["plan_id"], ",".join(str(a["id"]) for a in copies))
+
+    def rewrite(path, data):
+        """New content with the old time on it, as a careless tool might leave a file."""
+        st = os.stat(X + path)
+        write(path, data)
+        os.utime(X + path, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+    def put_back():
+        for rel in ("Downloads\\big copy (1).pdf", "Documents\\kept\\big copy.pdf", "Downloads\\Nimbus setup (1).exe", "Downloads\\Nimbus setup.exe"):
+            os.utime(X + write(os.path.join(root, rel), files[rel]), (old, old))
+
+    stale = (
+        ("a copy that was rewritten since, same size and same time", lambda: rewrite(pdf, b"E" * 40000), "no longer the same", ["Nimbus setup (1).exe"]),
+        ("a copy that was edited since", lambda: write(pdf, b"D" * 39000 + b"new words"), "changed since the survey", ["Nimbus setup (1).exe"]),
+        ("a copy whose other one was deleted since", lambda: os.remove(X + kept_pdf), "no longer there", ["Nimbus setup (1).exe"]),
+        ("a copy whose other one was rewritten since", lambda: rewrite(kept_exe, b"ZM" * 30000), "no longer the same", ["big copy (1).pdf"]),
+    )
+    for n, (what, change, word, goes) in enumerate(stale):
+        change()
+        text = apply_here([plan_json, "--approve", just_copies, "--root", root, "--log-dir", os.path.join(out, "log-stale-%d" % n), "--apply"])
+        went = sorted(os.path.basename(path) for _, path in binned)
+        check("%s stays where it is; the other copy, untouched, still goes" % what,
+              "EXIT" not in text and went == goes and sum(1 for l in text.splitlines() if l.startswith(("SKIP", "REFUSED")) and word in l) == 1, text[-900:])
+        restore_bin()
+        put_back()
+    check("...and with every file put back, the tree is exactly as it was", tree(root) == before,
+          [e for e in tree(root) if e not in before][:6] + [e for e in before if e not in tree(root)][:6])
     check("nothing in a name ran (no stray files)", sorted(os.listdir(T)) == sorted([MARK, "out", "profile"]), os.listdir(T))
 
     print("\n-- 3. the page in a headless browser")
