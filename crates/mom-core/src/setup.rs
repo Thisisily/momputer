@@ -142,7 +142,8 @@ pub struct DocText {
     pub hidden: usize,
     /// It was longer than mom shows.
     pub cut: bool,
-    /// It couldn't be read as what it should be, so every value in it is blanked.
+    /// It couldn't be read as what it should be, so mom can't tell what in it is a key, and none
+    /// of it is shown (`text` is empty).
     pub blind: bool,
 }
 
@@ -279,16 +280,17 @@ fn key_in_path(part: &str) -> bool {
 }
 
 /// A web address without what might be a key in it: no sign-in part, nothing after a question
-/// mark, and no part of the path that looks like a key.
+/// mark (or a semicolon, or a hash), and no part of the path that looks like a key.
 fn plain_url(url: &str) -> String {
     let url = url.trim();
     let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
-    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
-    let (place, path) = rest.split_once('/').map(|(h, p)| (h, Some(p))).unwrap_or((rest, None));
+    let rest = rest.split(['?', '#', ';']).next().unwrap_or(rest);
+    // A backslash is a slash to whatever opens the address.
+    let (place, path) = rest.split_once(['/', '\\']).map(|(h, p)| (h, Some(p))).unwrap_or((rest, None));
     let host = place.rsplit_once('@').map(|(_, host)| host).unwrap_or(place);
     let mut out = if scheme.is_empty() { host.to_string() } else { format!("{scheme}://{host}") };
     if let Some(path) = path {
-        for part in path.split('/') {
+        for part in path.split(['/', '\\']) {
             out.push('/');
             out.push_str(if key_in_path(part) { BLANK } else { part });
         }
@@ -297,22 +299,49 @@ fn plain_url(url: &str) -> String {
 }
 
 /// Does an address carry a key: a password in its sign-in part, a key in its path, or something
-/// after the question mark that's named or shaped like one?
+/// after the question mark (or a semicolon) that's named or shaped like one?
 fn url_has_secret(url: &str) -> bool {
     let Some((_, rest)) = url.split_once("://") else { return false };
-    let (before, query) = rest.split_once('?').map(|(b, q)| (b, q.split('#').next().unwrap_or(q))).unwrap_or((rest, ""));
-    let (place, path) = before.split_once('/').unwrap_or((before, ""));
+    let rest = rest.split('#').next().unwrap_or(rest);
+    let cut = rest.find(['?', ';']).unwrap_or(rest.len());
+    let (before, extras) = rest.split_at(cut);
+    let (place, path) = before.split_once(['/', '\\']).unwrap_or((before, ""));
     place.rsplit_once('@').is_some_and(|(who, _)| who.contains(':'))
-        || path.split('/').any(key_in_path)
-        || query.split('&').filter_map(|pair| pair.split_once('=')).any(|(name, value)| secret_name(name) || secret_value(value))
+        || path.split(['/', '\\']).any(key_in_path)
+        || extras.split(['?', '&', ';']).filter_map(|pair| pair.split_once('=')).any(|(name, value)| secret_name(name) || secret_value(value))
+}
+
+/// Where the word at the start of `text` ends. In a settings file (`quoted`) a quoted stretch
+/// is part of the word, spaces and all, the way a shell reads it: `--password "two words"` is a
+/// flag and one value, not a flag and two. A quote with no partner is just a character.
+fn word_end(text: &str, quoted: bool) -> usize {
+    let mut open: Option<char> = None;
+    for (i, c) in text.char_indices() {
+        match open {
+            Some(q) if c == q => open = None,
+            Some(_) => {}
+            None if c.is_whitespace() => return i,
+            None if quoted && (c == '"' || c == '\'') && text[i + 1..].contains(c) => open = Some(c),
+            None => {}
+        }
+    }
+    text.len()
 }
 
 /// Blanks what's secret in a run of words (a command line, a header's value, a line of notes),
 /// leaving every space where it was. Always: a word that looks like a key, `NAME=value` where
 /// the name is a secret's, an address that carries a key. `strict` (it's from a settings file):
-/// also the word after a flag or a word that announces a key ("--token x", "Bearer x",
-/// "password: x"), and everything after the question mark in any address.
+/// also whatever follows a flag or a word that announces a key ("--token x", "Bearer x",
+/// "password: x"), quoted values whole, and everything after the question mark in any address.
+/// In notes, what follows such a word goes only if it looks like a value (it has a digit in it,
+/// or it's long): "the token: is described here" stays as it is.
 fn blank_words(text: &str, strict: bool) -> (String, usize) {
+    blank_run(text, strict, strict)
+}
+
+/// `blank_words`, with whether a quoted stretch counts as one word (`quoted`). What's inside
+/// such a stretch is read again without that, so it's always read word by word in the end.
+fn blank_run(text: &str, strict: bool, quoted: bool) -> (String, usize) {
     const AROUND: &str = "\"'`()[]{}<>,;";
     let mut out = String::with_capacity(text.len());
     let mut hidden = 0;
@@ -322,22 +351,21 @@ fn blank_words(text: &str, strict: bool) -> (String, usize) {
         let space = rest.len() - rest.trim_start().len();
         out.push_str(&rest[..space]);
         rest = &rest[space..];
-        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        let (word, after) = rest.split_at(end);
+        let (word, after) = rest.split_at(word_end(rest, quoted));
         rest = after;
         if word.is_empty() {
             continue;
         }
-        // The word without the punctuation around it.
+        // The word without the punctuation around it. (A full stop or the like after it is the
+        // sentence's, not the word's.)
         let lead = word.len() - word.trim_start_matches(|c| AROUND.contains(c)).len();
-        // (A full stop or the like after it is the sentence's, not the word's.)
         let tail = word[lead..].trim_end_matches(|c| AROUND.contains(c) || matches!(c, '.' | '!' | '?')).len();
         let (open, core, close) = (&word[..lead], &word[lead..lead + tail], &word[lead + tail..]);
         if core.is_empty() {
             out.push_str(word);
             continue;
         }
-        let plain = core.trim_end_matches(':').trim_start_matches('-').to_ascii_lowercase();
+        let plain = core.trim_end_matches([':', '=']).trim_start_matches('-').to_ascii_lowercase();
         let scheme = matches!(plain.as_str(), "bearer" | "basic" | "token" | "apikey");
         let mut put = |shown: &str| {
             out.push_str(open);
@@ -346,11 +374,15 @@ fn blank_words(text: &str, strict: bool) -> (String, usize) {
         };
         if blank_next && !scheme {
             blank_next = false;
-            hidden += 1;
-            put(BLANK);
-            continue;
+            // In notes, only what looks like a value: prose goes on after "the token:".
+            if strict || core.chars().any(|c| c.is_ascii_digit()) || core.len() >= 16 {
+                hidden += 1;
+                put(BLANK);
+                continue;
+            }
         }
-        if let Some((name, _)) = core.split_once('=').filter(|(n, v)| !n.is_empty() && !v.is_empty() && !n.contains("://")) {
+        // NAME=value, the value quoted or not.
+        if let Some((name, _)) = core.split_once('=').filter(|(n, v)| !n.is_empty() && !v.is_empty() && !n.contains("://") && !n.contains(char::is_whitespace)) {
             let bare = name.trim_start_matches('-');
             let env_style = bare.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') && bare.chars().any(|c| c.is_ascii_uppercase());
             if secret_name(bare) && (strict || env_style) {
@@ -359,19 +391,24 @@ fn blank_words(text: &str, strict: bool) -> (String, usize) {
                 continue;
             }
         }
+        // A quoted stretch of several words: read what's inside it the same way.
+        if core.contains(char::is_whitespace) {
+            let (inside, n) = blank_run(core, strict, false);
+            hidden += n;
+            put(&inside);
+            continue;
+        }
         if secret_value(core) {
             hidden += 1;
             put(BLANK);
             continue;
         }
-        if core.contains("://") && (url_has_secret(core) || (strict && (core.contains('?') || core.contains('@')))) {
+        if core.contains("://") && (url_has_secret(core) || (strict && (core.contains('?') || core.contains('@') || core.contains(';')))) {
             hidden += 1;
             put(&plain_url(core));
             continue;
         }
-        if strict {
-            blank_next = scheme || ((core.starts_with('-') || core.ends_with(':')) && secret_name(&plain));
-        }
+        blank_next = scheme || ((core.starts_with('-') || core.ends_with(':') || core.ends_with('=')) && secret_name(&plain));
         out.push_str(word);
     }
     (out, hidden)
@@ -544,12 +581,14 @@ fn words(cmd: &str) -> Vec<String> {
 }
 
 /// A command to show: the program's name and what follows, with anything key-like blanked.
+/// Argument by argument, the way it's run: the one after "--password" goes whole, spaces and all.
 fn show_command(program: &str, args: &[String]) -> String {
     // A plugin's own folder says nothing in a row: the script's place inside it is enough.
     let inside = |a: &str| ["${CLAUDE_PLUGIN_ROOT}/", "${CLAUDE_PLUGIN_ROOT}\\", "$CLAUDE_PLUGIN_ROOT/"].iter().find_map(|p| a.strip_prefix(p)).unwrap_or(a).to_string();
-    let rest: Vec<String> = args.iter().take(12).map(|a| inside(a)).collect();
-    let (rest, _) = blank_words(&rest.join(" "), true);
-    tame(format!("{} {rest}", file_name_of(program)).trim_end(), 110)
+    let mut shown = Value::Array(args.iter().take(12).map(|a| Value::String(inside(a))).collect());
+    blank_json(&mut shown, "args", false);
+    let rest: Vec<&str> = shown.as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    tame(format!("{} {}", file_name_of(program), rest.join(" ")).trim_end(), 110)
 }
 
 fn strings(v: Option<&Value>) -> Vec<String> {
@@ -1099,60 +1138,13 @@ fn blank_json(v: &mut Value, name: &str, inside_secrets: bool) -> usize {
     }
 }
 
-/// A settings file mom couldn't read as what it should be, so she can't tell which values are
-/// keys: every value is blanked, and only its shape and its names are left to see.
-fn blank_everything(text: &str) -> (String, usize) {
-    let mut hidden = 0;
-    let lines: Vec<String> = text
-        .lines()
-        .map(|line| {
-            let t = line.trim();
-            let indent = &line[..line.len() - line.trim_start().len()];
-            let comma = if t.ends_with(',') { "," } else { "" };
-            let shape = |v: &str| matches!(v.trim_end_matches(','), "" | "{" | "[" | "}" | "]" | "{}" | "[]" | "true" | "false" | "null");
-            if shape(t) || (t.starts_with('[') && t.ends_with(']') && !t.contains('"') && !t.contains(',')) {
-                return line.to_string(); // a bracket, or a table's heading
-            }
-            if t.starts_with('#') || t.starts_with("//") {
-                hidden += 1;
-                return format!("{indent}{} {BLANK}", if t.starts_with('#') { "#" } else { "//" });
-            }
-            // "name": value, or name = value. The name stays if it isn't a key itself.
-            let quoted_name = t.strip_prefix('"').and_then(|r| r.split_once('"')).filter(|(_, after)| after.trim_start().starts_with(':') || after.trim_start().starts_with('='));
-            let split = match quoted_name {
-                Some((name, after)) => Some((format!("\"{name}\""), after.trim_start()[..1].to_string(), after.trim_start()[1..].to_string())),
-                None => t.find(['=', ':']).filter(|i| !t[..*i].contains('"')).map(|i| (t[..i].trim_end().to_string(), t[i..i + 1].to_string(), t[i + 1..].to_string())),
-            };
-            match split {
-                Some((name, sep, value)) if shape(value.trim()) => format!("{indent}{name}{} {}", if sep == ":" { ":" } else { " =" }, value.trim()),
-                Some((name, sep, _)) => {
-                    hidden += 1;
-                    let name = if secret_value(name.trim_matches('"')) { format!("\"{BLANK}\"") } else { name };
-                    format!("{indent}{name}{} \"{BLANK}\"{comma}", if sep == ":" { ":" } else { " =" })
-                }
-                None => {
-                    hidden += 1;
-                    format!("{indent}\"{BLANK}\"{comma}")
-                }
-            }
-        })
-        .collect();
-    (lines.join("\n"), hidden)
-}
-
 /// Blanks every key and password in a TOML file. It's read properly and written out again (a
 /// value can be an inline table or a list, which a line-by-line look would miss), so comments
-/// are gone and the order may differ. (text, how many blanked, whether it couldn't be read.)
-fn blank_toml(text: &str) -> (String, usize, bool) {
-    let read = text.parse::<toml::Table>().ok().and_then(|t| serde_json::to_value(&t).ok());
-    if let Some(mut v) = read {
-        let hidden = blank_json(&mut v, "", false);
-        if let Ok(written) = toml::to_string_pretty(&v) {
-            return (written, hidden, false);
-        }
-    }
-    let (text, hidden) = blank_everything(text);
-    (text, hidden, true)
+/// are gone and the order may differ. None: it couldn't be read, so it can't be checked.
+fn blank_toml(text: &str) -> Option<(String, usize)> {
+    let mut v = serde_json::to_value(text.parse::<toml::Table>().ok()?).ok()?;
+    let hidden = blank_json(&mut v, "", false);
+    Some((toml::to_string_pretty(&v).ok()?, hidden))
 }
 
 /// Blanks what looks like a key in a file of words (instructions, a skill), line by line.
@@ -1188,45 +1180,41 @@ pub fn read(agents: &[AgentSetup], id: &str) -> Result<DocText, String> {
     let mut cut = bytes.len() as u64 > limit;
     bytes.truncate(limit as usize);
     let text = String::from_utf8_lossy(&bytes).to_string();
-    let (mut text, hidden, blind) = match d.kind.as_str() {
-        "json" => match json(&text) {
-            Some(mut v) => {
-                if let Some(part) = &d.part {
-                    // That part, for everything and for each project that has its own.
-                    let mut shown = serde_json::Map::new();
-                    shown.insert(part.clone(), v.get(part).cloned().unwrap_or(Value::Null));
-                    let per_project: serde_json::Map<String, Value> = v
-                        .get("projects")
-                        .and_then(Value::as_object)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|(project, entry)| {
-                            let theirs = entry.get(part).filter(|p| p.as_object().is_some_and(|m| !m.is_empty()))?;
-                            Some((project.clone(), serde_json::json!({ part.as_str(): theirs })))
-                        })
-                        .collect();
-                    if !per_project.is_empty() {
-                        shown.insert("projects".into(), Value::Object(per_project));
-                    }
-                    v = Value::Object(shown);
+    // A settings file mom can't read as what it is can't be checked for keys, so it isn't shown
+    // at all: no guessing at which of its lines are safe.
+    let checked: Option<(String, usize)> = match d.kind.as_str() {
+        "json" => json(&text).map(|mut v| {
+            if let Some(part) = &d.part {
+                // That part, for everything and for each project that has its own.
+                let mut shown = serde_json::Map::new();
+                shown.insert(part.clone(), v.get(part).cloned().unwrap_or(Value::Null));
+                let per_project: serde_json::Map<String, Value> = v
+                    .get("projects")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(project, entry)| {
+                        let theirs = entry.get(part).filter(|p| p.as_object().is_some_and(|m| !m.is_empty()))?;
+                        Some((project.clone(), serde_json::json!({ part.as_str(): theirs })))
+                    })
+                    .collect();
+                if !per_project.is_empty() {
+                    shown.insert("projects".into(), Value::Object(per_project));
                 }
-                let hidden = blank_json(&mut v, "", false);
-                (serde_json::to_string_pretty(&v).unwrap_or_default(), hidden, false)
+                v = Value::Object(shown);
             }
-            // Not JSON after all: mom can't tell which values are keys, so every one is blanked.
-            None if d.part.is_none() => {
-                let (text, hidden) = blank_everything(&text);
-                (text, hidden, true)
-            }
-            None => return Err("Mom couldn't read that file as JSON.".into()),
-        },
+            let hidden = blank_json(&mut v, "", false);
+            (serde_json::to_string_pretty(&v).unwrap_or_default(), hidden)
+        }),
         "toml" => blank_toml(&text),
         // Words (instructions, a skill): shown as written, but for anything that looks like a key.
-        _ => {
-            let (text, hidden) = blank_text(&text);
-            (text, hidden, false)
-        }
+        _ => Some(blank_text(&text)),
     };
+    let blind = checked.is_none();
+    let (mut text, hidden) = checked.unwrap_or_default();
+    if blind {
+        cut = false;
+    }
     if text.len() as u64 > MAX_DOC {
         let mut end = MAX_DOC as usize;
         while !text.is_char_boundary(end) {
@@ -1461,6 +1449,16 @@ mod tests {
         );
         assert_eq!(strict("API_KEY=abc node server.js --token abc --name atlas --password=hunter2"), (format!("API_KEY={BLANK} node server.js --token {BLANK} --name atlas --password={BLANK}"), 3));
         assert_eq!(strict("password: hunter2"), (format!("password: {BLANK}"), 1));
+        // A quoted value is one value, spaces and all, the way a shell reads it.
+        assert_eq!(strict("login --password \"my pass phrase\" --user sam"), (format!("login --password \"{BLANK}\" --user sam"), 1));
+        assert_eq!(strict("login --password=\"my pass phrase\" then"), (format!("login --password={BLANK}\" then"), 1));
+        assert_eq!(strict("curl -H 'X-Api-Key: abc123' -d 'a b'"), (format!("curl -H 'X-Api-Key: {BLANK}' -d 'a b'"), 1));
+        assert_eq!(strict("it's fine and so's this"), ("it's fine and so's this".to_string(), 0));
+        // What follows a semicolon in an address is as good a place for a key as what follows a question mark.
+        assert_eq!(strict("open https://x.example/mcp;token=abc123/sse"), ("open https://x.example/mcp".to_string(), 1));
+        assert_eq!(plain_url("https://sam:pw@x.example\\hook\\abcdef0123456789abcdef0123"), format!("https://x.example/hook/{BLANK}"));
+        // Run as a list, the argument after the flag goes whole.
+        assert_eq!(show_command("login.exe", &["--password".into(), "my pass phrase".into(), "--user".into(), "sam".into()]), format!("login.exe --password {BLANK} --user sam"));
         // Every space stays where it was, and what isn't a key isn't touched.
         assert_eq!(strict("a   b\tc  --name  atlas"), ("a   b\tc  --name  atlas".to_string(), 0));
         assert_eq!(strict("npx -y @copperline/mcp-server C:\\Users\\sam\\notes"), ("npx -y @copperline/mcp-server C:\\Users\\sam\\notes".to_string(), 0));
@@ -1469,6 +1467,9 @@ mod tests {
         let (shown, hidden) = blank_words(notes, false);
         assert_eq!(shown, format!("The token: is described at [the docs](https://docs.example/a?tab=readme). Set OPENAI_API_KEY={BLANK} and use `{BLANK}`."));
         assert_eq!(hidden, 2);
+        // What follows "password:" in notes goes when it looks like a value.
+        assert_eq!(blank_words("Wi-fi password: hunter2 (ask sam). The password: is on the fridge.", false), (format!("Wi-fi password: {BLANK} (ask sam). The password: is on the fridge."), 1));
+        assert_eq!(blank_words("Send `Authorization: Bearer abcd1234` with it", false), (format!("Send `Authorization: Bearer {BLANK}` with it"), 1));
     }
 
     #[test]
@@ -1487,7 +1488,7 @@ mod tests {
             &paths.codex_dir().join("config.toml"),
             "# my key is tok_inacomment_0123456789abcdef\n[mcp_servers.notes]\ncommand = \"notes-mcp\"\nargs = [\"--token\", \"tok123\"]\nenv = { NOTES_KEY = \"abc123\", MODE = \"fast\" }\n",
         );
-        // Cursor: a file cut off halfway. Mom can't tell what's a key in it, so nothing is shown.
+        // Cursor: a file cut off halfway. Mom can't tell what's a key in it, so none of it is shown.
         put(&paths.home.join(".cursor").join("mcp.json"), "{\n  \"mcpServers\": {\n    \"x\": {\n      \"command\": \"x-mcp\",\n      \"env\": {\n        \"TOKEN\": \"tok_live_secret\",\n        \"plainword\"\n");
         let agents = check(&paths);
         let read_it = |agent: &str, title: &str| {
@@ -1509,11 +1510,9 @@ mod tests {
         }
         assert!(toml.text.contains("notes-mcp") && toml.text.contains("--token") && !toml.blind, "{}", toml.text);
         let cut = read_it("cursor", "mcp.json");
-        assert!(cut.blind && !cut.text.contains("tok_live_secret") && !cut.text.contains("x-mcp") && !cut.text.contains("plainword"), "{}", cut.text);
-        assert!(cut.text.contains("\"mcpServers\": {") && cut.text.contains("\"TOKEN\": \"•••\""), "the shape and the names are left:\n{}", cut.text);
+        assert!(cut.blind && cut.text.is_empty() && cut.hidden == 0 && !cut.cut, "{}", cut.text);
         // A TOML file that can't be read is treated the same way.
-        let (text, hidden, blind) = blank_toml("model = \"x\"\n[mcp_servers.a\nenv = { K = \"tok_live_secret\" }\n# tok_live_secret\n");
-        assert!(blind && hidden == 4 && !text.contains("tok_live_secret") && text.contains("model = \"•••\""), "{text}");
+        assert_eq!(blank_toml("model = \"x\"\n[mcp_servers.a\nenv = { K = \"tok_live_secret\" }\n"), None);
         std::fs::remove_dir_all(&root).ok();
     }
 

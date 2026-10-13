@@ -191,10 +191,12 @@ pub(crate) fn plugins(paths: &Paths) -> Vec<(String, PathBuf)> {
         return vec![];
     };
     let Some(map) = v.get("plugins").and_then(|p| p.as_object()) else { return vec![] };
+    // Inside that folder for real: spelled without "..", which would start there and end anywhere.
+    let inside = |d: &PathBuf| d.starts_with(&root) && !d.components().any(|c| matches!(c, std::path::Component::ParentDir));
     let mut out = Vec::new();
-    for (id, installs) in map.iter().take(500) {
-        for i in installs.as_array().into_iter().flatten().take(8) {
-            if let Some(dir) = i.get("installPath").and_then(|p| p.as_str()).map(PathBuf::from).filter(|d| d.starts_with(&root)) {
+    for (id, installs) in map.iter().take(200) {
+        for i in installs.as_array().into_iter().flatten().take(4) {
+            if let Some(dir) = i.get("installPath").and_then(|p| p.as_str()).map(PathBuf::from).filter(inside) {
                 out.push((id.clone(), dir));
             }
         }
@@ -398,7 +400,7 @@ mod tests {
             ),
         )
         .unwrap();
-        // A plugin the list places outside Claude Code's own folder isn't read.
+        // A plugin the list places outside Claude Code's own folder isn't read, however it's spelled.
         put(root.join("not-claudes"), None);
         // A folder with the right name and nothing in it is not a skill.
         std::fs::create_dir_all(paths.claude_dir().join("skills").join("backup-checkup")).unwrap();
@@ -431,6 +433,11 @@ mod tests {
         assert!(ask.contains("tidy-folders") && ask.contains("no version") && ask.contains(&format!("{PAGE}/tidy-folders")) && !ask.contains("inbox-cleanup"), "{ask}");
         assert_eq!(catch_up(&[get("desktop-icons")]), None);
 
+        // Spelled with ".." it would start in Claude Code's folder and end anywhere: not read either.
+        let sneaky = paths.claude_dir().join("plugins").join("..").join("..").join("elsewhere");
+        put(sneaky.clone(), None);
+        std::fs::write(paths.claude_dir().join("plugins").join("installed_plugins.json"), format!(r#"{{"plugins":{{"mom@x":[{{"installPath":"{}"}}]}}}}"#, text(&sneaky))).unwrap();
+        assert!(sneaky.join("SKILL.md").is_file() && plugins(&paths).is_empty());
         // Without Claude Code's list, the newest download in its plugin folder is the one.
         std::fs::remove_file(paths.claude_dir().join("plugins").join("installed_plugins.json")).unwrap();
         assert!(get("inbox-cleanup").has.is_empty(), "another marketplace's folder isn't guessed at");
