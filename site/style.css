@@ -1869,6 +1869,29 @@ html.pointer .proof img {
   font-size: 13.5px;
 }
 
+/* for the keyboard: the way into the live widget shows when Tab reaches it */
+.live-note {
+  position: relative;
+}
+
+.vh.on-focus:focus {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: auto;
+  height: 40px;
+  margin-top: 6px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--ink);
+  color: var(--bg);
+  font: 600 14px/1 var(--font-ui);
+  clip-path: none;
+  transform: translateX(-50%);
+  z-index: 3;
+}
+
 .demo-live {
   position: absolute;
   inset: 0;

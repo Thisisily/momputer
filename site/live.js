@@ -259,6 +259,9 @@
   let cameFrom = null; // what "Open it here" was pressed on, if the widget itself is out of sight
 
   const tell = (word) => frame && frame.contentWindow && frame.contentWindow.postMessage({ momputer: word }, location.origin);
+  // Until you reach for it, the widget is a picture as far as the keyboard goes: Tab passes it by
+  // instead of walking through every button in it. The pointer, or the button under it, wakes it.
+  const wake = () => holder && (holder.inert = false);
   const inView = (box) => box.bottom > 80 && box.top < innerHeight - 80;
 
   function fit() {
@@ -305,6 +308,7 @@
 
   async function grow() {
     if (big) return tell("sized");
+    wake();
     const from = whereSmall();
     big = true;
     shade.hidden = back.hidden = false;
@@ -333,7 +337,10 @@
     frame = Object.assign(document.createElement("iframe"), { src: "demo/index.html?demo", title: "A live momputer widget, running on made-up data" });
     frame.setAttribute("scrolling", "no");
     holder.append(frame);
+    holder.inert = true;
     slot.append(holder);
+    slot.addEventListener("pointerenter", wake);
+    $("#use-live").addEventListener("click", () => (wake(), frame.focus()));
     fit();
 
     shade = Object.assign(document.createElement("div"), { className: "big-shade", hidden: true });

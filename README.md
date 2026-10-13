@@ -19,6 +19,8 @@
   <img src="docs/showcase.png" width="100%" alt="Two views of momputer. The widget, with 27.9 GB mom can free up and what it is. And BIG MODE: a full window with your PC drawn in three dimensions on mom's desk, mom on its monitor, the memory sticks lit red, and a card saying they run slower than they're made for">
 </p>
 
+<p align="center"><a href="https://thisisily.github.io/momputer/"><b>Try her in your browser</b></a>: the widget on her page is live, with made-up data.</p>
+
 ---
 
 AI agents start dev servers, watchers and headless browsers, and nobody turns them off. A week later Task Manager has 70 `node.exe` and your disk is full of scratch folders.
