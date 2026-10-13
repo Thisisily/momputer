@@ -80,6 +80,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// The skills that come with momputer: what each does, what to say, and who has it.
+    Skills {
+        #[arg(long)]
+        json: bool,
+    },
     /// A checkup for the whole machine: disks, memory, restarts, startup apps.
     Health {
         #[arg(long)]
@@ -449,6 +454,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Trash { .. })
         | Some(Cmd::Health { .. })
         | Some(Cmd::Update { .. })
+        | Some(Cmd::Skills { .. })
         | Some(Cmd::Speed { .. })
         | Some(Cmd::Programs { .. })
         | Some(Cmd::Pc { .. })
@@ -785,6 +791,22 @@ fn run(cli: Cli) -> Result<i32> {
                 println!("{}  {}", st.pink(&st.bold("mom")), st.bold(&format!("\"You have {}. {why}\"", u.current)));
             } else {
                 println!("{}  {}", st.pink(&st.bold("mom")), st.bold(&format!("\"You have {}, the newest.\"", u.current)));
+            }
+        }
+        Some(Cmd::Skills { json }) => {
+            let list = mom_core::skills::list(&paths);
+            if json {
+                print_json(&list)?;
+            } else {
+                println!("{}  {}", st.bold("SKILLS"), st.dim(&format!("{} jobs you can hand your agent", list.len())));
+                for s in &list {
+                    let who = if s.has.is_empty() { "not installed".to_string() } else { format!("in {}", s.has.join(" and ")) };
+                    println!("\n  {}  {}", st.bold(&pad(&s.title, 20)), st.dim(&who));
+                    println!("  {}", s.what);
+                    println!("  {}", st.dim(&format!("Say: \"{}\"", s.prompts.join("\", \""))));
+                }
+                println!("\n{}", st.dim(&format!("Get them all in Claude Code: {}", mom_core::skills::INSTALL)));
+                println!("{}", st.dim(&format!("Anywhere else, copy a folder from {}", mom_core::skills::PAGE)));
             }
         }
         Some(Cmd::Health { json }) => {

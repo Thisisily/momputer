@@ -27,6 +27,7 @@ pub mod programs;
 pub mod restart;
 pub mod rules;
 pub mod scan;
+pub mod skills;
 pub mod sound;
 pub mod speed;
 pub mod startup;

@@ -1136,6 +1136,10 @@ struct RulesState {
     customized: bool,
     targets: Vec<rules::Target>,
     integrations: Vec<hooks::Integration>,
+    /// The skills that come with momputer, and the line that installs them in Claude Code.
+    skills: Vec<mom_core::skills::Skill>,
+    skills_install: &'static str,
+    skills_page: &'static str,
 }
 
 #[tauri::command(async)]
@@ -1145,6 +1149,9 @@ fn get_rules(s: State<'_, S>) -> RulesState {
         customized: rules::is_customized(&s.paths),
         targets: rules::targets(&s.paths),
         integrations: hooks::integrations(&s.paths),
+        skills: mom_core::skills::list(&s.paths),
+        skills_install: mom_core::skills::INSTALL,
+        skills_page: mom_core::skills::PAGE,
     }
 }
 

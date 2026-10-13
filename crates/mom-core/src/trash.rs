@@ -129,6 +129,10 @@ pub struct Live {
     gone: Mutex<Vec<String>>,
     /// The item being cleaned right now.
     current: Mutex<String>,
+    /// In tests: ask to stop once this many items have finished (0: never), the way someone
+    /// pressing Stop partway would.
+    #[cfg(test)]
+    stop_after: AtomicU64,
 }
 
 /// How a clean-up is going, for the widget.
@@ -193,11 +197,16 @@ impl Live {
     }
 
     fn finished(&self, c: &Cand, gone: bool, freed: u64) {
-        self.done.fetch_add(1, Ordering::Relaxed);
+        let done = self.done.fetch_add(1, Ordering::Relaxed) + 1;
         self.freed.fetch_add(freed, Ordering::Relaxed);
         if gone {
             self.gone.lock().unwrap_or_else(|e| e.into_inner()).push(c.path.to_string_lossy().to_string());
         }
+        #[cfg(test)]
+        if self.stop_after.load(Ordering::Relaxed) == done {
+            self.stop();
+        }
+        let _ = done;
     }
 
     /// A file inside an item went (counted by the remover as it goes).
@@ -1783,18 +1792,42 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         return move_chosen(&chosen, ctx, r);
     }
     let stopped = || live.is_some_and(Live::stopped);
+    // What an item's going (or not) freed, told to whoever is watching as soon as it's known: a
+    // long clean-up counts up as it goes, not all at once when the last item is done. `told`
+    // remembers what was said, by place in `chosen`, so the tally at the end doesn't say it twice.
+    let told: std::cell::RefCell<std::collections::HashMap<usize, u64>> = Default::default();
+    let settle = |i: usize, ok: bool, count_files: bool| {
+        let c = chosen[i];
+        let freed = if ok {
+            c.bytes
+        } else {
+            // Something in it was in use (or the clean was stopped halfway); count what did go.
+            let left: u64 = tally_many(&c.targets, ENTRY_CAP, u64::MAX).iter().map(|t| t.bytes).sum();
+            c.bytes.saturating_sub(left)
+        };
+        if let Some(l) = live {
+            if count_files {
+                l.files_gone(c.files.max(1)); // nothing counted its files one by one
+            }
+            l.finished(c, ok, freed);
+        }
+        told.borrow_mut().insert(i, freed);
+    };
     // One at a time, for the ways that can't go many at once.
     let each = |remove: &dyn Fn(&Cand) -> bool| -> Vec<Option<bool>> {
         chosen
             .iter()
-            .map(|c| {
+            .enumerate()
+            .map(|(i, c)| {
                 if stopped() {
                     return None;
                 }
                 if let Some(l) = live {
                     l.working_on(c);
                 }
-                Some(remove(c))
+                let ok = remove(c);
+                settle(i, ok, true);
+                Some(ok)
             })
             .collect()
     };
@@ -1839,8 +1872,10 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
             }
             let targets: Vec<PathBuf> = chosen[start..end].iter().flat_map(|c| c.targets.iter().cloned()).collect();
             let mut done = remove_all(&targets, live).into_iter();
-            for c in &chosen[start..end] {
-                out.push(Some(c.targets.iter().map(|_| done.next().unwrap_or(false)).fold(true, |a, b| a & b)));
+            for (i, c) in chosen.iter().enumerate().take(end).skip(start) {
+                let ok = c.targets.iter().map(|_| done.next().unwrap_or(false)).fold(true, |a, b| a & b);
+                settle(i, ok, false); // remove_all counted the files as they went
+                out.push(Some(ok));
             }
             start = end;
         }
@@ -1848,33 +1883,27 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     };
     let mut left_alone = 0u64;
     let too_big = big.iter().filter(|b| **b).count() as u64;
-    for ((c, ok), big) in chosen.iter().zip(gone).zip(big) {
+    for (i, ((c, ok), big)) in chosen.iter().zip(gone).zip(big).enumerate() {
         if big {
             if let Some(l) = live {
                 l.finished(c, false, 0);
             }
             continue;
         }
-        let freed = match ok {
-            None => {
-                left_alone += 1;
-                continue;
-            }
-            Some(true) => {
-                r.deleted += 1;
-                c.bytes
-            }
-            Some(false) => {
-                // Something in it was in use (or the clean was stopped halfway); count what did go.
-                let left: u64 = tally_many(&c.targets, ENTRY_CAP, u64::MAX).iter().map(|t| t.bytes).sum();
-                r.skipped += 1;
-                c.bytes.saturating_sub(left)
-            }
+        let Some(ok) = ok else {
+            left_alone += 1;
+            continue;
         };
-        r.freed += freed;
-        if let Some(l) = live {
-            l.finished(c, ok == Some(true), freed);
+        if ok {
+            r.deleted += 1;
+        } else {
+            r.skipped += 1;
         }
+        // Already told as it went (the usual case), or told now (what went to the Recycle Bin).
+        if !told.borrow().contains_key(&i) {
+            settle(i, ok, false);
+        }
+        r.freed += told.borrow().get(&i).copied().unwrap_or(0);
     }
     if def.action == "empty-bin" {
         bin::refresh_icon();
@@ -2554,6 +2583,37 @@ mod tests {
         let now = live.now(0);
         assert_eq!((now.done, now.total, now.freed, now.gone.len()), (5, 5, 500, 5));
         assert_eq!(live.now(3).gone.len(), 2, "only what's new since the widget last asked");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_clean_that_goes_one_item_at_a_time_counts_up_as_it_goes() {
+        // Windows leftovers go one at a time (as do old build folders and anything recycled). The
+        // widget showed "0 of 116 items · 0 B" until the very last one was gone.
+        let root = fixture("live-each");
+        let paths = Paths::under(&root);
+        for (name, bytes) in [("AMD", 100), ("adobeTemp", 200), ("Windows10Upgrade", 300)] {
+            write(&paths.system_drive.join(name).join("a.bin"), bytes, 200);
+            write(&paths.system_drive.join(name).join("b.bin"), 1, 200);
+        }
+        let cfg = TrashConfig::default();
+        let mut ctx = ctx(&paths, &cfg);
+        let live = Live::default();
+        ctx.live = Some(&live);
+        // Someone presses Stop as soon as the counter says one is done. If nothing is said until
+        // the end, nobody can, and all three go.
+        live.stop_after.store(1, Ordering::Relaxed);
+        let r = clean("windows-junk", &ctx, None);
+        let now = live.now(0);
+        assert_eq!((r.deleted, now.done, now.total, now.gone.len()), (1, 1, 3, 1), "{}", r.message);
+        assert_eq!((now.freed, now.files, now.total_files), (r.freed, 2, 6), "what went is counted as it goes: bytes and files");
+        assert_eq!(entries(&paths.system_drive).len(), 2, "the other two were left when it stopped");
+        live.reset();
+        live.stop_after.store(0, Ordering::Relaxed);
+        let r = clean("windows-junk", &ctx, None);
+        let now = live.now(0);
+        assert_eq!((r.deleted, now.done, now.total, now.files, now.total_files), (2, 2, 2, 4, 4));
+        assert_eq!(now.freed, r.freed);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

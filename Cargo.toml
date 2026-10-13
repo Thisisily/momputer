@@ -4,7 +4,7 @@ members = ["crates/mom-core", "crates/mom-cli", "app/src-tauri"]
 default-members = ["crates/mom-core", "crates/mom-cli"]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 authors = ["momputer contributors"]
@@ -51,6 +51,14 @@ windows-sys = { version = "0.61", features = [
     "Wdk_System_SystemInformation",
 ] }
 mom-core = { path = "crates/mom-core" }
+
+# Debug builds are for tests and checks. A line number in a backtrace is enough to find a
+# failure; full debug info for every dependency made target\ grow to 33 GB in a day of work.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 opt-level = 3

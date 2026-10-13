@@ -84,6 +84,7 @@
     showAllUnused: false,
     showAllStartup: false,
     upkeepTab: "storage", // storage | apps | windows | files
+    rulesTab: "rules", // House rules' two views: rules | skills
     listView: loadView(), // how a clean-up's lists are shown: sort, grouped, filter
     groupOpen: {}, // "<spot>:<list>:<group>" -> open or shut, where the user changed it
     doesOpen: false, // the full text under "What the button does"
@@ -2662,9 +2663,21 @@ in ${x.cwd}`)}">
     return out.join("");
   }
 
+  const RULES_TABS = [
+    ["rules", "Rules"],
+    ["skills", "Skills"],
+  ];
+
+  function rulesTabs() {
+    return `<div class="subtabs" role="tablist" aria-label="House rules">${RULES_TABS.map(
+      ([k, label]) => `<button class="subtab" role="tab" data-act="rules-tab" data-tab="${k}" aria-selected="${state.rulesTab === k}">${label}</button>`
+    ).join("")}</div>`;
+  }
+
   function renderRules() {
     const r = state.rules;
     if (!r) return section("rules", "House rules", "", `<p class="empty">Fetching the rules…</p>`);
+    if (!state.rulesEditing && state.rulesTab === "skills") return rulesTabs() + renderSkills(r);
     let html;
     if (state.rulesEditing) {
       const draft = state.rulesDraft ?? r.text;
@@ -2676,7 +2689,7 @@ in ${x.cwd}`)}">
         </div>
         <p class="foot">Markdown: # for a heading, 1. for a numbered rule, **bold**, \`code\`.</p>`;
     } else {
-      html = `<div class="lead"><span class="lead-note">${r.customized ? "Your version. " : ""}Agents get these when you teach them below.</span>
+      html = `${rulesTabs()}<div class="lead"><span class="lead-note">${r.customized ? "Your version. " : ""}Agents get these when you teach them below.</span>
           <button class="secondary" data-act="edit-rules">Edit</button></div>
         <article class="md" id="rules-view">${markdown(r.text)}</article>
         ${r.customized ? `<div class="button-row"><button class="link-btn" data-act="reset-rules">Back to mom's rules</button></div>` : ""}`;
@@ -2704,6 +2717,36 @@ in ${x.cwd}`)}">
     html += section("ints", "Check-ins", "", ints);
     html += `<p class="foot">Check-ins let mom remind an agent about leftovers before it says it's done. Everything here can be switched off again; mom backs up any file she edits.</p>`;
     return html;
+  }
+
+  /** The skills that come with momputer: what each does, what to say, and who has it. */
+  function renderSkills(r) {
+    const skills = r.skills || [];
+    const have = skills.filter((s) => (s.has || []).length).length;
+    return `<div class="lead"><span class="lead-note">Jobs you can hand your agent. Say it your own way, or copy a line.</span></div>
+      ${section("skills", "Skills", have ? `${have} of ${skills.length} installed` : String(skills.length), skills.map(skillRow).join(""))}
+      <div class="button-row">
+        <button class="secondary" data-act="copy-say" data-text="${esc(r.skillsInstall)}" data-said="Copied. Paste it into Claude Code to get all ${skills.length}.">Copy the install line</button>
+        <button class="link-btn" data-act="open-uri" data-url="${esc(r.skillsPage)}">On GitHub${ICON.out}</button>
+      </div>
+      <p class="foot">One line gets all of them in Claude Code. For Codex and other agents, copy a skill's folder from GitHub.</p>`;
+  }
+
+  /** One skill: a light for whether an agent here has it, what it does in a sentence, and what
+      to say to use it. The rest (how it works, more to say, where to read it) is behind "More". */
+  function skillRow(s) {
+    const key = `skill:${s.name}`;
+    const open = state.more.has(key);
+    const has = s.has || [];
+    const say = (p) => `<div class="say-row"><span class="say">&ldquo;${esc(p)}&rdquo;</span>
+        <button class="link-btn" data-act="copy-say" data-text="${esc(p)}" title="Copy it, then paste it to your agent">Copy</button></div>`;
+    return `<div class="skill" id="skill-${hash(s.name)}">
+      <div class="skill-head"><span class="led ${has.length ? "green" : ""}"></span><strong>${esc(s.title)}</strong>
+        <small>${esc(has.length ? `in ${has.join(" and ")}` : "not installed")}</small></div>
+      <p class="skill-what">${esc(s.what)}${open ? ` ${esc(s.more)}` : ""} <button class="more-btn" data-act="more" data-key="${esc(key)}" aria-expanded="${open}">${open ? "Less" : "More"}</button></p>
+      ${(open ? s.prompts : s.prompts.slice(0, 1)).map(say).join("")}
+      ${open ? `<div class="skill-read"><button class="link-btn" data-act="open-uri" data-url="${esc(s.page)}">Read the skill${ICON.out}</button></div>` : ""}
+    </div>`;
   }
 
   async function loadRules() {
@@ -3135,6 +3178,19 @@ in ${x.cwd}`)}">
         state.tipCoin = el.dataset.coin;
         renderSheet();
         break;
+      case "rules-tab":
+        state.rulesTab = el.dataset.tab;
+        render();
+        break;
+      case "copy-say": {
+        try {
+          await navigator.clipboard.writeText(el.dataset.text);
+          toast(el.dataset.said || "Copied. Paste it to your agent.");
+        } catch {
+          toast("Couldn't reach the clipboard.", true);
+        }
+        break;
+      }
       case "copy-text": {
         try {
           await navigator.clipboard.writeText(el.dataset.text);

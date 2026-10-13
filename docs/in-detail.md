@@ -83,6 +83,7 @@ mom trash              what can go, and what each clean-up does (mom trash <id> 
 mom trash clean all    take out the safe trash (never the Recycle Bin or your own files)
 mom health             drives, memory, restarts, Storage Sense and startup apps
 mom update             is there a newer momputer? (asks GitHub)
+mom skills             the skills that come with momputer: what each does, what to say
 mom speed              what's slowing the PC down, and what's busy right now
 mom programs           every program running, one line each (only looks)
 mom pc                 what the PC is, and its protection, updates, hardware and registry leftovers
