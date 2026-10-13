@@ -32,21 +32,20 @@ import names  # noqa: E402  (the one definition of what a name may be)
 import safe_apply  # noqa: E402  (the shared engine: guard rails, undo log, both undo routes)
 
 
-def only_a_rename(action, guard):
+def only_a_rename(action, guard, undoing):
     """A reason to refuse `action`, or None. The engine has already checked both paths.
-    The engine asks about each row of an undo log as well (action["undo"]): the same rename,
-    already done, so the file is under its new name now."""
+    The engine asks about each row of an undo log as well, and says so itself (`undoing`; a
+    plan or a log can't): the same rename, already done, so the file is under its new name."""
     src, dst = action["from"], action.get("to")
-    undo = bool(action.get("undo"))
     if action.get("op") != "move" or not isinstance(dst, str):
         return "not a rename: this skill only renames files"
     if safe_apply.norm(os.path.dirname(src)) != safe_apply.norm(os.path.dirname(dst)):
         return "not a rename: the file would leave its folder"
-    if os.path.isdir(safe_apply.xp(dst if undo else src)):
+    if os.path.isdir(safe_apply.xp(dst if undoing is True else src)):
         return "a folder: this skill only renames files"
     old, new, folder = os.path.basename(src), os.path.basename(dst), os.path.dirname(dst)
     problem = names.why_bad(old, new, folder)
-    if problem and undo:
+    if problem and undoing is True:
         # A name that got taken at the last moment is given " (2)" by the engine, and that is the
         # name in the log: a few characters longer than the one that was checked
         stem, ext = os.path.splitext(new)

@@ -34,7 +34,19 @@ Rules it enforces, whatever the plan says:
   * anything that can't be examined is refused, never treated as fine
   * what was checked can't be swapped before it is used: the folder a thing is in and the
     folder it goes to are held open so they can't be renamed or replaced, each is asked
-    where it really is, and every check is run again before anything on disk changes
+    where it really is, and every check is run again before anything on disk changes.
+    Then, depending on what is being done:
+      - a move within a drive (a plan's, or an undo's move back) and the removal of an
+        empty folder are done through the held folders, never by name: the thing is opened
+        by its bare name in the open folder and renamed into the other open folder, or
+        deleted through its own handle. Even a held folder that is emptied and turned into
+        a link in that instant can't send it anywhere: Windows refuses, and nothing moves
+      - the Recycle Bin call and a move to another drive (a copy, then the Recycle Bin)
+        can only be done by name. For those the held folders are asked again straight
+        afterwards; if one has changed, the action is marked FAILED with a note to look
+        for the thing by hand, and the run stops
+      - new folders are made by name too. One made for a move is then held and asked where
+        it is before anything goes into it; an empty folder the undo puts back is not
   * --undo checks every row of the log the same way before it moves anything, and holds it
     to the skill's own rules too
   * never acts on a symlink or junction, and never walks through one it couldn't follow
@@ -46,7 +58,8 @@ Rules it enforces, whatever the plan says:
   * "recycle" goes to the Recycle Bin (Windows asks before anything would be
     deleted for good); files are skipped if they changed since the survey; only what the
     plan names goes, never the folder Windows pairs with a saved web page
-  * "remove-empty-dir" re-checks that nothing is inside, then uses rmdir only
+  * "remove-empty-dir" re-checks that nothing is inside, then deletes the folder in the one
+    way Windows refuses for a folder that is not empty
   * a move to another drive copies, checks the size, then recycles the original
   * every step is written to undo-log.csv as it happens, in a folder made new for the run:
     a log that is already there is never added to
@@ -58,11 +71,14 @@ A skill can add rules, never take one away. Its own apply_plan.py calls
 
   places(root) -> [(folders, why_inside, why_holding), ...]
       more places nothing may be touched in; nothing that holds one may be moved
-  check(action, guard) -> a reason to refuse this action, or None
+  check(action, guard, undoing) -> a reason to refuse this action, or None
       called after the engine's own checks have passed for that action, and again just
-      before it is carried out. --undo asks it about every row as well, as the action it
-      was ("op", "from" and "to" as logged) with "undo": True, which says the thing is at
-      "to" now. A "mkdir" row is the engine's own: it is judged by the move it was made for
+      before it is carried out. `action` is a dict the engine makes for the call, holding
+      only "id", "op", "from" and "to": nothing else in a plan or a log reaches a check.
+      --undo asks it about every row as well, as the action it was ("op", "from" and "to"
+      as logged) with `undoing` True, which says the thing is at "to" now. Only the engine
+      sets `undoing`; a plan or a log can't. A "mkdir" row is the engine's own: it is
+      judged by the move it was made for
 
 Python 3.8+, standard library only. Windows only for --apply.
 """
@@ -74,6 +90,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import sys
 import tempfile
 from datetime import datetime
@@ -460,7 +477,7 @@ def recycle(path):
 # thing is in and the folder it is going to are opened and kept open ("pinned") in a way that
 # lets them be used but not renamed or deleted; Windows then refuses to rename any folder above
 # them as well. Each one is asked where it really is, every check is run again, and what passes
-# then is what is used. The thing being moved is not held open itself: it couldn't be moved.
+# then is what is used.
 _K32 = []
 
 
@@ -545,7 +562,7 @@ class Pins:
     them all at the end, whatever happens."""
 
     def __init__(self):
-        self.handles, self.places = [], []
+        self.handles, self.places, self.of = [], [], {}
 
     def __enter__(self):
         return self
@@ -554,6 +571,7 @@ class Pins:
         self.close()
 
     def close(self):
+        self.of.clear()
         while self.handles:
             close_folder(self.handles.pop()[0])
 
@@ -570,7 +588,12 @@ class Pins:
         if h is None:
             return CANT_EXAMINE
         self.handles.append((h, folder))
+        self.of[written] = h
         return self.moved()
+
+    def folder(self, written):
+        """The open handle on the folder that `written` is in (it was given to hold())."""
+        return self.of.get(written)
 
     def moved(self):
         """None if every pinned folder is still a plain folder in the place that was approved, and
@@ -586,6 +609,155 @@ class Pins:
             if now is None or norm(now) != norm(there):
                 return SWAPPED
         return None
+
+
+# ---------------------------------------------------------------- through the held folders
+# Holding a folder open stops it being renamed or deleted, but once emptied it can still be turned
+# into a link where it stands, and a move done by name would then land wherever the link leads.
+# So a move within a drive, and the removal of an empty folder, are not done by name at all: the
+# thing is opened by its bare name in the held folder, and renamed to a bare name in the other
+# held folder (or deleted through its own handle). Windows finds both ends in the open folders
+# themselves, never from a path, and refuses if one of them has become a link.
+_NT = []
+
+
+def _ntdll():
+    """ntdll's file calls, and the three structures they take."""
+    if not _NT:
+        import ctypes
+        from ctypes import wintypes
+
+        class UNICODE_STRING(ctypes.Structure):
+            _fields_ = [("Length", ctypes.c_ushort), ("MaximumLength", ctypes.c_ushort), ("Buffer", ctypes.c_void_p)]
+
+        class OBJECT_ATTRIBUTES(ctypes.Structure):
+            _fields_ = [("Length", ctypes.c_ulong), ("RootDirectory", wintypes.HANDLE),
+                        ("ObjectName", ctypes.POINTER(UNICODE_STRING)), ("Attributes", ctypes.c_ulong),
+                        ("SecurityDescriptor", ctypes.c_void_p), ("SecurityQualityOfService", ctypes.c_void_p)]
+
+        class IO_STATUS_BLOCK(ctypes.Structure):
+            _fields_ = [("Status", ctypes.c_void_p), ("Information", ctypes.c_void_p)]
+
+        nt = ctypes.WinDLL("ntdll")
+        nt.NtCreateFile.restype = ctypes.c_ulong
+        nt.NtCreateFile.argtypes = [ctypes.POINTER(wintypes.HANDLE), ctypes.c_ulong, ctypes.POINTER(OBJECT_ATTRIBUTES),
+                                    ctypes.POINTER(IO_STATUS_BLOCK), ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong,
+                                    ctypes.c_ulong, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong]
+        nt.NtSetInformationFile.restype = ctypes.c_ulong
+        nt.NtSetInformationFile.argtypes = [wintypes.HANDLE, ctypes.POINTER(IO_STATUS_BLOCK), ctypes.c_void_p,
+                                            ctypes.c_ulong, ctypes.c_int]
+        nt.RtlNtStatusToDosError.restype = ctypes.c_ulong
+        nt.RtlNtStatusToDosError.argtypes = [ctypes.c_ulong]
+        _NT.append((nt, UNICODE_STRING, OBJECT_ATTRIBUTES, IO_STATUS_BLOCK))
+    return _NT[0]
+
+
+def nt_error(status):
+    """The OSError for a status ntdll gave back: Windows' own error where it has one for it."""
+    import ctypes
+    code = _ntdll()[0].RtlNtStatusToDosError(status)
+    if code and code != 317:  # 317: Windows has no message for this status
+        return ctypes.WinError(code)
+    return OSError("Windows refused (status 0x%08X)" % status)
+
+
+def open_in(folder, name, access, options=0):
+    """Open what is called `name` in the open folder `folder` (a handle): looked up in that folder
+    itself, never by a path. A link by that name is opened as the link, not as what it leads to.
+    Shared with everyone. Returns a handle (close it with close_folder); raises OSError if
+    Windows won't open it."""
+    import ctypes
+    from ctypes import wintypes
+    if not name or "\\" in name or "/" in name:
+        raise OSError("not a bare name: %r" % name)
+    nt, UNICODE_STRING, OBJECT_ATTRIBUTES, IO_STATUS_BLOCK = _ntdll()
+    raw = name.encode("utf-16-le", "surrogatepass")
+    buf = ctypes.create_string_buffer(raw, len(raw))
+    text = UNICODE_STRING(len(raw), len(raw), ctypes.addressof(buf))
+    where = OBJECT_ATTRIBUTES(ctypes.sizeof(OBJECT_ATTRIBUTES), folder, ctypes.pointer(text), 0x40, None, None)  # OBJ_CASE_INSENSITIVE
+    h = wintypes.HANDLE()
+    # share read, write and delete; FILE_OPEN (it must be there);
+    # FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT, and what the caller adds
+    status = nt.NtCreateFile(ctypes.byref(h), access, ctypes.byref(where), ctypes.byref(IO_STATUS_BLOCK()), None, 0,
+                             0x1 | 0x2 | 0x4, 1, 0x00200000 | 0x20 | options, None, 0)
+    if status:
+        raise nt_error(status)
+    return h.value
+
+
+def nt_set(handle, what, data):
+    """NtSetInformationFile on an open handle. Raises OSError if Windows refuses: then nothing was done."""
+    import ctypes
+    nt, _, _, IO_STATUS_BLOCK = _ntdll()
+    buf = ctypes.create_string_buffer(data, len(data))
+    status = nt.NtSetInformationFile(handle, ctypes.byref(IO_STATUS_BLOCK()), buf, len(data), what)
+    if status:
+        raise nt_error(status)
+
+
+def move_held(here, src_at, there, dst_at, is_dir):
+    """Move the thing at `src_at` to the name `dst_at`, on the same drive, through two held
+    folders: `here` and `there` are the open handles on the folder it is in and the folder it goes
+    to, and both ends are found in those open folders by their bare names. Nothing is ever
+    replaced. `is_dir` says whether a folder is expected (None: either will do; never a link).
+    Returns None once it has moved, or why it was left where it is: what has that name now is not
+    what was checked. Raises FileExistsError if the new name is taken, and OSError for anything
+    else Windows refuses; nothing has moved then either. Not on Windows: a rename by name."""
+    if not IS_WIN:
+        os.rename(xp(src_at), xp(dst_at))
+        return None
+    import ctypes
+    # DELETE (a rename needs it) | SYNCHRONIZE | FILE_READ_ATTRIBUTES
+    item = open_in(here, os.path.basename(src_at), 0x00010000 | 0x00100000 | 0x80)
+    try:
+        kind = handle_kind(item)
+        if kind is None:
+            return CANT_EXAMINE
+        if kind == "link":
+            return "a link to another place; left alone"
+        if is_dir is not None and (kind == "folder") != bool(is_dir):
+            return "not what it was when it was checked (a %s now)" % ("folder" if kind == "folder" else "file")
+        name = os.path.basename(dst_at).encode("utf-16-le", "surrogatepass")
+        word = "<Q" if ctypes.sizeof(ctypes.c_void_p) == 8 else "<I"
+        # FILE_RENAME_INFORMATION (10): ReplaceIfExists (no), RootDirectory (the held folder it goes
+        # to), FileNameLength, FileName (the bare new name)
+        nt_set(item, 10, struct.pack(word, 0) + struct.pack(word, there) + struct.pack("<I", len(name)) + name)
+    finally:
+        close_folder(item)
+    return None
+
+
+def remove_held(folder, name, path, inside, gone):
+    """Delete the empty folder `name` in the open folder `folder` (a handle), and first the empty
+    folders inside it, each opened by its bare name in the one above and deleted through its own
+    handle. `path` is its full name, `inside` the folders each folder holds ({full name: [names]}),
+    `gone(full name)` is called as each one goes. Returns None when it is gone, or (status, note)
+    if it was left: it is a link, or not empty any more. Raises OSError for anything else."""
+    if not IS_WIN:
+        for kid in inside.get(norm(path), ()):
+            remove_held(folder, kid, os.path.join(path, kid), inside, gone)
+        os.rmdir(xp(path))
+        gone(path)
+        return None
+    # DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | FILE_TRAVERSE; FILE_DIRECTORY_FILE
+    h = open_in(folder, name, 0x00010000 | 0x00100000 | 0x80 | 0x1 | 0x20, 0x1)
+    try:
+        if handle_kind(h) != "folder":
+            return "REFUSED", "a link to another place, or a folder that can't be examined; left alone"
+        for kid in inside.get(norm(path), ()):
+            left = remove_held(h, kid, os.path.join(path, kid), inside, gone)
+            if left:
+                return left
+        try:
+            nt_set(h, 13, b"\x01")  # FILE_DISPOSITION_INFORMATION: delete it when this handle is closed
+        except OSError as ex:
+            if getattr(ex, "winerror", None) == 145:  # the folder is not empty: only ever an empty one goes
+                return "SKIP", "not empty any more"
+            raise
+    finally:
+        close_folder(h)
+    gone(path)
+    return None
 
 
 # ---------------------------------------------------------------- guard rails
@@ -782,7 +954,9 @@ def refusal(a, guard, check, at=None):
             at["to"] = real(dst)
         if under(norm(dst), [norm(src)]):
             return "REFUSED", "can't move a folder into itself"
-    reason = check(a, guard) if check else None
+    # The skill's check gets a dict of its own with the four things the engine read, never the
+    # plan's: nothing else a plan holds can reach it. "This is not an undo" is said beside it.
+    reason = check({"id": a.get("id"), "op": op, "from": src, "to": dst}, guard, False) if check else None
     return ("REFUSED", reason) if reason else None
 
 
@@ -825,14 +999,33 @@ def run_apply(args, places=None, check=None):
         why = pins.moved()
         return ("REFUSED", why) if why else None
 
-    def finish(pins, aid, op, src, dst, note):
-        """Log what was just done, asking the pinned folders once more. Holding a folder open stops
-        it being renamed or deleted, but an emptied one can still be turned into a link where it
-        stands; if that happened in the instant it was used, there is no telling where the thing
-        went. True if so: the run stops there."""
+    def finish(pins, aid, op, src, dst, note, failed=None):
+        """Log what was just done (or, `failed`, what Windows refused), asking the held folders once
+        more. Holding a folder open stops it being renamed or deleted, but an emptied one can still
+        be turned into a link where it stands. What is done through the held folders is refused
+        then and nothing moves; for what has to be done by name (see the top of this file) there is
+        no telling where the thing went. True if a folder changed: the run stops there."""
         late = pins.moved()
-        log.add(aid, op, src, dst, "FAILED" if late else "DONE", "%s; look for it by hand" % late if late else note)
+        if failed:
+            log.add(aid, op, src, dst, "FAILED", "%s (%s)" % (failed, late) if late else failed)
+        else:
+            log.add(aid, op, src, dst, "FAILED" if late else "DONE", "%s; look for it by hand" % late if late else note)
         return bool(late)
+
+    def carry(pins, src, src_at, dst, final, final_at, is_dir):
+        """A move within a drive, through the held folders. `final` was free when it was chosen; if
+        that name has been taken since, the next free one is tried, a few times at most. Returns
+        (the name it went to, None), or (the name it was to have, why it was left where it is)."""
+        here, there = pins.folder(src), pins.folder(final)
+        for _ in range(5):
+            try:
+                return final, move_held(here, src_at, there, final_at, is_dir)
+            except FileExistsError:
+                final = free_name(dst)
+                if final is None:
+                    return dst, "destination is " + CANT_EXAMINE
+                final_at = os.path.join(os.path.dirname(final_at), os.path.basename(final))
+        return final, "its new name kept being taken"
 
     halted = False
     # Empty-folder removals last, so moves that empty a folder don't race them
@@ -882,22 +1075,30 @@ def run_apply(args, places=None, check=None):
                     if no:
                         log.add(aid, op, src, final, *no)
                         continue
-                    if not cross:
-                        os.rename(xp(src_at), xp(final_at))
-                    else:
-                        want = size_of(src_at)
-                        if is_dir:
-                            shutil.copytree(xp(src_at), xp(final_at), symlinks=True)
+                    failed = None
+                    try:
+                        if not cross:
+                            final, left = carry(pins, src, src_at, dst, final, final_at, is_dir)
+                            if left:
+                                log.add(aid, op, src, final, "REFUSED", left)
+                                continue
+                            note = "renamed to avoid overwriting" if final != dst else ""
                         else:
-                            shutil.copy2(xp(src_at), xp(final_at))
-                        if size_of(final_at) != want:
-                            log.add(aid, op, src, final, "FAILED", "copy didn't match; original kept, copy left at destination")
-                            continue
-                        err = recycle(src_at)
-                        if err:
-                            log.add(aid, op, src, final, "COPIED", "original kept: " + err)
-                            continue
-                    halted = finish(pins, aid, op, src, final, note)
+                            want = size_of(src_at)
+                            if is_dir:
+                                shutil.copytree(xp(src_at), xp(final_at), symlinks=True)
+                            else:
+                                shutil.copy2(xp(src_at), xp(final_at))
+                            if size_of(final_at) != want:
+                                log.add(aid, op, src, final, "FAILED", "copy didn't match; original kept, copy left at destination")
+                                continue
+                            err = recycle(src_at)
+                            if err:
+                                log.add(aid, op, src, final, "COPIED", "original kept: " + err)
+                                continue
+                    except OSError as ex:
+                        failed = str(ex)
+                    halted = finish(pins, aid, op, src, final, note, failed)
             except OSError as ex:
                 log.add(aid, op, src, final, "FAILED", str(ex))
         elif op == "recycle":
@@ -941,11 +1142,23 @@ def run_apply(args, places=None, check=None):
                     if no:
                         log.add(aid, op, src, "", *no)
                         continue
-                    for d in subdirs:  # deepest first; rmdir refuses anything that isn't empty
-                        os.rmdir(d)
-                        log.add(aid, op, src + plain(d)[len(src_at):], "", "DONE", "empty")
-                    os.rmdir(xp(src_at))
-                    halted = finish(pins, aid, op, src, "", "empty")
+                    inside = {}  # the folders each folder holds, by its full name
+                    for d in subdirs:
+                        inside.setdefault(norm(os.path.dirname(plain(d))), []).append(os.path.basename(d))
+
+                    def gone(p, aid=aid, op=op, src=src, src_at=src_at):
+                        if norm(p) != norm(src_at):  # a folder inside it: a row of its own, as the path was written
+                            log.add(aid, op, src + p[len(src_at):], "", "DONE", "empty")
+
+                    failed = None
+                    try:  # deepest first, each through its own handle; only ever a folder that is empty
+                        no = remove_held(pins.folder(src), os.path.basename(src_at), src_at, inside, gone)
+                    except OSError as ex:
+                        failed = str(ex)
+                    if no:
+                        log.add(aid, op, src, "", *no)
+                        continue
+                    halted = finish(pins, aid, op, src, "", "empty", failed)
             except OSError as ex:
                 log.add(aid, op, src, "", "FAILED", str(ex))
         if halted:
@@ -1015,8 +1228,9 @@ def run_undo(args, places=None, check=None):
                     return None
             return "not a folder that was made for a move in this log"
         # The skill's own check, asked about the action as the apply saw it: this went from `from`
-        # to `to`. "undo" tells it that the thing is at `to` now.
-        return check({"id": r.get("id"), "op": op, "from": src, "to": dst or None, "undo": True}, guard) if check else None
+        # to `to`. That it is an undo (the thing is at `to` now) is said beside the action, by the
+        # engine: nothing in a log, or a plan, can say it or unsay it.
+        return check({"id": r.get("id"), "op": op, "from": src, "to": dst or None}, guard, True) if check else None
 
     def pinned(pins, r, *places):
         """Pin the folder each of `places` is in, then check the row again. None, or why not."""
@@ -1058,7 +1272,14 @@ def run_undo(args, places=None, check=None):
                             print("REFUSED  %s <- %s: %s" % (src, dst, reason))
                             continue
                         if same_volume(src, dst):
-                            os.rename(xp(dst_at), xp(src_at))
+                            try:  # through the held folders: see move_held()
+                                reason = move_held(pins.folder(dst), dst_at, pins.folder(src), src_at, None)
+                            except FileExistsError:
+                                print("SKIP     %s exists again; leaving %s where it is" % (src, dst))
+                                continue
+                            if reason:
+                                print("REFUSED  %s <- %s: %s" % (src, dst, reason))
+                                continue
                         else:
                             shutil.move(xp(dst_at), xp(src_at))
                         late = pins.moved()
@@ -1074,7 +1295,10 @@ def run_undo(args, places=None, check=None):
                             if reason:
                                 print("REFUSED  %s: %s" % (src, reason))
                                 continue
-                            os.rmdir(xp(src_at))
+                            left = remove_held(pins.folder(src), os.path.basename(src_at), src_at, {}, lambda p: None)
+                            if left:
+                                print("%-8s %s: %s" % (left[0], src, left[1]))
+                                continue
                     print("%s remove folder created by the tidy-up: %s" % ("WOULD   " if dry else "DONE    ", src))
             elif op == "remove-empty-dir":
                 if not dry:

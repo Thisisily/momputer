@@ -44,7 +44,7 @@ def main(argv=None):
     # not a place this run may file things into; the engine would refuse it anyway
     args.within = [desktop] + [folders[k] for k in LIBRARIES if folders.get(k) and not safe_apply.not_plain(folders[k])]
 
-    def from_the_desktop(action, guard):
+    def from_the_desktop(action, guard, undoing):  # the same rule for a plan's action and for an undo-log row
         if not safe_apply.inside(action["from"], on_desktop):
             return "not on your Desktop: this skill only takes things off the Desktop"
         return None
