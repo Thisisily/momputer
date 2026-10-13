@@ -153,7 +153,10 @@ jobs:
           if ($null -eq $existing) {
             gh release create $tag @files --draft --title "momputer $env:VERSION" --generate-notes --target $env:GITHUB_SHA
           } elseif ($existing.draft) {
+            # The same version built again: new files, and the draft now stands for this commit,
+            # so publishing it tags what these files were built from.
             gh release upload $tag @files --clobber
+            if ($LASTEXITCODE -eq 0) { gh release edit $tag --target $env:GITHUB_SHA }
           } else {
             throw "$tag is already published; bump the version for a new release."
           }
