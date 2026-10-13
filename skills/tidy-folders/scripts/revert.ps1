@@ -16,6 +16,51 @@ param([switch]$Preview, [string]$Root)
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
 
+# Looks one name up exactly as it will be opened (no PowerShell path handling in between) and
+# says what is really there: its real spelling on disk, and whether it is a plain file or
+# folder, a cloud placeholder (OneDrive), a link (junction or symlink), or something else.
+if (-not ('MomTidyProbe' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class MomTidyProbe {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct WIN32_FIND_DATA {
+        public uint dwFileAttributes;
+        public System.Runtime.InteropServices.ComTypes.FILETIME ftCreationTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME ftLastAccessTime;
+        public System.Runtime.InteropServices.ComTypes.FILETIME ftLastWriteTime;
+        public uint nFileSizeHigh;
+        public uint nFileSizeLow;
+        public uint dwReserved0;
+        public uint dwReserved1;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string cFileName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)] public string cAlternateFileName;
+    }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern IntPtr FindFirstFileW(string lpFileName, out WIN32_FIND_DATA lpFindFileData);
+    [DllImport("kernel32.dll")]
+    static extern bool FindClose(IntPtr hFindFile);
+
+    // null if nothing has that name; else { real name, "plain" | "cloud" | "link" | "other" }
+    public static string[] Look(string extendedPath) {
+        WIN32_FIND_DATA d;
+        IntPtr h = FindFirstFileW(extendedPath, out d);
+        if (h == new IntPtr(-1)) return null;
+        FindClose(h);
+        string kind = "plain";
+        if ((d.dwFileAttributes & 0x400u) != 0) {          // a reparse point: the tag says which kind
+            uint tag = d.dwReserved0;
+            if (tag == 0xA0000003u || tag == 0xA000000Cu) kind = "link";        // junction, symlink
+            else if ((tag & 0xFFFF0FFFu) == 0x9000001Au) kind = "cloud";        // OneDrive and other cloud files
+            else kind = "other";
+        }
+        return new string[] { d.cFileName, kind };
+    }
+}
+'@
+}
+
 function Ext([string]$p) {
     # Extended-length form: the exact name (trailing dots or spaces, long paths), no wildcards
     if ($p.StartsWith('\\?\')) { return $p }
@@ -63,7 +108,6 @@ function WhyNot([string]$p) {
         $part = $names[$i]
         if ($part -eq '') { return 'a doubled or trailing backslash' }
         if ($part -eq '..' -or $part -eq '.') { return 'a path with dots for a folder' }
-        if ($part -match '~\d') { return 'a short (8.3) name; use apply_plan.py --undo instead' }
         if ($i -lt $names.Count - 1 -and ($part.EndsWith('.') -or $part.EndsWith(' '))) { return 'a folder name ending in a dot or space' }
     }
     try { $kind = (New-Object System.IO.DriveInfo ($p.Substring(0, 3))).DriveType } catch { return 'an unknown drive' }
@@ -72,30 +116,22 @@ function WhyNot([string]$p) {
     foreach ($prot in $protected) {
         if ((Under $p $prot) -and -not $exempt) { return 'inside Windows, Program Files, ProgramData or AppData' }
     }
-    # No folder on the way may be a link (a junction can be another name for a protected folder).
+    # Every part that exists is looked up by its exact name, the same way it is opened later.
+    # It must be spelled as it really is on disk (a short 8.3 name such as APPDAT~1, or any
+    # other spelling Windows accepts for it, is another name for a folder checked above), and
+    # it must not be a link: a junction or symlink can lead into a protected folder.
     $cur = $p.Substring(0, 3)
-    $parts = @($p.Substring(3).Split('\'))
-    for ($i = 0; $i -lt $parts.Count - 1; $i++) {
-        $cur = $cur + $parts[$i]
-        $x = Ext $cur
-        if ([System.IO.Directory]::Exists($x)) {
-            $a = [System.IO.File]::GetAttributes($x)
-            if (($a -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-                $item = Get-Item -LiteralPath $cur -Force -ErrorAction SilentlyContinue
-                if (-not $item -or $item.LinkType) { return 'reached through a link to another folder' }
-            }
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        $cur = $cur + $names[$i]
+        $seen = [MomTidyProbe]::Look((Ext $cur))
+        if ($null -eq $seen) { break }   # nothing by that name: it, and the rest, would be new
+        if (-not [string]::Equals([string]$seen[0], $names[$i], [System.StringComparison]::OrdinalIgnoreCase)) {
+            return 'not the real name of that file or folder (a short name or another alias)'
         }
+        if ([string]$seen[1] -ne 'plain' -and [string]$seen[1] -ne 'cloud') { return 'a link to another place, or reached through one' }
         $cur = $cur + '\'
     }
     return $null
-}
-function IsLink([string]$p) {
-    $x = Ext $p
-    if (-not (Exists $x)) { return $false }
-    $a = [System.IO.File]::GetAttributes($x)
-    if (($a -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) { return $false }
-    $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
-    return (-not $item) -or [bool]$item.LinkType
 }
 
 $log = Join-Path $PSScriptRoot 'undo-log.csv'
@@ -117,7 +153,6 @@ foreach ($row in $rows) {
         $why = WhyNot $from
         if (-not $why -and $op -eq 'move') {
             $why = WhyNot $to
-            if (-not $why -and (IsLink $to)) { $why = 'a link to another place' }
         }
         if ($why) { Say 'REFUSED' $from $why; $refused++; continue }
         if ($op -eq 'move') {
