@@ -205,6 +205,33 @@ try:
     said = desktop_survey.about_args("x" * 200000 + " /user:" * 5000) + desktop_survey.shown_path("C:\\" + "y" * 200000)
     sys.path.remove(S)
     check("a very long shortcut costs no time to describe", time.time() - started < 2 and len(said) < 700, len(said))
+    # While a target is looked at, every folder above it is held: none can be swapped for a link meanwhile.
+    seen = []
+    real_opened = desktop_survey.opened
+
+    def opened_then_try(path, keep_in_place):
+        if path.lower() == editor.lower():   # the last part is about to be looked at: try to move the folder it is in
+            try:
+                os.rename(os.path.dirname(editor), os.path.dirname(editor) + " moved")
+                os.rename(os.path.dirname(editor) + " moved", os.path.dirname(editor))
+                seen.append("moved")
+            except OSError:
+                seen.append("held")
+        return real_opened(path, keep_in_place)
+
+    desktop_survey.opened = opened_then_try
+    try:
+        looked = desktop_survey.Prober().look(editor)
+    finally:
+        desktop_survey.opened = real_opened
+    os.rename(os.path.dirname(editor), os.path.dirname(editor) + " moved")   # and afterwards it is let go
+    os.rename(os.path.dirname(editor) + " moved", os.path.dirname(editor))
+    p = desktop_survey.Prober()
+    check("the folders above a target are held while it is looked at, and let go afterwards", looked == ("ok", "") and seen == ["held"], (looked, seen))
+    check("a target is 'dead' only when its own disk says nothing has that name; a file where a folder should be leads nowhere",
+          p.look(os.path.join(os.path.dirname(editor), "not there.exe"))[0] == "dead" and p.look(os.path.join(editor, "below.exe"))[0] == "dead"
+          and p.look(os.path.dirname(editor)) == ("ok", "") and p.is_folder(os.path.dirname(editor)) and not p.is_folder(editor)
+          and p.look("\\\\files.example\\share\\x.exe")[0] == "unknown" and p.look("relative\\x.exe")[0] == "unknown")
     check("the same program in two places is reported as perhaps installed twice",
           len(sv["twice"]) == 1 and sv["twice"][0]["program"] == "samename.exe" and len(sv["twice"][0]["places"]) == 2, sv["twice"])
     check("a dead shortcut on the Public Desktop is 'for you to do'", len(sv["for_you"]) == 1 and sv["for_you"][0]["name"] == "Dead Public.lnk", sv["for_you"])

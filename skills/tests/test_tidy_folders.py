@@ -113,17 +113,21 @@ try:
         (os.rmdir if os.path.isdir(link) else os.remove)(link)  # the link itself, never what it leads to
     check("on_this_pc: only a full path on a disk in this PC",
           tidy_survey.on_this_pc(T) and not any(tidy_survey.on_this_pc(p) for p in (
-              "\\\\files.example\\share\\x", "\\\\?\\UNC\\files.example\\share", "relative\\x", "C:", "", None, 7, "Q:relative")))
+              "\\\\files.example\\share\\x", "\\\\?\\UNC\\files.example\\share", "relative\\x", "C:", "", None, 7, "Q:relative",
+              T + "\\..\\x", T + "\\.\\x", T + "\\\\x", T + "/x", T + "\\", T + "\\x.", T + "\\x ", T + "\\x:y", T + "\\x?", T + "\\x\ny",
+              T.replace("\\", "/"))))
     # While a folder is being looked into, it and everything above it are held: nobody can swap one for a link meanwhile.
     inner = os.path.join(T, "launchers", "held", "inner")
     os.makedirs(inner)
     write(os.path.join(inner, "a file.txt"), "x")
     held = tidy_survey.hold(inner)
-    try:
-        os.rename(os.path.join(T, "launchers", "held"), os.path.join(T, "launchers", "held moved"))
-        swapped = True
-    except OSError:
-        swapped = False
+    swapped = []
+    for name in ("held", os.path.join("held", "inner")):  # a folder above it, and the folder itself
+        try:
+            os.rename(os.path.join(T, "launchers", name), os.path.join(T, "launchers", name + " moved"))
+            swapped.append(name)
+        except OSError:
+            pass
     tidy_survey.release(held)
     check("a folder that is being looked into can't be moved or replaced meanwhile, and can afterwards",
           held is not None and not swapped and tidy_survey.a_folder_here(inner))

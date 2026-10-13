@@ -321,8 +321,17 @@ _WIN = {}
 
 
 def on_this_pc(path):
-    """True only for a full path, by its spelling, on a disk in this PC (built in, or plugged in)."""
-    if not isinstance(path, str) or not re.match(r"^[A-Za-z]:\\", path) or not IS_WIN:
+    """True only for a full path on a disk in this PC (built in, or plugged in) that is written the
+    plain way: no "..", "/", doubled or trailing backslash, no character Windows forbids or reads
+    specially, no name ending in a dot or a space. Every function below opens a path exactly as it
+    was given, so the spelling that is checked here is the spelling that is used; a path written
+    any other way is simply no."""
+    if not IS_WIN or not isinstance(path, str) or not re.match(r"^[A-Za-z]:\\", path):
+        return False
+    rest = path[3:]
+    if path != os.path.normpath(path) or re.search(r'[<>:"|?*/\x00-\x1f]', rest):
+        return False
+    if any(part != part.rstrip(". ") for part in rest.split("\\")):
         return False
     root = path[:3].upper()
     if root not in _DRIVE_KINDS:
@@ -374,10 +383,13 @@ def hold(path):
     if not on_this_pc(path):
         return None
     handles, cur = [], path[:3]
-    for part in [None] + [p for p in os.path.normpath(path)[3:].split("\\") if p]:
+    for part in [None] + [p for p in path[3:].split("\\") if p]:
         if part:
             cur = os.path.join(cur, part)
-        got = _opened(cur, 0x80, 0x1 | 0x2)  # FILE_READ_ATTRIBUTES; others may read and write in it, not rename or delete it
+        # FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, sharing read and write but not delete: others may
+        # read and write in it, not rename or delete it. (Asking to list it is what makes Windows hold
+        # others to that: a handle that only reads attributes doesn't count.)
+        got = _opened(cur, 0x81, 0x1 | 0x2)
         if got is None or not got[1] or got[2]:
             release(handles + ([got[0]] if got else []))
             return None
@@ -443,6 +455,8 @@ def read_text(path, limit=2_000_000, folder_held=False):
     """The start of a small text file in a place other accounts may be able to write to, or "".
     Its folder is held as in hold() (or already is, by the caller: `folder_held`); the file is
     opened as itself and read only if it is a plain file. A file that is a link is never opened."""
+    if not on_this_pc(path):
+        return ""
     held = [] if folder_held else hold(os.path.dirname(path))
     if held is None:
         return ""
@@ -503,7 +517,7 @@ def launchers(drives):
         found.append({"name": "Steam", "libraries": roots, "games": games})
 
     # Epic: manifests in ProgramData
-    epic_dir = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Epic", "EpicGamesLauncher", "Data", "Manifests")
+    epic_dir = os.path.normpath(os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Epic", "EpicGamesLauncher", "Data", "Manifests"))
     held = hold(epic_dir)
     if held is not None:
         games, items = [], []
@@ -520,8 +534,10 @@ def launchers(drives):
                 j = json.loads(text)
             except ValueError:
                 continue
-            if isinstance(j, dict) and on_this_pc(j.get("InstallLocation")):
-                games.append({"name": str(j.get("DisplayName") or n)[:120], "path": os.path.normpath(j["InstallLocation"]),
+            where = j.get("InstallLocation") if isinstance(j, dict) else None
+            where = os.path.normpath(where) if isinstance(where, str) and where.strip() else None
+            if on_this_pc(where):  # checked in the same spelling it is kept in
+                games.append({"name": str(j.get("DisplayName") or n)[:120], "path": where,
                               "bytes": j.get("InstallSize") if isinstance(j.get("InstallSize"), int) else None})
         found.append({"name": "Epic Games", "libraries": sorted({os.path.dirname(g["path"]) for g in games}), "games": games})
 

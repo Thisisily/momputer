@@ -269,6 +269,50 @@ def read_head(path):
         return f.read(MAX_SHORTCUT_BYTES + 1)
 
 
+_WIN = {}
+
+
+def _win():
+    if not _WIN:
+        import ctypes
+        from ctypes import wintypes
+
+        class Tag(ctypes.Structure):  # FILE_ATTRIBUTE_TAG_INFO
+            _fields_ = [("attributes", wintypes.DWORD), ("tag", wintypes.DWORD)]
+
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.HANDLE]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        k.GetFileInformationByHandleEx.restype = wintypes.BOOL
+        k.GetFileInformationByHandleEx.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        _WIN.update(k=k, Tag=Tag, byref=ctypes.byref, sizeof=ctypes.sizeof, none=wintypes.HANDLE(-1).value, error=ctypes.get_last_error)
+    return _WIN
+
+
+def opened(path, keep_in_place):
+    """(handle, is a folder, is a link) for `path` itself, or Windows' error number if it can't be
+    opened or examined. A link is opened as the link: nothing it leads to is touched. With
+    `keep_in_place`, nobody can rename, replace or delete it until the handle is closed."""
+    w = _win()
+    k = w["k"]
+    # To keep a folder in place: FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, sharing read and write but
+    # not delete (asking to list it is what makes Windows hold others to that; a handle that only
+    # reads attributes doesn't count). Otherwise FILE_READ_ATTRIBUTES, sharing everything. OPEN_EXISTING;
+    # FILE_FLAG_BACKUP_SEMANTICS (a folder can be opened) | FILE_FLAG_OPEN_REPARSE_POINT (a link is not followed)
+    h = k.CreateFileW("\\\\?\\" + path, 0x81 if keep_in_place else 0x80, 0x3 if keep_in_place else 0x7, None, 3, 0x02000000 | 0x00200000, None)
+    if h is None or h == w["none"]:
+        return w["error"]() or 1
+    info = w["Tag"]()
+    if not k.GetFileInformationByHandleEx(h, 9, w["byref"](info), w["sizeof"](info)):  # 9: FileAttributeTagInfo
+        err = w["error"]() or 1
+        k.CloseHandle(h)
+        return err
+    # A junction or a symlink is a reparse point whose tag says it stands for another name (bit 29)
+    return h, bool(info.attributes & 0x10), bool(info.attributes & 0x400 and info.tag & 0x20000000)
+
+
 class Prober:
     """Says whether a shortcut's target is there, by asking for that exact name and nothing more."""
 
@@ -295,25 +339,53 @@ class Prober:
         path = os.path.normpath(path)
         if not self.fixed(path):
             return "unknown", "on a drive that isn't a fixed disk in this PC (not checked)"
-        # Part by part, and never through a link: a junction or symlink on the way can lead to
-        # another PC, and asking about what is behind it would knock on that PC's door.
-        parts = [p for p in path[3:].split("\\") if p]
-        cur = path[:3]
         self.folders.discard(norm(path))
+        gone = ("unknown", "inside Windows, which hides some of its files from other programs") if under(norm(path), [self.windows]) else (
+            "dead", "nothing is there any more")
+        parts = [p for p in path[3:].split("\\") if p]
+        if not IS_WIN:
+            return self._look_by_name(path, parts, gone)
+        # Part by part, from the drive down, and never through a link: a junction or symlink on the
+        # way can lead to another PC, and asking about what is behind it would knock on that PC's
+        # door. Each folder on the way is opened as itself, checked, and kept open (so it can't be
+        # swapped for a link) until the last part has been looked at.
+        held, cur = [], path[:3]
+        try:
+            for i, part in enumerate([None] + parts):
+                if part:
+                    cur = os.path.join(cur, part)
+                last = i == len(parts)
+                got = opened(cur, keep_in_place=not last)
+                if isinstance(got, int):
+                    return gone if got in (2, 3) else ("unknown", "couldn't be looked at")  # 2, 3: nothing has that name
+                handle, is_folder, is_link = got
+                held.append(handle)
+                if last:
+                    if is_folder and not is_link:
+                        self.folders.add(norm(path))
+                    return "ok", ""
+                if is_link:
+                    return "unknown", "reached through a link to another place (not followed)"
+                if not is_folder:
+                    return gone  # a file where a folder should be: the path leads nowhere
+        finally:
+            for h in held:
+                _win()["k"].CloseHandle(h)
+
+    def _look_by_name(self, path, parts, gone):
+        """The same question where Windows' own calls aren't there (the survey itself is for Windows)."""
+        cur = path[:3]
         if not parts:
             self.folders.add(norm(path))
         for i, part in enumerate(parts):
             cur = os.path.join(cur, part)
             try:
-                st = os.lstat("\\\\?\\" + cur if IS_WIN else cur)
+                st = os.lstat(cur)
             except FileNotFoundError:
-                if under(norm(path), [self.windows]):
-                    return "unknown", "inside Windows, which hides some of its files from other programs"
-                return "dead", "nothing is there any more"
+                return gone
             except (OSError, ValueError):
                 return "unknown", "couldn't be looked at"
-            link = stat.S_ISLNK(st.st_mode) or bool(
-                getattr(st, "st_file_attributes", 0) & A_REPARSE and getattr(st, "st_reparse_tag", 0) in LINK_TAGS)
+            link = stat.S_ISLNK(st.st_mode)
             if i < len(parts) - 1:
                 if link:
                     return "unknown", "reached through a link to another place (not followed)"
