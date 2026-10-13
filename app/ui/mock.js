@@ -565,7 +565,7 @@
       leftovers: { forgottenAfterHours: 12, includeUnknownOrphans: true, autoStop: false, autoStopAfterMinutes: 20, autoStopOrphans: false },
       hooks: { enabled: true, nagProcesses: true, nagClutter: true, shareRules: true, stopOnSessionEnd: false, minAgeSecs: 5 },
       tidy: { reportsFolder: "Documents", minFamily: 3, screenshotPile: 10 },
-      trash: { tempMinAgeDays: 7, agentScratchDays: 67, archiveDir: null, conversationsAfterDays: 67 },
+      trash: { tempMinAgeDays: 7, agentScratchDays: 67, archiveDir: null, conversationsAfterDays: 67, keep: [] },
       ui: { alwaysOnTop: false, notifications: true, notifyLeftovers: true, notifyMeltdown: true, notifyCleanups: true, notifyAfterMinutes: 10, notifyEveryMinutes: 30, scanIntervalSecs: 3, cpuAlertPercent: 25, checkUpdates: true },
       protect: [],
       kept: [],
@@ -684,10 +684,67 @@
     app_version: () => "0.2.0",
     // "?update" in the address shows what a newer version looks like.
     get_update: async () => (await wait(300), { current: "0.2.0", latest: location.search.includes("update") ? "0.3.0" : "0.2.0", newer: location.search.includes("update"), checked: now, asked: now, problem: null, getIt: "https://thisisily.github.io/momputer/" }),
-    measure_spot: async ({ id }) => {
+    measure_spot: async ({ id, more }) => {
       await wait(700);
+      const s = spots.find((x) => x.id === id);
+      if (more && s) {
+        // "Show all": the smaller ones that weren't listed, each a little smaller than the last.
+        const goes = s.items.filter((i) => i.goes);
+        const missing = Math.min((s.reclaimableItems || 0) - goes.length, goes.length * 3 || 40, 400);
+        const last = goes[goes.length - 1] || { bytes: 4 * MB, reason: "Changed 30 days ago", ageSecs: 30 * 86400 };
+        const extra = [];
+        for (let n = 1; n <= missing; n++) {
+          const name = `tmp-${(n * 7919).toString(16).padStart(4, "0")}`;
+          extra.push({ name, sub: `${1 + (n % 9)} ${n % 9 ? "files" : "file"}`, path: `${s.path || "C:\\Users\\me\\AppData\\Local\\Temp"}\\${name}`, bytes: Math.max(1024, Math.round(last.bytes / (1 + n / 6))), files: 1 + (n % 9), ageSecs: last.ageSecs, goes: true, optional: false, reason: last.reason });
+        }
+        s.items = [...goes, ...extra, ...s.items.filter((i) => !i.goes)];
+      }
       emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
       return id;
+    },
+    // Keeping and letting go, the way mom-core does it: what's kept stays, with no box to tick,
+    // and leads the list of what stays.
+    keep_item: async ({ path, keep }) => {
+      await wait(350);
+      const list = (settings.config.trash.keep || []).filter((k) => k !== path);
+      settings.config.trash.keep = keep ? [...list, path] : list;
+      const sum = (items) => items.reduce((a, i) => a + i.bytes, 0);
+      for (const s of spots) {
+        const i = s.items.find((x) => x.path === path);
+        if (!i) continue;
+        const unlisted = Math.max(0, (s.reclaimableItems || 0) - s.items.filter((x) => x.goes).length);
+        if (keep) {
+          if (!i.was) i.was = { goes: i.goes, optional: !!i.optional, reason: i.reason };
+          Object.assign(i, { goes: false, optional: false, kept: true, reason: "You said to keep this" });
+        } else if (i.was) {
+          Object.assign(i, i.was, { kept: false });
+          delete i.was;
+        }
+        const goes = s.items.filter((x) => x.goes);
+        const stays = s.items.filter((x) => !x.goes).sort((a, b) => !!b.kept - !!a.kept);
+        s.items = [...goes, ...stays];
+        if (s.exact !== false && !unlisted) {
+          s.reclaimableBytes = sum(goes);
+          s.keptBytes = sum(stays);
+        }
+        s.reclaimableItems = goes.length + unlisted;
+        s.keptItems = Math.max(s.keptItems || 0, stays.length) + (keep && i.was && i.was.goes ? 0 : 0);
+        s.newItems = Math.max(0, (s.newItems || 0) + (i.was && i.was.optional ? (keep ? -1 : 0) : 0));
+      }
+      emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
+      return null;
+    },
+    keep_nothing: async () => {
+      await wait(350);
+      settings.config.trash.keep = [];
+      for (const s of spots)
+        for (const i of s.items)
+          if (i.was) {
+            Object.assign(i, i.was, { kept: false });
+            delete i.was;
+          }
+      emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
+      return null;
     },
     clean_progress: ({ since }) => ({ ...live, gone: live.gone.slice(since), goneCount: live.gone.length, stopping: liveStop }),
     stop_clean: () => {

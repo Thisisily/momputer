@@ -149,6 +149,79 @@ fn projects(roots: &[PathBuf]) -> Vec<Project> {
     out
 }
 
+/// Names too plain to say whose a folder is: half the projects there are have a part called this.
+const PLAIN_NAMES: &[&str] = &[
+    "app", "apps", "web", "site", "website", "docs", "client", "server", "desktop", "mobile", "api", "core", "main", "test",
+    "tests", "demo", "example", "examples", "src", "lib", "packages", "frontend", "backend", "landing", "tools", "scripts",
+    "electron", "tauri", "srctauri", "project", "template", "starter", "name",
+];
+
+/// One of your own projects, and what an app built from it calls itself.
+pub(super) struct Mine {
+    /// Where it sits under its root ("storefront", "tools/old-cli").
+    pub name: String,
+    names: Vec<String>,
+}
+
+impl Mine {
+    /// Does a folder called `folder` (in AppData, say) go by one of this project's names? By an
+    /// app identifier exactly ("com.storefront.app"), or by a name that is the folder's whole name
+    /// or one part of it ("storefront" in "com.storefront.app").
+    pub(super) fn owns(&self, folder: &str) -> bool {
+        use crate::installed::{squash, unversioned};
+        let whole = squash(unversioned(folder));
+        let parts: Vec<String> = folder.split('.').map(squash).collect();
+        self.names.iter().any(|n| {
+            if n.contains('.') && n.eq_ignore_ascii_case(folder) {
+                return true;
+            }
+            let n = squash(n);
+            n.len() >= 4 && !PLAIN_NAMES.contains(&n.as_str()) && (n == whole || parts.contains(&n))
+        })
+    }
+}
+
+/// A small file of yours, as text (a project's package.json, say). Not a link, not someone else's.
+fn small_text(path: &Path) -> Option<String> {
+    if !my_file(path) || std::fs::metadata(path).ok()?.len() > 1 << 20 {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()
+}
+
+/// Your own projects under `roots`, each with the names an app built from it keeps its data
+/// under: the folder's name, and the names and app identifiers in its package.json, Cargo.toml
+/// and Tauri config. An app you're building is never "installed", and it isn't gone.
+pub(super) fn my_projects(roots: &[PathBuf]) -> Vec<Mine> {
+    let text_at = |v: &serde_json::Value, path: &[&str]| path.iter().try_fold(v, |v, k| v.get(k)).and_then(|v| v.as_str()).map(str::to_string);
+    projects(roots)
+        .into_iter()
+        .map(|p| {
+            let mut names = vec![name_of(&p.dir)];
+            // A Tauri app's Rust half sits in src-tauri: the project is the folder around it.
+            let tauri_half = name_of(&p.dir).eq_ignore_ascii_case("src-tauri");
+            if tauri_half {
+                names.extend(p.dir.parent().map(name_of));
+            }
+            if let Some(v) = small_text(&p.dir.join("package.json")).and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
+                names.extend([&["name"][..], &["productName"], &["build", "appId"], &["build", "productName"]].iter().filter_map(|k| text_at(&v, k)));
+            }
+            for conf in [p.dir.join("tauri.conf.json"), p.dir.join("src-tauri").join("tauri.conf.json")] {
+                if let Some(v) = small_text(&conf).and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) {
+                    let keys = [&["identifier"][..], &["productName"], &["package", "productName"], &["tauri", "bundle", "identifier"]];
+                    names.extend(keys.iter().filter_map(|k| text_at(&v, k)));
+                }
+            }
+            if let Some(t) = small_text(&p.dir.join("Cargo.toml")).and_then(|t| t.parse::<toml::Table>().ok()) {
+                names.extend(t.get("package").and_then(|p| p.get("name")).and_then(|n| n.as_str()).map(str::to_string));
+            }
+            names.retain(|n| !n.trim().is_empty() && n.len() <= 200);
+            let name = if tauri_half { p.name.rsplit_once('/').map(|(around, _)| around.to_string()).unwrap_or(p.name) } else { p.name };
+            Mine { name, names }
+        })
+        .collect()
+}
+
 fn build_dirs(p: &Project) -> Vec<PathBuf> {
     let mut v = Vec::new();
     if p.js {

@@ -171,10 +171,10 @@ fn version_of(name: &str) -> Vec<u64> {
 }
 
 pub(super) fn find(ctx: &TrashCtx, agent_homes: &[PathBuf]) -> Found {
-    find_with(ctx, agent_homes, &Installed::scan(ctx.paths), MIN_SIZE)
+    find_with(ctx, agent_homes, &Installed::scan(ctx.paths), &super::builds::my_projects(&ctx.project_roots), MIN_SIZE)
 }
 
-fn find_with(ctx: &TrashCtx, agent_homes: &[PathBuf], installed: &Installed, min_size: u64) -> Found {
+fn find_with(ctx: &TrashCtx, agent_homes: &[PathBuf], installed: &Installed, mine: &[super::builds::Mine], min_size: u64) -> Found {
     let spots = spots(ctx, agent_homes);
     let paths: Vec<PathBuf> = spots.iter().map(|s| s.path.clone()).collect();
     let tallies = tally_many(&paths, ENTRY_CAP, BUDGET);
@@ -189,6 +189,9 @@ fn find_with(ctx: &TrashCtx, agent_homes: &[PathBuf], installed: &Installed, min
         let c = Cand::new(s.path.clone(), s.name.clone(), &t, ctx.now);
         let age = c.age;
         let here = s.owner.split('|').any(|o| installed.has(o)) || s.vendor.as_deref().is_some_and(|v| installed.has(v));
+        // An app you're building was never installed, and it isn't gone: its data is your
+        // project's, kept in AppData under the app's name or identifier.
+        let project = if here || s.thing.is_some() { None } else { mine.iter().find(|m| m.owns(&s.owner)).map(|m| m.name.as_str()) };
         let c = if ctx.in_use(&s.path) {
             c.verdict(false, IN_USE)
         } else if let Some(newer) = &s.newer {
@@ -201,6 +204,12 @@ fn find_with(ctx: &TrashCtx, agent_homes: &[PathBuf], installed: &Installed, min
                 _ => format!("A {what} nobody has opened in {}", ago(age)),
             };
             if age >= LONG_AGO || (!here && age >= A_WHILE) { c.kept_but_tickable(r) } else { continue }
+        } else if let Some(project) = project {
+            // Like an installed app's: only offered, and only after a year untouched.
+            if age < VERY_LONG_AGO {
+                continue;
+            }
+            c.kept_but_tickable(format!("From your project {project}. Untouched for {}", ago(age)))
         } else if s.saves && !here && age >= A_WHILE {
             c.kept_but_tickable(format!("Probably a game's saves and settings; the game isn't installed any more. Untouched for {}", ago(age)))
         } else if s.saves {
@@ -215,11 +224,12 @@ fn find_with(ctx: &TrashCtx, agent_homes: &[PathBuf], installed: &Installed, min
             continue; // in use lately, or its app is: nothing to say
         };
         let mut c = c;
-        c.tool = Some(match (s.thing, here) {
-            (Some("model"), _) => "models you downloaded",
-            (Some(_), _) => "games you installed",
-            (None, true) => "apps you still have",
-            (None, false) => "apps you've uninstalled",
+        c.tool = Some(match (s.thing, here, project) {
+            (Some("model"), _, _) => "models you downloaded",
+            (Some(_), _, _) => "games you installed",
+            (None, true, _) => "apps you still have",
+            (None, false, Some(_)) => "your own projects",
+            (None, false, None) => "apps you've uninstalled",
         });
         f.cands.push(c);
     }
@@ -252,7 +262,7 @@ mod tests {
         let installed = Installed::with(&["Figma", "Bionic", "Android Studio"]);
         let cfg = TrashConfig::default();
         let ctx = ctx(&paths, &cfg);
-        let f = find_with(&ctx, &[], &installed, 100);
+        let f = find_with(&ctx, &[], &installed, &[], 100);
         let state = |part: &str| {
             f.cands.iter().find(|c| c.name.contains(part)).map(|c| (c.goes, c.optional)).unwrap_or_else(|| panic!("no {part} in {:#?}", f.cands.iter().map(|c| &c.name).collect::<Vec<_>>()))
         };
@@ -264,6 +274,51 @@ mod tests {
         for never in ["Coinpocket", "Figma Recent", "Slack", "AndroidStudio2024.2"] {
             assert!(!f.cands.iter().any(|c| c.name.contains(never)), "{never} shouldn't be offered");
         }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_app_you_are_building_is_not_an_uninstalled_one() {
+        let root = fixture("forgotten-mine");
+        let paths = Paths::under(&root);
+        let l = paths.local_appdata.clone();
+        write(&l.join("com.lanternfall.app").join("EBWebView").join("cache.bin"), 900, 300); // by its Tauri identifier
+        write(&l.join("Copperline").join("data.bin"), 900, 300); // by its folder's name
+        write(&l.join("atlas-desk").join("data.bin"), 900, 300); // by the name in its package.json
+        write(&l.join("com.lanternfall.beta").join("data.bin"), 900, 500); // over a year on: offered, never ticked
+        write(&l.join("Nimbus Studio").join("data.bin"), 900, 300); // nobody's project: an uninstalled app's
+        write(&l.join("com.elsewhere.app").join("data.bin"), 900, 300); // "app" says nothing about whose it is
+        // Named the way mom names every folder she searches: by where it really is.
+        std::fs::create_dir_all(root.join("Workspace")).unwrap();
+        let ws = crate::util::real_path(&root.join("Workspace")).unwrap();
+        let put = |p: PathBuf, text: &str| {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        put(ws.join("lanternfall").join("package.json"), r#"{"name":"ui"}"#);
+        put(ws.join("lanternfall").join("src-tauri").join("tauri.conf.json"), r#"{"identifier":"com.lanternfall.app","productName":"Lanternfall"}"#);
+        put(ws.join("copperline").join("Cargo.toml"), "[package]\nname = \"cl\"\nversion = \"0.1.0\"\n");
+        put(ws.join("tools").join("desk").join("package.json"), r#"{"name":"atlas-desk","build":{"appId":"dev.atlas.desk"}}"#);
+        put(ws.join("app").join("package.json"), r#"{"name":"app"}"#);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let nothing = Installed::with(&[]);
+        let look = |mine: &[crate::trash::builds::Mine]| -> Vec<(String, bool, bool, String)> {
+            let mut v: Vec<_> = find_with(&ctx, &[], &nothing, mine, 100).cands.iter().map(|c| (c.name.clone(), c.goes, c.optional, c.reason.clone())).collect();
+            v.sort();
+            v
+        };
+        // With no projects to go by, every one of them looks like an uninstalled app's.
+        let before = look(&[]);
+        assert_eq!(before.len(), 6, "{before:#?}");
+        assert!(before.iter().all(|(_, goes, _, why)| *goes && why.starts_with("Its app isn't installed any more")), "{before:#?}");
+        let mine = crate::trash::builds::my_projects(std::slice::from_ref(&ws));
+        let after = look(&mine);
+        let names: Vec<&str> = after.iter().map(|(n, ..)| n.as_str()).collect();
+        assert_eq!(names, ["Nimbus Studio (AppData\\Local)", "com.elsewhere.app (AppData\\Local)", "com.lanternfall.beta (AppData\\Local)"], "{after:#?}");
+        assert!(after[0].1 && after[1].1, "nobody's project: still an uninstalled app's");
+        let (_, goes, optional, why) = &after[2];
+        assert!(!goes && *optional && why.starts_with("From your project lanternfall. Untouched for"), "{after:#?}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

@@ -1987,6 +1987,10 @@ in ${x.cwd}`)}">
     }
   }
 
+  // What mom deletes or moves herself can be kept for good. A tool's things, Docker's and the
+  // Recycle Bin's can't: she doesn't choose among those one by one.
+  const canKeep = (s, i) => s.action !== "tool" && s.action !== "empty-bin" && !!i.path && !i.path.startsWith("docker:");
+
   function itemRow(s, i, picking, label) {
     // One that stays says why first: that's the question, and the end of a long line is cut off.
     const why = i.reason || (i.ageSecs ? `changed ${ageLong(i.ageSecs)} ago` : "");
@@ -1998,17 +2002,27 @@ in ${x.cwd}`)}">
     const reveal = i.path && s.action !== "tool" && !i.path.startsWith("docker:") ? `<button class="mini-btn" data-act="reveal-path" data-path="${esc(i.path)}" title="Show in File Explorer" aria-label="Show ${esc(i.name)} in File Explorer">${ICON.folder}</button>` : "";
     const size = `<span class="item-size num">${bytes(i.bytes)}</span>`;
     const gone = state.gone.has(i.path) ? " gone" : "";
+    const keep = canKeep(s, i)
+      ? `<button class="mini-btn keep" data-act="keep-item" data-spot="${esc(s.id)}" data-path="${esc(i.path)}" aria-pressed="${!!i.kept}" title="${
+          i.kept ? "Kept for good. Press to let it go again" : "Always keep this"
+        }" aria-label="${i.kept ? "Stop keeping" : "Always keep"} ${esc(i.name)}" ${state.cleaning ? "disabled" : ""}>${ICON.lock}</button>`
+      : "";
+    const acts = keep || reveal ? `<span class="item-acts">${keep}${reveal}</span>` : "";
     if (picking && tickable(i)) {
       const on = isTicked(pickOf(s.id), i);
       return `<label class="item${i.goes ? "" : " stays"}${on && !i.goes ? " added" : ""}${gone}" id="${id}">
-        <input type="checkbox" data-act="pick" data-path="${esc(i.path)}" ${on ? "checked" : ""} ${state.cleaning ? "disabled" : ""}>${main}${size}${reveal}</label>`;
+        <input type="checkbox" data-act="pick" data-path="${esc(i.path)}" ${on ? "checked" : ""} ${state.cleaning ? "disabled" : ""}>${main}${size}${acts}</label>`;
     }
     if (!i.goes) {
-      // In use (or otherwise not allowed): no box to tick.
-      return `<div class="item stays" id="${id}"><span class="led green" title="Can't be cleared: ${esc(i.reason)}"></span>${main}${size}${reveal}</div>`;
+      // In use, kept by you, or otherwise not allowed: no box to tick.
+      return `<div class="item stays${i.kept ? " kept" : ""}" id="${id}"><span class="led green" title="Can't be cleared: ${esc(i.reason)}"></span>${main}${size}${acts}</div>`;
     }
-    return `<div class="item${gone}" id="${id}"><span class="led red"></span>${main}${size}${reveal}</div>`;
+    return `<div class="item${gone}" id="${id}"><span class="led red"></span>${main}${size}${acts}</div>`;
   }
+
+  /** "…and 123 smaller items", with the button that lists them (four times as many at a time). */
+  const moreButton = (s, unlisted, listed) =>
+    `<button class="link-btn" data-act="show-more" data-spot="${esc(s.id)}" ${state.trash.busy || state.cleaning ? "disabled" : ""}>${unlisted <= listed * 3 ? "Show all" : "Show more"}</button>`;
 
   // Lists group by what comes before the first " · " in a name ("Unity games · Lifeslide ·
   // Player.log" belongs to Unity games), or by the sort of thing (Docker's images, containers).
@@ -2238,9 +2252,9 @@ in ${x.cwd}`)}">
           ? `<h3 class="list-head">${moves ? "Moves" : "Goes"} <span class="dim num">${plural(s.reclaimableItems || p.goes.length, "item")}</span>${allButton("goes", p.goes, pk.goes)}</h3>
         <div class="items">${listBody(s, p.goes, picking, "goes")}${
           unlisted
-            ? `<p class="more">…and ${plural(unlisted, lastGoes.bytes ? "smaller item" : "more", lastGoes.bytes ? "smaller items" : "more")}${
+            ? `<p class="more"><span>…and ${plural(unlisted, lastGoes.bytes ? "smaller item" : "more", lastGoes.bytes ? "smaller items" : "more")}${
                 picking ? (pk.goes ? ", ticked too" : ", not ticked") : ""
-              }.</p>`
+              }.</span>${moreButton(s, unlisted, p.goes.length)}</p>`
             : ""
         }</div>`
           : ""
@@ -2251,11 +2265,11 @@ in ${x.cwd}`)}">
         ${picking && p.fresh.length ? `<p class="list-hint">${hint}</p>` : ""}
         <div class="items">${listBody(s, stays, picking, "stays")}${
           keptUnlisted
-            ? `<p class="more">…and ${plural(keptUnlisted, "more", "more")}${
+            ? `<p class="more"><span>…and ${plural(keptUnlisted, "more", "more")}${
                 picking && newUnlisted
                   ? `, ${newUnlisted === keptUnlisted ? "all" : `${newUnlisted.toLocaleString("en-US")} of them`} new (${pk.new ? "ticked too" : "Tick all takes them too"})`
                   : ""
-              }.</p>`
+              }.</span>${moreButton(s, keptUnlisted, stays.length)}</p>`
             : ""
         }</div>`
           : ""
@@ -2853,6 +2867,21 @@ in ${x.cwd}`)}">
       </div>`;
     const num = (key, value, min, max) => `<input class="inline-num num" type="number" min="${min}" max="${max}" value="${value}" data-num="${key}">`;
     const row = (key, label, note) => `<div class="switch-row" id="set-${key}"><span class="label">${label}</span><small>${note}</small></div>`;
+    // What you said to keep, each with a way to let it go again.
+    const kept = c.trash.keep || [];
+    const keptRow = (p) => `<div class="item stays moved" id="kept-${hash(p)}"><span class="led green"></span>
+        <span class="item-main"><span class="item-name" title="${esc(p)}">${esc(p.split(/[\\/]/).filter(Boolean).pop() || p)}</span><span class="item-sub" title="${esc(p)}">${esc(p)}</span></span>
+        <span class="moved-acts"><button class="mini-btn wide" data-act="unkeep" data-path="${esc(p)}">Let go</button></span></div>`;
+    const keptBox = kept.length
+      ? section(
+          "s-kept",
+          "Always kept",
+          String(kept.length),
+          kept.map(keptRow).join("") +
+            `<p class="group-note">No clean-up takes these. The lock on a row adds one.</p>` +
+            (kept.length > 1 ? `<div class="group-foot"><button class="link-btn" data-act="unkeep-all">Let go of all ${kept.length}</button></div>` : "")
+        )
+      : "";
     return `<div class="sheet-head"><h2 id="sheet-title" class="dot sheet-dot">settings</h2>
         <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button></div>
       ${section(
@@ -2866,8 +2895,10 @@ in ${x.cwd}`)}">
             "keep",
             "How long things stay",
             `What agents leave behind (scratch, logs, snapshots, worktrees) stays ${num("agentScratchDays", c.trash.agentScratchDays, 1, 365)} days before mom suggests clearing it, other temp files ${num("tempMinAgeDays", c.trash.tempMinAgeDays, 1, 90)} days. Conversations nobody has opened in ${num("conversationsAfterDays", c.trash.conversationsAfterDays, 1, 3650)} days can move to another drive.`
-          )
+          ) +
+          (kept.length ? "" : row("kept", "Always kept", "Nothing yet. The lock on any row in a clean-up keeps it out of every clean-up."))
       )}
+      ${keptBox}
       ${section(
         "s-tell",
         "Notifications",
@@ -3444,6 +3475,56 @@ in ${x.cwd}`)}">
       case "refresh-spot":
         invoke("measure_spot", { id: el.dataset.spot });
         state.trash.busy = true;
+        renderSheet();
+        break;
+      case "show-more":
+        invoke("measure_spot", { id: el.dataset.spot, more: true });
+        state.trash.busy = true;
+        renderSheet();
+        break;
+      case "keep-item": {
+        e.preventDefault(); // it sits inside the row's label, which would tick the box
+        const s = state.trash.spots.find((x) => x.id === el.dataset.spot);
+        const i = s && (s.items || []).find((x) => x.path === el.dataset.path);
+        if (!i || state.cleaning) return;
+        const keep = !i.kept;
+        // Shown straight away; mom measures the spot again and sends the real numbers.
+        if (keep) {
+          if (i.goes) {
+            s.reclaimableItems = Math.max(0, (s.reclaimableItems || 0) - 1);
+            s.reclaimableBytes = Math.max(0, (s.reclaimableBytes || 0) - i.bytes);
+            s.keptItems = (s.keptItems || 0) + 1;
+            s.keptBytes = (s.keptBytes || 0) + i.bytes;
+          } else if (i.optional) {
+            s.newItems = Math.max(0, (s.newItems || 0) - 1);
+            s.newBytes = Math.max(0, (s.newBytes || 0) - i.bytes);
+          }
+          Object.assign(i, { goes: false, optional: false, kept: true, reason: "You said to keep this" });
+        } else Object.assign(i, { kept: false, reason: "Looking again…" });
+        const pk = pickOf(s.id);
+        pk.ticked.delete(i.path);
+        pk.unticked.delete(i.path);
+        state.cleanConfirm = null;
+        state.trash.busy = true;
+        if (state.settings) {
+          const list = (state.settings.config.trash.keep || []).filter((k) => k !== i.path);
+          state.settings.config.trash.keep = keep ? [...list, i.path] : list;
+        }
+        act(invoke("keep_item", { path: i.path, keep, spot: s.id }), () => (keep ? "Got it. I'll leave that one alone." : "Fine, it can go when you say so."));
+        if (state.tab === "upkeep") render();
+        renderSheet();
+        break;
+      }
+      case "unkeep": {
+        const path = el.dataset.path;
+        if (state.settings) state.settings.config.trash.keep = (state.settings.config.trash.keep || []).filter((k) => k !== path);
+        act(invoke("keep_item", { path, keep: false }), () => "Fine, it can go when you say so.");
+        renderSheet();
+        break;
+      }
+      case "unkeep-all":
+        if (state.settings) state.settings.config.trash.keep = [];
+        act(invoke("keep_nothing"), () => "Fine, they can go when you say so.");
         renderSheet();
         break;
       case "stop-clean":

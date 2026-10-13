@@ -181,6 +181,13 @@ enum TrashCmd {
         #[arg(long, hide = true)]
         pick_hex: Option<String>,
     },
+    /// Keep a file or folder from now on: no clean-up takes it. With no path, lists what's kept.
+    Keep {
+        paths: Vec<String>,
+        /// Let these go again (with no path: all of them).
+        #[arg(long)]
+        release: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -633,6 +640,29 @@ fn run(cli: Cli) -> Result<i32> {
                         print_json(&spot)?;
                     } else {
                         print_spot(&st, &spot);
+                    }
+                }
+                (Some(TrashCmd::Keep { paths: which, release }), _) => {
+                    let mut cfg = cfg.clone();
+                    let before = cfg.trash.keep.clone();
+                    if release && which.is_empty() {
+                        cfg.trash.keep.clear();
+                    }
+                    for p in &which {
+                        // The whole path, so it means the same thing wherever mom runs from.
+                        let full = std::path::absolute(p).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|_| p.clone());
+                        trash::set_keep(&mut cfg.trash, &full, !release);
+                    }
+                    if cfg.trash.keep != before {
+                        cfg.save(&paths)?;
+                    }
+                    if cfg.trash.keep.is_empty() {
+                        println!("Nothing is kept. `mom trash keep <path>` keeps a file or folder out of every clean-up.");
+                    } else {
+                        println!("{}", st.bold("Kept out of every clean-up:"));
+                        for k in &cfg.trash.keep {
+                            println!("  {k}");
+                        }
                     }
                 }
                 (Some(TrashCmd::Clean { ids, yes, elevated, pick_hex }), _) => {

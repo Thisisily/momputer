@@ -123,6 +123,9 @@ pub struct TrashConfig {
     pub archive_dir: Option<PathBuf>,
     /// Conversations nobody has opened in this many days are suggested for moving.
     pub conversations_after_days: u64,
+    /// Things you said to keep, by path: no clean-up ever takes them (or anything inside them, or
+    /// anything they're inside of), whatever is ticked. Managed by the app and `mom trash keep`.
+    pub keep: Vec<String>,
 }
 
 impl Default for TrashConfig {
@@ -132,6 +135,7 @@ impl Default for TrashConfig {
             agent_scratch_days: 67,
             archive_dir: None,
             conversations_after_days: 67,
+            keep: vec![],
         }
     }
 }

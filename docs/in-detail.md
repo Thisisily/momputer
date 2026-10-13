@@ -33,7 +33,7 @@ The [README](../README.md) is the short version. This is everything, at length.
         <li>things only an administrator can delete: Windows Update's leftover downloads, old error reports, what Windows setup and installers left at the top of your drives, older driver installers, old app backups and crash dumps in ProgramData. Mom itself never runs as administrator: when you press the button, Windows asks first, and an elevated copy of the <code>mom</code> command cleans exactly what it finds under the same rules. This only works when momputer is installed for all users, so that nothing running as you could have swapped that copy</li>
         <li><b>forgotten app data</b>: big folders of apps you uninstalled, an app's older versions, and models and games you haven't opened in ages. Mom guesses which app a folder belongs to, so these move to your archive drive instead of being deleted, and keys, passwords, wallets, browser profiles and messages are never offered</li>
       </ul>
-      <p>Tap any of them and she lists every folder that goes, every one that stays and why, and tells you what the button does (deleted for good, Recycle Bin, or the tool's own prune) <b>before</b> you press it. Anything that would be deleted can go to the Recycle Bin instead, if it fits there. Untick anything you want to keep, or tick something she'd keep just because it's new. Long lists are grouped by app or game (all of Unity's logs together, then each game), and can be sorted and filtered. While she cleans, you watch each item go, and Stop halts it after the one she's on.</p>
+      <p>Tap any of them and she lists every folder that goes, every one that stays and why, and tells you what the button does (deleted for good, Recycle Bin, or the tool's own prune) <b>before</b> you press it. Anything that would be deleted can go to the Recycle Bin instead, if it fits there. Untick anything you want to keep, or tick something she'd keep just because it's new. The lock on a row keeps it for good: no clean-up takes it until you let it go again (Settings lists what's kept). Long lists are grouped by app or game (all of Unity's logs together, then each game), and can be sorted and filtered. While she cleans, you watch each item go, and Stop halts it after the one she's on.</p>
       <p><b>Old conversations</b> don't get deleted: mom moves them to another drive (an external one is fine) and leaves a link in each one's place, so Codex, Claude Code, Cursor and the rest still open them from where they were. Bring back puts any of them back.</p>
     </td>
   </tr>
@@ -81,6 +81,7 @@ mom sessions           agent sessions running right now
 mom machines           Docker, WSL and Hyper-V
 mom trash              what can go, and what each clean-up does (mom trash <id> lists the files)
 mom trash clean all    take out the safe trash (never the Recycle Bin or your own files)
+mom trash keep <path>  keep a file or folder out of every clean-up (--release lets it go)
 mom health             drives, memory, restarts, Storage Sense and startup apps
 mom update             is there a newer momputer? (asks GitHub)
 mom skills             the skills that come with momputer: what each does, what to say

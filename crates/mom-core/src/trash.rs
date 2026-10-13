@@ -70,7 +70,8 @@ pub struct Spot {
     pub measured_at: u64,
     /// A blocker or a tip ("Close Edge to clear its cache.").
     pub note: Option<String>,
-    /// Biggest first: up to 300 that go, then up to 150 that stay.
+    /// Biggest first: up to 300 that go, then up to 150 that stay (what you said to keep comes
+    /// first among those). More of each when the widget asked to see more.
     pub items: Vec<Item>,
 }
 
@@ -100,6 +101,9 @@ pub struct Item {
     /// What sort of thing it is, plural ("images", "logs"), in spots that hold several sorts.
     #[serde(default)]
     pub kind: Option<String>,
+    /// You said to keep it (`TrashConfig.keep`), so it stays until you say otherwise.
+    #[serde(default)]
+    pub kept: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -249,6 +253,8 @@ pub struct TrashCtx<'a> {
     pub installed: Option<crate::installed::Installed>,
     /// Where a clean-up reports how it's going, and learns it should stop.
     pub live: Option<&'a Live>,
+    /// How many times the usual number of items a spot lists (1, unless someone asked to see more).
+    pub list_scale: usize,
 }
 
 impl<'a> TrashCtx<'a> {
@@ -285,6 +291,7 @@ impl<'a> TrashCtx<'a> {
             elevated: crate::elevate::is_elevated(),
             installed: None,
             live: None,
+            list_scale: 1,
         }
     }
 
@@ -739,6 +746,17 @@ pub fn save(paths: &Paths, spots: &[Spot]) {
 }
 
 fn save_as(paths: &Paths, spots: &[Spot], version: &str) {
+    // The usual number of items each, however many the widget is showing: the file is read at
+    // every start.
+    let spots: Vec<Spot> = spots
+        .iter()
+        .map(|s| {
+            let mut s = s.clone();
+            let (goes, stays): (Vec<Item>, Vec<Item>) = std::mem::take(&mut s.items).into_iter().partition(|i| i.goes);
+            s.items = goes.into_iter().take(MAX_GOES).chain(stays.into_iter().take(MAX_STAYS)).collect();
+            s
+        })
+        .collect();
     if let Ok(json) = serde_json::to_string(&serde_json::json!({ "version": version, "spots": spots })) {
         let _ = crate::util::write_atomic(&saved_file(paths), &json);
     }
@@ -808,6 +826,8 @@ struct Cand {
     /// A Claude transcript to read the session's title from, and the project name to put in
     /// front. Only read for items that get shown.
     title_from: Option<(PathBuf, String)>,
+    /// You said to keep it.
+    kept: bool,
 }
 
 impl Cand {
@@ -828,6 +848,7 @@ impl Cand {
             reason: String::new(),
             complete: t.complete,
             title_from: None,
+            kept: false,
         }
     }
 
@@ -861,6 +882,7 @@ impl Cand {
             optional: self.optional,
             reason: self.reason,
             kind: self.kind.map(str::to_string),
+            kept: self.kept,
         }
     }
 }
@@ -963,7 +985,67 @@ fn cache_item(root: PathBuf, name: &str, ctx: &TrashCtx) -> Option<Cand> {
     Some(if ctx.in_use(&c.path) { c.verdict(false, IN_USE) } else { c.verdict(true, "Refills by itself when needed") })
 }
 
+/// Why something you said to keep stays, and why a folder with such a thing inside it does.
+const KEPT: &str = "You said to keep this";
+const HOLDS_KEPT: &str = "Holds something you said to keep";
+
+/// How many things can be kept, and how long a path may be: the list is in a file anyone
+/// running as you can write, and it's read every time mom measures.
+const MAX_KEPT: usize = 2_000;
+const MAX_KEPT_PATH: usize = 1_024;
+
+/// Is `inner` the same place as `outer`, or somewhere inside it? Both as `norm_path` spells them.
+fn within(inner: &str, outer: &str) -> bool {
+    inner == outer || (inner.len() > outer.len() && inner.starts_with(outer) && (outer.ends_with('\\') || inner.as_bytes()[outer.len()] == b'\\'))
+}
+
+/// What you said to keep never goes and can't be ticked: the thing itself, anything inside it,
+/// and anything it is inside of (deleting that would take it along).
+fn keep_yours(mut f: Found, keep: &[String]) -> Found {
+    let keep: Vec<String> = keep.iter().filter(|k| !k.trim().is_empty()).map(|k| norm_path(k)).collect();
+    if keep.is_empty() {
+        return f;
+    }
+    for c in &mut f.cands {
+        let places: Vec<String> = std::iter::once(&c.path).chain(&c.targets).map(|p| norm_path(&p.to_string_lossy())).collect();
+        let yours = places.iter().any(|p| keep.iter().any(|k| within(p, k)));
+        let holds = !yours && places.iter().any(|p| keep.iter().any(|k| within(k, p)));
+        if yours || holds {
+            c.goes = false;
+            c.optional = false;
+            c.kept = yours;
+            c.reason = if yours { KEPT } else { HOLDS_KEPT }.to_string();
+        }
+    }
+    f
+}
+
+/// Says to keep `path` from now on (or, with `on` false, not to any more). True if that changed
+/// anything. Paths are compared the way Windows does, whatever their capitals and slashes.
+pub fn set_keep(cfg: &mut TrashConfig, path: &str, on: bool) -> bool {
+    let path = path.trim();
+    if path.is_empty() || path.len() > MAX_KEPT_PATH {
+        return false;
+    }
+    let want = norm_path(path);
+    let had = cfg.keep.iter().any(|k| norm_path(k) == want);
+    if on == had || (on && cfg.keep.len() >= MAX_KEPT) {
+        return false;
+    }
+    cfg.keep.retain(|k| norm_path(k) != want);
+    if on {
+        cfg.keep.push(path.to_string());
+    }
+    true
+}
+
+/// Everything a spot holds right now, with what you said to keep already marked as staying.
 fn find(id: &str, ctx: &TrashCtx) -> Found {
+    let keep = &ctx.cfg.keep[..ctx.cfg.keep.len().min(MAX_KEPT)];
+    keep_yours(find_raw(id, ctx), keep)
+}
+
+fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
     let agent_age = ctx.cfg.agent_scratch_days * 86_400;
     let la = &ctx.paths.local_appdata;
     match id {
@@ -1449,6 +1531,9 @@ pub fn measure_all(ctx: &TrashCtx) -> Vec<Spot> {
 /// group them by app or game.
 const MAX_GOES: usize = 300;
 const MAX_STAYS: usize = 150;
+/// "Show more" lists four times as many each time it's pressed, up to this many times the usual.
+pub const MORE: usize = 4;
+pub const MAX_SCALE: usize = 64;
 
 fn by_size(a: &Cand, b: &Cand) -> std::cmp::Ordering {
     b.bytes.cmp(&a.bytes).then_with(|| a.name.cmp(&b.name))
@@ -1457,7 +1542,8 @@ fn by_size(a: &Cand, b: &Cand) -> std::cmp::Ordering {
 fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
     let (mut goes, mut stays): (Vec<Cand>, Vec<Cand>) = f.cands.into_iter().partition(|c| c.goes);
     goes.sort_by(by_size);
-    stays.sort_by(by_size);
+    // What you said to keep comes first, so it's always in the list and can be let go again.
+    stays.sort_by(|a, b| b.kept.cmp(&a.kept).then_with(|| by_size(a, b)));
     let go_bytes: u64 = goes.iter().map(|c| c.bytes).sum();
     let stay_bytes: u64 = stays.iter().map(|c| c.bytes).sum();
     let (total, reclaimable) = match f.tool {
@@ -1469,7 +1555,8 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
     let (n_go, n_stay) = (goes.len() as u64, stays.len() as u64);
     let new_bytes = stays.iter().filter(|c| c.optional).map(|c| c.bytes).sum();
     let new_items = stays.iter().filter(|c| c.optional).count() as u64;
-    let items = goes.into_iter().take(MAX_GOES).chain(stays.into_iter().take(MAX_STAYS)).map(Cand::into_item).collect();
+    let scale = ctx.list_scale.clamp(1, MAX_SCALE);
+    let items = goes.into_iter().take(MAX_GOES * scale).chain(stays.into_iter().take(MAX_STAYS * scale)).map(Cand::into_item).collect();
     Spot {
         id: def.id.into(),
         label: def.label.into(),
@@ -1758,17 +1845,29 @@ pub struct Pick {
     pub unticked: Vec<String>,
     /// Send it to the Recycle Bin instead of deleting it for good (spots that delete).
     pub recycle: bool,
+    /// Things never to take, whatever else is ticked: what you said to keep, handed along to the
+    /// administrator run, which may be reading another account's settings.
+    pub keep: Vec<String>,
 }
 
 impl Default for Pick {
     fn default() -> Pick {
-        Pick { goes: true, new: false, ticked: vec![], unticked: vec![], recycle: false }
+        Pick { goes: true, new: false, ticked: vec![], unticked: vec![], recycle: false, keep: vec![] }
     }
 }
 
 impl Pick {
     fn is_default(&self) -> bool {
-        self.goes && !self.new && !self.recycle && self.ticked.is_empty() && self.unticked.is_empty()
+        self.goes && !self.new && !self.recycle && self.ticked.is_empty() && self.unticked.is_empty() && self.keep.is_empty()
+    }
+}
+
+/// What a spot holds, for a clean-up: as `find`, and minus what the pick says to keep.
+fn find_for(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> Found {
+    let f = find(id, ctx);
+    match pick {
+        Some(p) => keep_yours(f, &p.keep[..p.keep.len().min(MAX_KEPT)]),
+        None => f,
     }
 }
 
@@ -1807,7 +1906,7 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         _ if id == "docker" => return docker_clean(ctx, pick, r),
         _ => {}
     }
-    let f = find(id, ctx);
+    let f = find_for(id, ctx, pick);
     let chosen = choose(&f, pick);
     if let Some(p) = pick {
         // Ticked, but can't go now (in use since the user looked, or already gone).
@@ -2189,8 +2288,9 @@ pub fn plan(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> Vec<(Vec<PathBuf>,
     if def.action == "tool" {
         return vec![];
     }
-    let f = find(id, ctx);
-    choose(&f, pick.filter(|p| !p.is_default())).into_iter().map(|c| (c.targets.clone(), c.bytes)).collect()
+    let pick = pick.filter(|p| !p.is_default());
+    let f = find_for(id, ctx, pick);
+    choose(&f, pick).into_iter().map(|c| (c.targets.clone(), c.bytes)).collect()
 }
 
 /// The sentence for a clean-up's result.
@@ -2316,6 +2416,7 @@ mod tests {
             elevated: false, // tests may well run as administrator (CI does)
             installed: Some(crate::installed::Installed::with(&[])), // nothing, unless a test says otherwise
             live: None,
+            list_scale: 1,
         }
     }
 
@@ -2472,6 +2573,83 @@ mod tests {
         assert_eq!(r.deleted, 0);
         assert!(r.message.contains("not as administrator"), "{}", r.message);
         assert!(paths.temp.join("old-a").join("a.log").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn what_you_said_to_keep_never_goes_whatever_is_ticked() {
+        let root = fixture("keep");
+        let paths = Paths::under(&root);
+        let (a, b, c) = (paths.temp.join("old-a"), paths.temp.join("old-b"), paths.temp.join("old-c"));
+        write(&a.join("a.log"), 100, 30);
+        write(&b.join("b.log"), 200, 30);
+        write(&c.join("deep").join("c.log"), 300, 30);
+        let text = |p: &Path| p.to_string_lossy().to_string();
+        let mut cfg = TrashConfig::default();
+        // Spelled another way (capitals, the other slash): the same place.
+        assert!(set_keep(&mut cfg, &text(&a).to_uppercase().replace('\\', "/"), true));
+        assert!(!set_keep(&mut cfg, &text(&a), true), "kept already");
+        // Something inside a folder that would go: the folder stays too, or it would go along.
+        assert!(set_keep(&mut cfg, &text(&c.join("deep").join("c.log")), true));
+        assert!(!set_keep(&mut cfg, "  ", true) && !set_keep(&mut cfg, &"x".repeat(2_000), true));
+        assert_eq!(cfg.keep.len(), 2);
+        {
+            let ctx = ctx(&paths, &cfg);
+            let spot = measure("old-temp", &ctx).unwrap();
+            let say = |n: &str| {
+                let i = item(&spot, n);
+                (i.goes, i.optional, i.kept, i.reason.clone())
+            };
+            assert_eq!(say("old-a"), (false, false, true, KEPT.to_string()));
+            assert_eq!(say("old-c"), (false, false, false, HOLDS_KEPT.to_string()));
+            assert!(item(&spot, "old-b").goes);
+            assert_eq!((spot.reclaimable_items, spot.reclaimable_bytes, spot.kept_items, spot.new_items), (1, 200, 2, 0));
+            // What you keep leads the list of what stays, so it can always be let go from there.
+            assert_eq!(spot.items.iter().find(|i| !i.goes).unwrap().name, "old-a");
+            // Ticked anyway (named one by one, and "tick all" in both lists): nothing of yours goes.
+            let pick = Pick { new: true, ticked: vec![text(&a), text(&c)], ..Default::default() };
+            let r = clean("old-temp", &ctx, Some(&pick));
+            assert_eq!(r.deleted, 1, "{r:?}");
+            assert!(a.join("a.log").exists() && c.join("deep").join("c.log").exists() && !b.exists());
+        }
+        // Let go again, it goes like anything else.
+        assert!(set_keep(&mut cfg, &text(&a), false) && !set_keep(&mut cfg, &text(&a), false));
+        {
+            let ctx = ctx(&paths, &cfg);
+            assert!(item(&measure("old-temp", &ctx).unwrap(), "old-a").goes);
+            // A pick can say what to keep by itself: the administrator run is told that way.
+            let pick = Pick { keep: vec![text(&a)], ..Default::default() };
+            assert!(plan("old-temp", &ctx, Some(&pick)).is_empty());
+            let r = clean("old-temp", &ctx, Some(&pick));
+            assert_eq!(r.deleted, 0, "{r:?}");
+            assert!(a.exists() && c.exists());
+            assert_eq!(clean("old-temp", &ctx, None).deleted, 1);
+            assert!(!a.exists() && c.join("deep").join("c.log").exists());
+        }
+        // A folder whose name only starts the same isn't inside it.
+        assert!(within(r"c:\temp\old-a\x", r"c:\temp\old-a") && within(r"c:\temp\old-a", r"c:\temp\old-a"));
+        assert!(!within(r"c:\temp\old-ab", r"c:\temp\old-a") && !within(r"c:\temp", r"c:\temp\old-a") && within(r"d:\x", "d:\\"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_spot_lists_more_when_asked_and_saves_the_usual_number() {
+        let root = fixture("list-more");
+        let paths = Paths::under(&root);
+        let n = MAX_GOES + 20;
+        for i in 0..n {
+            write(&paths.temp.join(format!("old-{i:04}")).join("a.log"), 10 + i, 30);
+        }
+        let cfg = TrashConfig::default();
+        let mut ctx = ctx(&paths, &cfg);
+        let usual = measure("old-temp", &ctx).unwrap();
+        assert_eq!((usual.items.len(), usual.reclaimable_items as usize), (MAX_GOES, n));
+        ctx.list_scale = MORE;
+        let more = measure("old-temp", &ctx).unwrap();
+        assert_eq!((more.items.len(), more.reclaimable_items as usize), (n, n));
+        // However many are showing, the file read at every start holds the usual number.
+        save(&paths, &[more]);
+        assert_eq!(load_saved(&paths)[0].items.len(), MAX_GOES);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

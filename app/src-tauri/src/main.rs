@@ -38,6 +38,11 @@ struct Shared {
     snapshot: Mutex<Option<Snapshot>>,
     trash: Mutex<Vec<trash::Spot>>,
     trash_busy: AtomicBool,
+    /// Asked for while something was being measured: spots to measure again right after ("" is
+    /// all of them), so a change made meanwhile (something to keep, more to list) isn't lost.
+    trash_next: Mutex<HashSet<String>>,
+    /// Spots listing more than the usual number of items, and how many times as many.
+    trash_scale: Mutex<HashMap<String, usize>>,
     /// The clean-up running now: how it's going, and its stop button.
     cleaning: trash::Live,
     /// Looking for copies and big forgotten files, and its stop button.
@@ -532,29 +537,55 @@ fn emit_trash(app: &AppHandle, s: &Shared) {
 }
 
 fn measure_trash_now(app: AppHandle, s: S, only: Option<String>) {
-    if s.trash_busy.swap(true, Ordering::SeqCst) {
-        return;
+    {
+        // Busy already: this one is next. (Both sides hold `trash_next` while they look at
+        // `trash_busy`, so a request can't slip in just as the measuring ends and be forgotten.)
+        let mut next = s.trash_next.lk();
+        if s.trash_busy.swap(true, Ordering::SeqCst) {
+            next.insert(only.unwrap_or_default());
+            return;
+        }
     }
     std::thread::spawn(move || {
-        let cfg = s.cfg();
-        let table = s.sampler.lk().sample();
-        let ctx = trash::TrashCtx::new(&s.paths, &cfg, &table);
-        let ids: Vec<String> = match only {
-            Some(id) => vec![id],
-            None => trash::spot_ids().into_iter().map(String::from).collect(),
-        };
-        for id in ids {
-            if let Some(spot) = trash::measure(&id, &ctx) {
-                let mut list = s.trash.lk();
-                match list.iter_mut().find(|x| x.id == spot.id) {
-                    Some(x) => *x = spot,
-                    None => list.push(spot),
+        let mut only = only;
+        loop {
+            // Settings as they are now: what to keep may have changed since the last round.
+            let cfg = s.cfg();
+            let table = s.sampler.lk().sample();
+            let mut ctx = trash::TrashCtx::new(&s.paths, &cfg, &table);
+            let ids: Vec<String> = match only.take() {
+                Some(id) => vec![id],
+                None => trash::spot_ids().into_iter().map(String::from).collect(),
+            };
+            for id in ids {
+                ctx.list_scale = s.trash_scale.lk().get(&id).copied().unwrap_or(1);
+                if let Some(spot) = trash::measure(&id, &ctx) {
+                    let mut list = s.trash.lk();
+                    match list.iter_mut().find(|x| x.id == spot.id) {
+                        Some(x) => *x = spot,
+                        None => list.push(spot),
+                    }
                 }
+                emit_trash(&app, &s);
             }
-            emit_trash(&app, &s);
+            let mut next = s.trash_next.lk();
+            if next.is_empty() {
+                s.trash_busy.store(false, Ordering::SeqCst);
+                break;
+            }
+            // All of them if anyone asked for that; otherwise one spot now, the rest after it.
+            only = if next.remove("") {
+                next.clear();
+                None
+            } else {
+                let id = next.iter().next().cloned();
+                if let Some(id) = &id {
+                    next.remove(id);
+                }
+                id
+            };
         }
         trash::save(&s.paths, &s.trash.lk());
-        s.trash_busy.store(false, Ordering::SeqCst);
         emit_trash(&app, &s);
     });
 }
@@ -564,10 +595,56 @@ fn measure_trash(app: AppHandle, s: State<'_, S>) {
     measure_trash_now(app, s.inner().clone(), None);
 }
 
-/// Measures one spot again (the refresh button on its sheet).
+/// Measures one spot again (the refresh button on its sheet). With `more`, it lists four times
+/// as many items as it does now ("Show all").
 #[tauri::command(async)]
-fn measure_spot(id: String, app: AppHandle, s: State<'_, S>) {
+fn measure_spot(id: String, more: Option<bool>, app: AppHandle, s: State<'_, S>) {
+    if more == Some(true) && trash::spot_ids().contains(&id.as_str()) {
+        let mut scale = s.trash_scale.lk();
+        let now = scale.get(&id).copied().unwrap_or(1);
+        scale.insert(id.clone(), (now * trash::MORE).min(trash::MAX_SCALE));
+    }
     measure_trash_now(app, s.inner().clone(), Some(id));
+}
+
+/// Keeps one thing from now on, whatever clean-up finds it (or, with `keep` false, lets it go
+/// again), then measures the spot it was in again. Without a spot (from Settings), the spots
+/// that list it.
+#[tauri::command(async)]
+fn keep_item(path: String, keep: bool, spot: Option<String>, app: AppHandle, s: State<'_, S>) -> Res<()> {
+    {
+        let mut cfg = s.config.lk();
+        if !trash::set_keep(&mut cfg.trash, &path, keep) {
+            return Ok(());
+        }
+        cfg.save(&s.paths).map_err(err)?;
+    }
+    let ids: Vec<String> = match spot {
+        Some(id) => vec![id],
+        None => {
+            let want = mom_core::util::norm_path(&path);
+            s.trash.lk().iter().filter(|x| x.items.iter().any(|i| mom_core::util::norm_path(&i.path) == want)).map(|x| x.id.clone()).collect()
+        }
+    };
+    for id in ids {
+        measure_trash_now(app.clone(), s.inner().clone(), Some(id));
+    }
+    Ok(())
+}
+
+/// Lets go of everything you said to keep, and measures again.
+#[tauri::command(async)]
+fn keep_nothing(app: AppHandle, s: State<'_, S>) -> Res<()> {
+    {
+        let mut cfg = s.config.lk();
+        if cfg.trash.keep.is_empty() {
+            return Ok(());
+        }
+        cfg.trash.keep.clear();
+        cfg.save(&s.paths).map_err(err)?;
+    }
+    measure_trash_now(app, s.inner().clone(), None);
+    Ok(())
 }
 
 /// How the clean-up running now is going: counts, the item at hand, and what's gone since
@@ -632,9 +709,12 @@ fn clean_as_admin(s: &Shared, id: &str, pick: Option<&trash::Pick>) -> trash::Cl
     if before.iter().all(|(t, _)| gone(t)) {
         return tally_gone(id, before, r, None);
     }
-    // Then the rest as administrator.
+    // Then the rest as administrator, told what you said to keep: an administrator who isn't you
+    // (Windows asked for a password) reads their own settings, not yours.
     let mut args = format!("trash clean {id} --yes --elevated");
-    if let Some(p) = pick {
+    let keep = s.cfg().trash.keep;
+    let with_keep = (!keep.is_empty()).then(|| trash::Pick { keep, ..pick.cloned().unwrap_or_default() });
+    if let Some(p) = with_keep.as_ref().or(pick) {
         let hex = mom_core::elevate::to_hex(&serde_json::to_string(p).unwrap_or_default());
         if hex.len() > 30_000 {
             note = Some("That's too many ticked and unticked items to hand an administrator at once; tick all or untick all, then change a few.".to_string());
@@ -1224,7 +1304,17 @@ fn get_settings(app: AppHandle, s: State<'_, S>) -> Settings {
 }
 
 #[tauri::command(async)]
-fn set_settings(config: Config, app: AppHandle, s: State<'_, S>) -> Res<()> {
+fn set_settings(mut config: Config, app: AppHandle, s: State<'_, S>) -> Res<()> {
+    // What the settings sheet doesn't edit stays as it is: those lists have buttons of their own,
+    // and the widget's copy of the settings can be older than the last thing they changed.
+    {
+        let now = s.config.lk();
+        config.kept = now.kept.clone();
+        config.rooms = now.rooms.clone();
+        config.files = now.files.clone();
+        config.trash.archive_dir = now.trash.archive_dir.clone();
+        config.trash.keep = now.trash.keep.clone();
+    }
     config.save(&s.paths).map_err(err)?;
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.set_always_on_top(config.ui.always_on_top);
@@ -1331,6 +1421,8 @@ fn main() {
         snapshot: Mutex::new(None),
         trash: Mutex::new(saved_trash),
         trash_busy: AtomicBool::new(false),
+        trash_next: Mutex::new(HashSet::new()),
+        trash_scale: Mutex::new(HashMap::new()),
         cleaning: trash::Live::default(),
         files_busy: AtomicBool::new(false),
         files_stop: AtomicBool::new(false),
@@ -1363,6 +1455,8 @@ fn main() {
             stop_groups,
             stop_leftovers,
             keep_group,
+            keep_item,
+            keep_nothing,
             get_stopped,
             start_again,
             forget_stopped,
