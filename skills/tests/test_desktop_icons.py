@@ -73,6 +73,9 @@ try:
         "Relative.lnk": make_lnk(relative="..\\..\\targets\\Lanternfall\\readme.txt"),
         "Env.lnk": make_lnk(env="%SystemRoot%\\explorer.exe"),
         "Env gone.lnk": make_lnk(env="%ProgramData%\\mom-desktop-test-not-a-real-folder\\gone.exe"),
+        "Env secret.lnk": make_lnk(env="%MOM_DESKTOP_TEST_KEY%"),
+        "Env secret in a path.lnk": make_lnk(env="%SystemRoot%\\%MOM_DESKTOP_TEST_KEY%\\tool.exe"),
+        "Env secret that is a path.lnk": make_lnk(env="%MOM_DESKTOP_TEST_PLACE%\\tool.exe"),
         "Stale relative.lnk": make_lnk(relative="..\\Nowhere\\gone.exe"),
         "Relative with folder.lnk": make_lnk(relative="..\\Nowhere\\editor.exe", workdir=os.path.join(targets, "Lanternfall")),
         "Truncated.lnk": make_lnk(editor)[:90],
@@ -133,7 +136,9 @@ try:
     # ------------------------------------------------------------ 1. the survey
     print("\n-- 1. the survey looks and changes nothing")
     survey_json = os.path.join(out, "survey.json")
-    r = run([PY, "-I", os.path.join(S, "survey.py"), "--out", survey_json, "--root", root, "--screen", "1280x720", "--cell", "80x100"])
+    # Two things in the environment that are nobody's business: a key, and a setting that happens to look like a path
+    private = dict(os.environ, MOM_DESKTOP_TEST_KEY="sk-test-NEVER-IN-A-SURVEY-7731", MOM_DESKTOP_TEST_PLACE="C:\\NEVER-IN-A-SURVEY-PLACE")
+    r = run([PY, "-I", os.path.join(S, "survey.py"), "--out", survey_json, "--root", root, "--screen", "1280x720", "--cell", "80x100"], env=private)
     check("the survey runs", r.returncode == 0, r.stderr or r.stdout)
     check("the survey changed nothing and wrote one file", tree(root) + tree(targets) == before and os.listdir(out) == ["survey.json"], os.listdir(out))
     sv = json.load(open(survey_json, encoding="utf-8"))
@@ -154,7 +159,7 @@ try:
           all(status(n) == "dead" for n in ("Copperline Notes.lnk", "Old \u2019Game\u2019 & $(x).lnk", "Dead file.url", "Env gone.lnk"))
           and status("Dead Public.lnk", "public") == "dead")
     unknown = ("Truncated.lnk", "Not a link.lnk", "Empty.lnk", "Hostile target.lnk", "Share.lnk", "Net.lnk", "Broken.url", "Share.url",
-               "Stale relative.lnk")
+               "Stale relative.lnk", "Env secret.lnk", "Env secret in a path.lnk", "Env secret that is a path.lnk")
     check("anything that can't be read or checked is 'unknown', never 'dead' (cut short, not a link, empty, hostile target, network, "
           "only a relative path)",
           all(status(n) == "unknown" for n in unknown), [(n, status(n)) for n in unknown])
@@ -162,6 +167,9 @@ try:
           by_name[("desktop", "Lanternfall Site.url")]["shortcut"]["to"] == "lanternfall.example"
           and by_name[("desktop", "Steam Game.url")]["shortcut"]["leads_to"] == "game" and "SECRET-TOKEN" not in raw and "rungameid" not in raw)
     check("no file was read except shortcuts (nothing from inside a loose file is in the survey)", SECRET not in raw)
+    check("a shortcut can't make the survey copy a variable out of the environment: only the few that name a place are filled in",
+          "NEVER-IN-A-SURVEY" not in raw and "NEVER-IN-A-SURVEY" not in r.stdout + r.stderr
+          and "doesn't fill in" in by_name[("desktop", "Env secret.lnk")]["shortcut"]["reason"], by_name[("desktop", "Env secret.lnk")]["shortcut"])
     flagged = {it["name"]: it["shortcut"].get("flag", "") for it in sv["items"] if it.get("shortcut", {}).get("flag")}
     check("a shortcut that runs a command, one named like a document, and a link to a share are flagged",
           "runs a command" in flagged.get("Invoice.pdf.lnk", "") and "named like a document" in flagged.get("Photo.jpg.lnk", "")

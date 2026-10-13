@@ -69,6 +69,12 @@ PROJECT_MARKERS = {".git", "package.json", "cargo.toml", "pyproject.toml", "go.m
 COMMAND_HOSTS = {"cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "mshta.exe", "rundll32.exe",
                  "regsvr32.exe", "certutil.exe", "bitsadmin.exe", "msiexec.exe", "forfiles.exe", "conhost.exe", "wmic.exe",
                  "curl.exe", "ftp.exe", "bash.exe", "wsl.exe", "schtasks.exe", "reg.exe"}
+# The only variables a path is filled in from: each names a place on this PC's disk and nothing
+# else. A shortcut is someone else's file: filling in whatever it asks for would copy any variable
+# it names (a key or a token kept in the environment, say) into the survey and onto the page.
+PLACE_VARS = {"systemroot", "windir", "systemdrive", "programfiles", "programfiles(x86)", "programw6432", "programdata",
+              "commonprogramfiles", "commonprogramfiles(x86)", "commonprogramw6432", "allusersprofile", "public",
+              "userprofile", "homedrive", "homepath", "appdata", "localappdata", "onedrive", "temp", "tmp"}
 # Launchers many programs share: two shortcuts to "Update.exe" in different folders are two programs, not one installed twice
 GENERIC_EXES = COMMAND_HOSTS | {"update.exe", "launcher.exe", "setup.exe", "start.exe", "run.exe", "javaw.exe", "java.exe",
                                 "python.exe", "pythonw.exe", "explorer.exe", "uninstall.exe", "app.exe", "main.exe",
@@ -102,6 +108,24 @@ def writable_text(name):
         return True
     except UnicodeEncodeError:
         return False
+
+
+def fill_in_places(text):
+    """`text` with %ProgramFiles% and the like filled in. None if it names any other variable, or
+    one that isn't set to a plain place on a disk: then nothing is filled in at all."""
+    if not isinstance(text, str):
+        return None
+    bad = []
+
+    def one(m):
+        value = os.environ.get(m.group(1), "") if m.group(1).lower() in PLACE_VARS else ""
+        # "C:", "C:\Users\you", or "\Users\you" (HOMEPATH); never a share, never anything with a % left in it
+        if not re.match(r"^(?:[A-Za-z]:(?:\\[^%]*)?|\\[^\\%][^%]*)$", value):
+            bad.append(m.group(1))
+        return value
+
+    out = re.sub(r"%([^%]*)%", one, text)
+    return None if bad or "%" in out else out
 
 
 def spelled_out(text):
@@ -309,8 +333,9 @@ def _read_shortcut(path, name, size, cloud, prober):
     cands = []
     if link["local"]:
         cands.append((link["local"], True))
-    if link["env"]:
-        cands.append((os.path.expandvars(link["env"]), True))
+    filled = fill_in_places(link["env"]) if link["env"] else None
+    if filled:
+        cands.append((filled, True))
     if link["relative"]:
         cands.append((os.path.normpath(os.path.join(folder, link["relative"])), False))
         if link["workdir"]:
@@ -320,6 +345,8 @@ def _read_shortcut(path, name, size, cloud, prober):
             sc.update(leads_to="network", to="a network share", reason="a network share; not contacted")
         elif link["installer"]:
             sc["reason"] = "Windows Installer works out where this one leads"
+        elif link["env"]:
+            sc["reason"] = "its path is built from a setting this survey doesn't fill in"
         else:
             sc["reason"] = "a special Windows link with no file path in it"
         return sc
@@ -457,7 +484,9 @@ def public_desktop(root):
         try:
             with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                                 r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders") as k:
-                cands.append(os.path.normpath(os.path.expandvars(winreg.QueryValueEx(k, "Common Desktop")[0])))
+                where = fill_in_places(winreg.QueryValueEx(k, "Common Desktop")[0])
+                if where:
+                    cands.append(os.path.normpath(where))
         except (OSError, TypeError):
             pass
     cands.append(os.path.join(os.environ.get("PUBLIC", r"C:\Users\Public"), "Desktop"))
