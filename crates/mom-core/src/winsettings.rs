@@ -282,6 +282,7 @@ const PERFORMANCE: &str = "SystemPropertiesPerformance.exe";
 /// checkups name, and no others. A finding that names one that isn't here has a button that
 /// does nothing, so a test reads the checkups for every name.
 pub const PROGRAMS: &[&str] = &[
+    ENV_EDITOR,
     "SystemPropertiesPerformance.exe",
     "SystemPropertiesAdvanced.exe",
     "UserAccountControlSettings.exe",
@@ -291,6 +292,13 @@ pub const PROGRAMS: &[&str] = &[
     "devmgmt.msc",
     "services.msc",
 ];
+
+/// The program in System32, and what to hand it, that one of the names above stands for.
+/// Nothing for a name that isn't there: only mom's own list opens anything.
+pub fn program(name: &str) -> Option<(&'static str, &'static str)> {
+    let known = PROGRAMS.iter().find(|p| **p == name)?;
+    Some(known.split_once(' ').unwrap_or((known, "")))
+}
 const AFTER_RESTART: &str = "Takes effect after a restart.";
 const AFTER_SIGN_IN: &str = "Takes effect the next time you sign in.";
 
@@ -1799,6 +1807,17 @@ mod os {
 mod tests {
     use super::*;
 
+    /// Opens a real window (the environment variables editor), so it's run by hand, and the
+    /// window is yours to close: cargo test -p mom-core the_variable_editor_opens -- --ignored
+    #[test]
+    #[ignore]
+    #[cfg(windows)]
+    fn the_variable_editor_opens() {
+        let (exe, hand) = program(ENV_EDITOR).unwrap();
+        let windows = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        crate::elevate::open(&windows.join("System32").join(exe), hand).unwrap();
+    }
+
     #[test]
     fn every_settings_program_a_finding_names_can_be_opened() {
         // Read from the checkups themselves: `.settings("x.exe")` here, and `kind: "launch", value: "x.msc"` elsewhere.
@@ -1816,12 +1835,27 @@ mod tests {
                 }
             }
         }
-        assert!(PROGRAMS.contains(&PERFORMANCE));
         for name in ["services.msc", "cttune.exe", "devmgmt.msc", "eventvwr.exe", "dfrgui.exe"] {
             assert!(seen.iter().any(|s| s == name), "the test no longer finds {name}: has the way findings name programs changed?");
         }
-        // Only bare names of programs: never a path, never anything with arguments.
-        assert!(PROGRAMS.iter().all(|p| p.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') && (p.ends_with(".exe") || p.ends_with(".msc"))));
+        // Some are named through a constant: each of those is on the list, and there are no others.
+        assert!(PROGRAMS.contains(&PERFORMANCE) && PROGRAMS.contains(&ENV_EDITOR));
+        let here = std::fs::read_to_string(src.join("winsettings.rs")).unwrap();
+        let by_constant = regex::Regex::new(r#"\.settings\(([^")]+)\)"#).unwrap();
+        for m in by_constant.captures_iter(here.split("#[cfg(test)]").next().unwrap()) {
+            assert!(["PERFORMANCE", "ENV_EDITOR"].contains(&&m[1]), "a finding names its settings program as `{}`: is it on the list?", &m[1]);
+        }
+        // Each is a bare program name (never a path), and what's handed to it is plain.
+        for name in PROGRAMS {
+            let (exe, hand) = program(name).unwrap();
+            assert!(exe.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') && (exe.ends_with(".exe") || exe.ends_with(".msc")), "{name}");
+            assert!(hand.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == ','), "{name}");
+        }
+        assert_eq!(program(ENV_EDITOR), Some(("rundll32.exe", "sysdm.cpl,EditEnvironmentVariables")));
+        assert_eq!(program("services.msc"), Some(("services.msc", "")));
+        for not_one in ["cmd.exe", "rundll32.exe", "rundll32.exe evil.dll,Run", r"..\services.msc", "services.msc /s", ""] {
+            assert_eq!(program(not_one), None, "{not_one}");
+        }
     }
     use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};

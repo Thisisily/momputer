@@ -1001,11 +1001,11 @@ fn open_program(name: String) -> Res<()> {
     if let Some(app) = mom_core::speed::gpu_app_path(&name) {
         return mom_core::elevate::open(&app, "");
     }
-    if !mom_core::winsettings::PROGRAMS.contains(&name.as_str()) {
+    let Some((program, hand)) = mom_core::winsettings::program(&name) else {
         return Err("mom only opens Windows' own settings programs".into());
-    }
+    };
     let windows = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
-    mom_core::elevate::open(&windows.join("System32").join(&name), "")
+    mom_core::elevate::open(&windows.join("System32").join(program), hand)
 }
 
 #[tauri::command]
