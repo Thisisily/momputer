@@ -124,7 +124,16 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Health {
         checks.push(Check {
             id: "unused-apps".into(),
             level: "tip",
-            title: format!("{} you haven't opened in a year", crate::util::plural(unused_apps.len() as u64, "app")),
+            title: {
+                let games = unused_apps.iter().filter(|a| a.from.is_some()).count() as u64;
+                let apps = unused_apps.len() as u64 - games;
+                let what = match (apps, games) {
+                    (a, 0) => crate::util::plural(a, "app"),
+                    (0, g) => crate::util::plural(g, "game"),
+                    (a, g) => format!("{} and {}", crate::util::plural(a, "app"), crate::util::plural(g, "game")),
+                };
+                format!("{what} you haven't opened in a year")
+            },
             detail: format!(
                 "{}{}. Uninstalling the ones you don't need {}; they're listed below.",
                 names.join(", "),

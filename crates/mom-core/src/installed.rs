@@ -184,12 +184,138 @@ pub struct App {
     pub name: String,
     pub publisher: String,
     pub version: String,
-    /// Bytes, as the program says (0 when it doesn't).
+    /// Bytes: as the program (or Steam) says, or measured from its folder when it doesn't say.
+    /// 0 only when there's no telling.
     pub size: u64,
-    /// When you last opened it, as far as Windows and its data folders tell (unix seconds).
+    /// When you last opened it, as far as Windows and its data folders tell (unix seconds). For a
+    /// Steam game: when Steam says you last played it.
     pub last_used: Option<u64>,
+    /// Where it's installed, when that's known: its own folder, never one it shares.
+    pub dir: Option<String>,
+    /// The launcher it belongs to, when it has one ("Steam"): that's who removes it.
+    pub from: Option<String>,
     #[serde(skip)]
     install_dir: Option<PathBuf>,
+    /// A Steam game's number.
+    #[serde(skip)]
+    steam: Option<String>,
+}
+
+/// Where a program is installed: where it says, or the folder of its own program file (its icon,
+/// when the icon is the program itself) or of its own uninstaller. Never a folder many programs
+/// share: Steam's icon cache, Windows' installer cache, a launcher's or Windows' own uninstaller.
+/// A shared folder says nothing about one program, and its name can match something unrelated.
+fn own_folder(location: &str, icon: &str, uninstall: &str) -> Option<PathBuf> {
+    let said = Some(location.trim().trim_matches('"')).filter(|d| !d.is_empty()).map(PathBuf::from);
+    let icon_file = Path::new(icon.split(',').next().unwrap_or("").trim().trim_matches('"'));
+    let by_icon = icon_file.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")).then(|| icon_file.parent().map(Path::to_path_buf)).flatten();
+    let by_uninstaller = crate::elevate::split_command(uninstall).and_then(|(exe, _)| {
+        let exe = PathBuf::from(exe);
+        let name = exe.file_name()?.to_string_lossy().to_ascii_lowercase();
+        let shared = ["msiexec.exe", "msiexec", "steam.exe", "rundll32.exe", "cmd.exe", "powershell.exe"].contains(&name.as_str());
+        (!shared).then(|| exe.parent().map(Path::to_path_buf)).flatten()
+    });
+    let shared = |d: &PathBuf| {
+        let l = d.to_string_lossy().to_ascii_lowercase();
+        let l = l.trim_end_matches('\\');
+        l.contains(r"\windows\installer") || l.contains(r"\package cache") || l.ends_with(r"\steam\steam\games") || l.ends_with(r"\windows") || l.ends_with(r"\system32")
+    };
+    [said, by_icon, by_uninstaller].into_iter().flatten().find(|d| d.components().count() > 2 && !shared(d))
+}
+
+/// The number Steam knows a game by, from its uninstall entry ("Steam App 2996080", or an
+/// uninstaller that is `steam.exe steam://uninstall/2996080`).
+fn steam_id(key: &str, uninstall: &str) -> Option<String> {
+    let digits = |s: &str| s.chars().take_while(char::is_ascii_digit).collect::<String>();
+    let id = match uninstall.split_once("steam://uninstall/") {
+        Some((_, rest)) => digits(rest),
+        None => digits(key.strip_prefix("Steam App ")?),
+    };
+    (!id.is_empty() && id.len() <= 10).then_some(id)
+}
+
+/// What Steam itself records about an installed game.
+#[derive(Clone, Debug, PartialEq)]
+struct SteamGame {
+    dir: PathBuf,
+    size: u64,
+    /// When it was last played; never played, when it was installed or last updated.
+    last: u64,
+}
+
+/// One of Steam's own records of an installed game (steamapps\appmanifest_<id>.acf), read as
+/// the plain "key" "value" lines it is.
+fn steam_game(library: &Path, manifest: &str) -> Option<SteamGame> {
+    let value = |key: &str| {
+        manifest.lines().find_map(|l| {
+            let mut parts = l.trim().split('"');
+            (parts.nth(1)? == key).then(|| parts.nth(1).map(str::to_string)).flatten()
+        })
+    };
+    let folder = value("installdir").filter(|d| !d.is_empty() && !d.contains(['\\', '/', ':']) && d != "." && d != "..")?;
+    let number = |key: &str| value(key).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    let played = number("LastPlayed");
+    Some(SteamGame {
+        dir: library.join("steamapps").join("common").join(folder),
+        size: number("SizeOnDisk"),
+        last: if played > 0 { played } else { number("LastUpdated") },
+    })
+}
+
+/// Every game Steam has installed, by its number: read from Steam's library list and the record
+/// it keeps for each game. Only libraries on drives built into this PC are looked in, and
+/// nothing that is a link is opened: Steam's folders can be written by other accounts.
+fn steam_games() -> std::collections::HashMap<String, SteamGame> {
+    let mut out = std::collections::HashMap::new();
+    #[cfg(windows)]
+    {
+        use crate::health::reg::{string_values, Hive};
+        let Some(steam) = string_values(Hive::CurrentUser, r"Software\Valve\Steam")
+            .into_iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("SteamPath"))
+            .map(|(_, v)| PathBuf::from(v.trim().replace('/', "\\")))
+        else {
+            return out;
+        };
+        let real = |p: &Path, dir: bool| std::fs::symlink_metadata(p).is_ok_and(|m| !m.is_symlink() && m.is_dir() == dir);
+        let drives: Vec<String> = crate::util::fixed_drives().iter().map(|d| d.to_ascii_lowercase()).collect();
+        let on_this_pc = |p: &Path| {
+            let s = p.to_string_lossy().to_ascii_lowercase();
+            drives.iter().any(|d| s.starts_with(d.as_str()))
+        };
+        let mut libraries = vec![steam.clone()];
+        let list = steam.join("steamapps").join("libraryfolders.vdf");
+        if real(&list, false) && std::fs::metadata(&list).is_ok_and(|m| m.len() <= 4 << 20) {
+            for line in std::fs::read_to_string(&list).unwrap_or_default().lines() {
+                let mut parts = line.trim().split('"');
+                if parts.nth(1) == Some("path") {
+                    if let Some(p) = parts.nth(1) {
+                        libraries.push(PathBuf::from(p.replace(r"\\", "\\")));
+                    }
+                }
+            }
+        }
+        for lib in libraries.iter().filter(|l| on_this_pc(l)) {
+            let apps = lib.join("steamapps");
+            if !real(lib, true) || !real(&apps, true) {
+                continue;
+            }
+            for e in std::fs::read_dir(&apps).into_iter().flatten().flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                let Some(id) = name.strip_prefix("appmanifest_").and_then(|n| n.strip_suffix(".acf")) else { continue };
+                if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) || !real(&e.path(), false) {
+                    continue;
+                }
+                if e.metadata().is_ok_and(|m| m.len() > 1 << 20) {
+                    continue; // these are a few hundred bytes
+                }
+                if let Some(g) = std::fs::read_to_string(e.path()).ok().and_then(|t| steam_game(lib, &t)) {
+                    out.entry(id.to_string()).or_insert(g);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Where Windows keeps the uninstall list: (hive name, path).
@@ -245,28 +371,26 @@ pub fn programs() -> Vec<App> {
                 if name.is_empty() || get("UninstallString").is_empty() || !get("ParentKeyName").is_empty() || !get("ReleaseType").is_empty() {
                     continue;
                 }
-                if dword_value(hive, &path, "SystemComponent") == Some(1) || get("UninstallString").starts_with("steam://") {
+                if dword_value(hive, &path, "SystemComponent") == Some(1) {
                     continue;
                 }
                 if out.iter().any(|a| a.name == name) {
                     continue;
                 }
-                // Where it's installed: as it says, or where its icon or uninstaller is.
-                let icon = get("DisplayIcon");
-                let icon_dir = Path::new(icon.split(',').next().unwrap_or("").trim_matches('"')).parent().map(|d| d.to_string_lossy().to_string());
-                let dir = Some(get("InstallLocation").trim_matches('"').to_string())
-                    .filter(|d| !d.is_empty())
-                    .or(icon_dir.filter(|d| !d.is_empty()))
-                    .or_else(|| crate::elevate::split_command(&get("UninstallString")).and_then(|(exe, _)| Path::new(&exe).parent().map(|d| d.to_string_lossy().to_string())))
-                    .map(PathBuf::from)
-                    .filter(|d| d.components().count() > 2);
+                // A Steam game's entry says nothing about where it is: Steam's own record does
+                // (see `unused`). Anything else: where it says, or where its own files are.
+                let steam = steam_id(&sub, &get("UninstallString"));
+                let dir = if steam.is_some() { None } else { own_folder(&get("InstallLocation"), &get("DisplayIcon"), &get("UninstallString")) };
                 out.push(App {
                     key: format!(r"{hive_name}\{path}"),
                     publisher: get("Publisher"),
                     version: get("DisplayVersion"),
                     size: dword_value(hive, &path, "EstimatedSize").map(|kb| kb as u64 * 1024).unwrap_or(0),
                     last_used: None,
+                    dir: None,
+                    from: steam.as_ref().map(|_| "Steam".to_string()),
                     install_dir: dir,
+                    steam,
                     name,
                 });
             }
@@ -344,9 +468,18 @@ fn last_used(apps: &mut [App], paths: &Paths, table: &ProcTable, now: u64) {
         .map(|d| (squash(unversioned(&name_of(&d))), d))
         .filter(|(n, _)| n.len() >= 4)
         .collect();
+    // Folder names that say nothing about which program is in them.
+    const ANYBODYS: &[&str] = &[
+        "games", "game", "apps", "application", "applications", "program", "programs", "client", "launcher", "tools", "software",
+        "common", "data", "files", "install", "setup", "update", "updater", "current", "release", "win64", "win32", "x64",
+        "x86", "binaries", "shipping",
+    ];
     for app in apps.iter_mut() {
+        if app.steam.is_some() {
+            continue; // Steam's own record says when it was last played (set where the list is made)
+        }
         let me = squash(unversioned(&app.name));
-        let dir_name = app.install_dir.as_deref().map(|d| squash(&name_of(d))).unwrap_or_default();
+        let dir_name = app.install_dir.as_deref().map(|d| squash(&name_of(d))).filter(|n| n.len() >= 5 && !ANYBODYS.contains(&n.as_str())).unwrap_or_default();
         let dir_lower = app.install_dir.as_deref().map(|d| d.to_string_lossy().to_ascii_lowercase());
         let mut best: Option<u64> = None;
         let mut saw = |t: u64| best = Some(best.map_or(t, |b: u64| b.max(t)));
@@ -378,6 +511,12 @@ fn last_used(apps: &mut [App], paths: &Paths, table: &ProcTable, now: u64) {
 /// Programs nobody has opened in a year, biggest first. Runtimes, drivers, system parts, command
 /// line tools (on PATH) and anything with no sign either way are left out.
 static CACHE: std::sync::Mutex<Option<(u64, Vec<App>)>> = std::sync::Mutex::new(None);
+
+/// A WinGet "portable" package: a command line tool, reached through a link folder that's on
+/// PATH while its own folder isn't. (`dir` in lower case.)
+fn winget_tool(dir: &str) -> bool {
+    dir.contains(r"\microsoft\winget\packages\")
+}
 
 /// Forget the list, so the next look sees what was uninstalled.
 pub fn forget_unused() {
@@ -412,13 +551,38 @@ pub fn unused(paths: &Paths, table: &ProcTable, now: u64) -> Vec<App> {
                     n.len() >= 4 && (n == me || me.starts_with(&n))
                 })
             };
-            !on_path.iter().any(|p| (!d.is_empty() && p.starts_with(&d)) || named(p))
+            !winget_tool(&d) && !on_path.iter().any(|p| (!d.is_empty() && p.starts_with(&d)) || named(p))
         })
         .collect();
+    // Steam games: where, how big and when last played are Steam's to say. One Steam no longer
+    // has installed is a stale entry, and is left out.
+    if apps.iter().any(|a| a.steam.is_some()) {
+        let games = steam_games();
+        apps.retain_mut(|a| {
+            let Some(id) = &a.steam else { return true };
+            let Some(g) = games.get(id) else { return false };
+            let running = table.procs.values().any(|p| p.exe.as_deref().is_some_and(|e| Path::new(e).starts_with(&g.dir)));
+            a.install_dir = Some(g.dir.clone());
+            a.size = g.size;
+            a.last_used = Some(if running { now } else { g.last }).filter(|t| *t > 0);
+            true
+        });
+    }
     last_used(&mut apps, paths, table, now);
     let mut out: Vec<App> = apps.into_iter().filter(|a| a.last_used.is_some_and(|t| now.saturating_sub(t) >= 365 * 86_400)).collect();
+    for a in &mut out {
+        a.dir = a.install_dir.as_deref().filter(|d| d.is_dir()).map(|d| d.to_string_lossy().to_string());
+    }
+    // One that doesn't say how big it is gets measured, if it has a folder of its own.
+    let unsized_: Vec<PathBuf> = out.iter().filter(|a| a.size == 0).filter_map(|a| a.dir.as_ref().map(PathBuf::from)).collect();
+    let measured = crate::trash::folder_bytes(&unsized_);
+    for a in out.iter_mut().filter(|a| a.size == 0) {
+        if let Some(i) = a.dir.as_ref().and_then(|d| unsized_.iter().position(|u| u == Path::new(d))) {
+            a.size = measured[i];
+        }
+    }
     out.sort_by(|a, b| b.size.cmp(&a.size).then(a.last_used.cmp(&b.last_used)));
-    out.truncate(30);
+    out.truncate(400); // a Steam library can hold hundreds of games nobody has played in a year
     if let Ok(mut c) = CACHE.lock() {
         *c = Some((now, out.clone()));
     }
@@ -479,6 +643,13 @@ mod tests {
     }
 
     #[test]
+    fn a_winget_command_line_tool_is_never_unused() {
+        assert!(winget_tool(r"c:\users\sam\appdata\local\microsoft\winget\packages\ninja-build.ninja_microsoft.winget.source_8wekyb3d8bbwe"));
+        assert!(!winget_tool(r"c:\program files\nimbus notes"));
+        assert!(!winget_tool(""));
+    }
+
+    #[test]
     fn runtimes_and_drivers_are_never_unused() {
         assert!(is_plumbing("Microsoft Visual C++ 2015-2022 Redistributable (x64)", "Microsoft Corporation"));
         assert!(is_plumbing("NVIDIA Graphics Driver 566.03", "NVIDIA Corporation"));
@@ -486,6 +657,42 @@ mod tests {
         assert!(!is_plumbing("Atlas Recorder", "Atlas"));
         assert!(!is_plumbing("Nimbus Notes", "Nimbus Labs"));
         assert!(hands_off("Gnosis Safe 2.0") && hands_off("Pocket Wallet") && hands_off("Signal 5.33.0") && !hands_off("Atlas Recorder"));
+    }
+
+    #[test]
+    fn a_programs_folder_is_its_own_never_one_it_shares() {
+        let f = |loc: &str, icon: &str, un: &str| own_folder(loc, icon, un).map(|p| p.to_string_lossy().to_string());
+        // Where it says; else where its own program file is; else where its own uninstaller is.
+        assert_eq!(f(r#""D:\Apps\Atlas Recorder""#, "", "").as_deref(), Some(r"D:\Apps\Atlas Recorder"));
+        assert_eq!(f("", r"C:\Program Files (x86)\Nimbus\Nimbus.exe,0", "").as_deref(), Some(r"C:\Program Files (x86)\Nimbus"));
+        assert_eq!(f("", "", r"C:\Program Files (x86)\Nimbus\Uninstall.exe").as_deref(), Some(r"C:\Program Files (x86)\Nimbus"));
+        // An icon that is only a picture sits in a cache every program shares, as does a launcher's or Windows' uninstaller.
+        assert_eq!(f("", r"C:\Program Files (x86)\Steam\steam\games\71f34eaa.ico", r#""C:\Program Files (x86)\Steam\steam.exe" steam://uninstall/2996080"#), None);
+        assert_eq!(f("", r"C:\Windows\Installer\{1F2E}\icon.ico", "MsiExec.exe /I{1F2E}"), None);
+        assert_eq!(f("", r"C:\Program Files (x86)\Steam\steam\games\app.exe", ""), None, "even an .exe, in a folder they all share");
+        assert_eq!(f(r"C:\", "", ""), None, "a whole drive is nobody's own folder");
+    }
+
+    #[test]
+    fn steam_games_are_read_from_steams_own_record() {
+        assert_eq!(steam_id("Steam App 2996080", r#""C:\Program Files (x86)\Steam\steam.exe" steam://uninstall/2996080"#).as_deref(), Some("2996080"));
+        assert_eq!(steam_id("Steam App 440", "").as_deref(), Some("440"));
+        assert_eq!(steam_id("Retro Racer", r"C:\Games\Retro Racer\unins000.exe"), None);
+        assert_eq!(steam_id("Steam App x", "steam://uninstall/"), None);
+        let record = "\"AppState\"\n{\n\t\"appid\"\t\t\"2996080\"\n\t\"name\"\t\t\"Retro Racer\"\n\t\"installdir\"\t\t\"Retro Racer\"\n\t\"LastUpdated\"\t\t\"1791823126\"\n\t\"LastPlayed\"\t\t\"1790809334\"\n\t\"SizeOnDisk\"\t\t\"534902844\"\n}\n";
+        let lib = Path::new(r"E:\SteamLibrary");
+        assert_eq!(
+            steam_game(lib, record),
+            Some(SteamGame { dir: lib.join("steamapps").join("common").join("Retro Racer"), size: 534_902_844, last: 1_790_809_334 })
+        );
+        // Never played: when it was installed or last updated, so a game from last week isn't "unused".
+        let never = record.replace("1790809334", "0");
+        assert_eq!(steam_game(lib, &never).unwrap().last, 1_791_823_126);
+        // A record that names a path instead of a folder is not followed anywhere.
+        for odd in [r"..\\..\\Windows", "C:/Windows", ".."] {
+            assert_eq!(steam_game(lib, &record.replace("\"installdir\"\t\t\"Retro Racer\"", &format!("\"installdir\"\t\t\"{odd}\""))), None, "{odd}");
+        }
+        assert_eq!(steam_game(lib, "not a record"), None);
     }
 
     #[test]

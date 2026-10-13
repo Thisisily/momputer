@@ -220,6 +220,12 @@ impl Live {
     }
 }
 
+/// How many bytes are in each of these folders (links inside are never followed; a folder too
+/// big to count quickly comes back as what was counted).
+pub fn folder_bytes(folders: &[PathBuf]) -> Vec<u64> {
+    tally_many(folders, ENTRY_CAP, u64::MAX).iter().map(|t| t.bytes).collect()
+}
+
 /// What mom knows about the machine right now, so she doesn't throw out anything in use.
 pub struct TrashCtx<'a> {
     pub paths: &'a Paths,
@@ -238,6 +244,9 @@ pub struct TrashCtx<'a> {
     pub now: u64,
     /// Running as administrator: then only the spots that need one are cleaned (see `clean`).
     pub elevated: bool,
+    /// What's installed, for the clean-ups that ask. None: they look it up themselves when they
+    /// need to. Tests say what's installed, so they don't depend on the PC they run on.
+    pub installed: Option<crate::installed::Installed>,
     /// Where a clean-up reports how it's going, and learns it should stop.
     pub live: Option<&'a Live>,
 }
@@ -274,6 +283,7 @@ impl<'a> TrashCtx<'a> {
             docker_running: crate::containers::docker_running(table),
             now: now_secs(),
             elevated: crate::elevate::is_elevated(),
+            installed: None,
             live: None,
         }
     }
@@ -1754,6 +1764,13 @@ impl Pick {
 const BATCH_ITEMS: usize = 48;
 const BATCH_FILES: u64 = 4_000;
 
+/// How many items go in one batch when `total` are going: few enough that the count the widget
+/// shows moves at least a dozen times ("0 of 53", and then all of them at once, tells nobody
+/// anything), many enough that thousands of small things still go fast.
+fn batch_items(total: usize) -> usize {
+    (total / 16).clamp(1, BATCH_ITEMS)
+}
+
 /// Cleans a spot: what qualifies right now, as ticked in `pick` (by default, everything that
 /// goes). In-use things never go. Tool spots ignore `pick`. Reports how it's going to
 /// `ctx.live`, and stops between items (or batches of small ones) when asked.
@@ -1834,10 +1851,20 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     };
     // What was too big for the Recycle Bin, and so stayed.
     let mut big = vec![false; chosen.len()];
+    let per_batch = batch_items(chosen.len());
     let gone: Vec<Option<bool>> = if def.action == "recycle" {
         each(false, &|c: &Cand| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok()))
     } else if recycle {
-        recycle_chosen(&chosen, live, &mut big)
+        recycle_chosen(&chosen, live, &mut big, &|i, ok| match ok {
+            Some(ok) => settle(i, ok, false), // it counts the files of each batch itself
+            None => {
+                // Too big for the Recycle Bin, so it stays: said as soon as it's known.
+                if let Some(l) = live {
+                    l.finished(chosen[i], false, 0);
+                }
+                told.borrow_mut().insert(i, 0);
+            }
+        })
     } else if elevated {
         // As administrator: only where nobody else could have swapped a folder for a link, and
         // one at a time, never following one.
@@ -1861,7 +1888,7 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         while start < chosen.len() {
             let mut end = start;
             let mut files = 0;
-            while end < chosen.len() && end - start < BATCH_ITEMS && (end == start || files + chosen[end].files <= BATCH_FILES) {
+            while end < chosen.len() && end - start < per_batch && (end == start || files + chosen[end].files <= BATCH_FILES) {
                 files += chosen[end].files;
                 end += 1;
             }
@@ -1887,8 +1914,10 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     let too_big = big.iter().filter(|b| **b).count() as u64;
     for (i, ((c, ok), big)) in chosen.iter().zip(gone).zip(big).enumerate() {
         if big {
-            if let Some(l) = live {
-                l.finished(c, false, 0);
+            if !told.borrow().contains_key(&i) {
+                if let Some(l) = live {
+                    l.finished(c, false, 0);
+                }
             }
             continue;
         }
@@ -1940,8 +1969,11 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
 /// Sends what's chosen to the Recycle Bin, in batches like deleting. Only what fits in the bin
 /// on its drive goes (Windows deletes anything bigger for good, without asking); the rest is
 /// marked in `big` and stays. Links are recycled as links, never followed.
-fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool]) -> Vec<Option<bool>> {
+/// Sends what was chosen to the Recycle Bin, a batch at a time. `done(i, Some(gone))` is called
+/// for each item as its batch finishes, and `done(i, None)` for one too big for the bin.
+fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool], done: &dyn Fn(usize, Option<bool>)) -> Vec<Option<bool>> {
     let stopped = || live.is_some_and(Live::stopped);
+    let per_batch = batch_items(chosen.len());
     let mut room = bin::Room::default();
     for (i, c) in chosen.iter().enumerate() {
         big[i] = !c.targets.iter().all(|t| room.fits(t, c.bytes));
@@ -1951,6 +1983,7 @@ fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool]) -> Ve
     while start < chosen.len() {
         if big[start] {
             out[start] = Some(false);
+            done(start, None);
             start += 1;
             continue;
         }
@@ -1959,7 +1992,7 @@ fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool]) -> Ve
         }
         let mut end = start;
         let mut files = 0;
-        while end < chosen.len() && !big[end] && end - start < BATCH_ITEMS && (end == start || files + chosen[end].files <= BATCH_FILES) {
+        while end < chosen.len() && !big[end] && end - start < per_batch && (end == start || files + chosen[end].files <= BATCH_FILES) {
             files += chosen[end].files;
             end += 1;
         }
@@ -1971,11 +2004,13 @@ fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool]) -> Ve
             // Whatever couldn't go (in use) shows up below as still there.
             let _ = ::trash::delete_all(&targets);
         }
-        for (i, c) in chosen.iter().enumerate().take(end).skip(start) {
-            out[i] = Some(c.targets.iter().all(|t| std::fs::symlink_metadata(t).is_err()));
-        }
         if let Some(l) = live {
             l.files_gone(files);
+        }
+        for (i, c) in chosen.iter().enumerate().take(end).skip(start) {
+            let gone = c.targets.iter().all(|t| std::fs::symlink_metadata(t).is_err());
+            out[i] = Some(gone);
+            done(i, Some(gone));
         }
         start = end;
     }
@@ -2266,6 +2301,7 @@ mod tests {
             docker_running: false,
             now: now_secs(),
             elevated: false, // tests may well run as administrator (CI does)
+            installed: Some(crate::installed::Installed::with(&[])), // nothing, unless a test says otherwise
             live: None,
         }
     }
@@ -2585,6 +2621,27 @@ mod tests {
         let now = live.now(0);
         assert_eq!((now.done, now.total, now.freed, now.gone.len()), (5, 5, 500, 5));
         assert_eq!(live.now(3).gone.len(), 2, "only what's new since the widget last asked");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_clean_that_goes_in_batches_counts_up_as_it_goes_too() {
+        // Fifty-three small things went as one batch of 48 and one of 5: "0 of 53", then all of it.
+        let root = fixture("live-batch");
+        let paths = Paths::under(&root);
+        for n in 0..53 {
+            write(&paths.temp.join(format!("old-{n:02}")).join("a.log"), 100, 30);
+        }
+        let cfg = TrashConfig::default();
+        let mut ctx = ctx(&paths, &cfg);
+        let live = Live::default();
+        ctx.live = Some(&live);
+        live.stop_after.store(1, Ordering::Relaxed); // someone presses Stop when the count first moves
+        let r = clean("old-temp", &ctx, None);
+        let now = live.now(0);
+        assert_eq!(batch_items(53), 3);
+        assert_eq!((r.deleted, now.done, now.total), (3, 3, 53), "the count moved after the first few, and the rest were left: {}", r.message);
+        assert_eq!((batch_items(1), batch_items(15), batch_items(400), batch_items(100_000)), (1, 1, 25, BATCH_ITEMS));
         std::fs::remove_dir_all(&root).unwrap();
     }
 

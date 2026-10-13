@@ -856,6 +856,12 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
         sa.dir.cmp(&sb.dir).then_with(|| version_in(&name_of(&b.path)).cmp(&version_in(&name_of(&a.path)))).then(a.age.cmp(&b.age))
     });
     let mut kept_per: std::collections::HashMap<PathBuf, usize> = std::collections::HashMap::new();
+    // What's installed, looked up only if something asks (most clean-ups never do).
+    let looked_up = std::cell::OnceCell::new();
+    let installed = || match &ctx.installed {
+        Some(i) => i,
+        None => looked_up.get_or_init(|| crate::installed::Installed::scan(ctx.paths)),
+    };
     for (mut c, a, s) in found {
         if s.empty_only && (c.files > 0 || c.links > 0 || c.bytes > 0) {
             continue; // not empty after all: it isn't a leftover
@@ -884,7 +890,13 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             continue;
         }
         if newest {
-            f.cands.push(c.verdict(false, NEWEST));
+            let gone = c.age >= NEWEST_UNUSED && !MANY_APPS.contains(&a.name) && !installed().has(a.name);
+            f.cands.push(if gone {
+                let r = format!("{} isn't installed any more, and this was last touched {} ago", a.name, ago(c.age));
+                c.kept_but_tickable(r)
+            } else {
+                c.verdict(false, NEWEST)
+            });
             continue;
         }
         f.cands.push(judge(c, ctx, min_age, s.sessions));
@@ -922,6 +934,15 @@ fn version_in(name: &str) -> Option<Vec<u64>> {
 
 /// What keeps the newest of each sort.
 const NEWEST: &str = "The version the app uses now. Mom never offers it";
+
+/// The newest of each sort is locked because the app is using it. An app that isn't installed
+/// any more uses nothing: once its newest has gone untouched this long as well, it can be ticked.
+/// (Age alone says nothing: an app in use can leave its newest untouched for a year.)
+const NEWEST_UNUSED: u64 = 180 * 86_400;
+
+/// Entries that stand for many apps at once: there's no one app to ask after, so their newest
+/// always stays locked. (A Squirrel app's newest folder is the app itself.)
+const MANY_APPS: &[&str] = &["Squirrel apps", "Developer tools", "App updaters"];
 
 /// Agent folders hold links to shared skills; one with a link inside is never a leftover.
 const LINKED: &str = "Holds a link to another folder (a shared skill, say)";
@@ -1151,6 +1172,17 @@ mod tests {
         going.sort();
         assert_eq!(going, vec!["VS Code · .8f2b1c", "VS Code · aaa"]);
         assert_eq!(apps.items.iter().find(|i| i.name == "VS Code · bbb").unwrap().reason, super::NEWEST);
+        // The newest build of an editor that was uninstalled over a year ago: kept, but it can be
+        // ticked now. Of one that is still installed, never, however long it has sat untouched.
+        write(&paths.appdata.join("Kiro").join("CachedData").join("only").join("x.bin"), 900, 400);
+        let kiro = |ctx: &crate::trash::TrashCtx| measure("app-leftovers", ctx).unwrap().items.into_iter().find(|i| i.name == "Kiro · only").unwrap();
+        let gone = kiro(&ctx);
+        assert!(!gone.goes && gone.optional && gone.reason.starts_with("Kiro isn't installed any more"), "{gone:?}");
+        ctx.installed = Some(crate::installed::Installed::with(&["Kiro"]));
+        let here = kiro(&ctx);
+        assert_eq!((here.goes, here.optional, here.reason.as_str()), (false, false, super::NEWEST));
+        ctx.installed = Some(crate::installed::Installed::with(&[]));
+        let _ = std::fs::remove_dir_all(paths.appdata.join("Kiro"));
 
         // Nothing here is in Old temp files twice.
         let old = measure("old-temp", &ctx).unwrap();
@@ -1347,7 +1379,8 @@ mod tests {
         write(&phsp.join("26").join("a"), 100, 100);
         write(&phsp.join("27").join("a"), 100, 380);
         let cfg = TrashConfig::default();
-        let ctx = ctx(&paths, &cfg);
+        let mut ctx = ctx(&paths, &cfg);
+        ctx.installed = Some(crate::installed::Installed::with(&["Adobe Photoshop 2026"]));
         let spot = measure("app-leftovers", &ctx).unwrap();
         let state = |n: &str| spot.items.iter().find(|i| i.name.contains(n)).map(|i| (i.goes, i.reason.clone())).unwrap();
         assert_eq!(state("PHSP 27"), (false, super::NEWEST.to_string()));

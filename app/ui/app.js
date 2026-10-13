@@ -81,7 +81,7 @@
     deleteConfirm: null, // the moved folder whose Delete was pressed once
     uninstallConfirm: null, // the app whose Uninstall was pressed once
     uninstalled: new Set(), // apps whose uninstaller was opened
-    showAllUnused: false,
+    showAllUnused: new Set(), // which of the unused lists (apps, games) are shown in full
     showAllStartup: false,
     upkeepTab: "storage", // storage | apps | windows | files
     rulesTab: "rules", // House rules' two views: rules | skills
@@ -1246,28 +1246,42 @@ in ${x.cwd}`)}">
     if (!h) return `<p class="empty">Checking…</p>`;
     const unusedApps = h.unusedApps || [];
     const now = Date.now() / 1000;
-    const appList = (state.showAllUnused ? unusedApps : unusedApps.slice(0, 8))
-      .map((a) => {
-        const sure = state.uninstallConfirm === a.key;
-        const opened = state.uninstalled.has(a.key);
-        return `<div class="item stays moved" id="un-${hash(a.key)}"><span class="led"></span>
-          <span class="item-main"><span class="item-name" title="${esc(a.name)}">${esc(a.name)}</span>
-          <span class="item-sub">${esc([a.size ? bytes(a.size) : "", `not opened in ${yearsAgo(now - a.lastUsed)}`, a.publisher].filter(Boolean).join(" · "))}</span></span>
-          <span class="moved-acts"><button class="mini-btn wide${sure ? " sure" : ""}" data-act="uninstall-app" data-key="${esc(a.key)}" ${opened ? "disabled" : ""}>${opened ? "Opened" : sure ? "Sure? Uninstall" : "Uninstall"}</button></span></div>`;
-      })
-      .join("");
-    const moreApps = unusedApps.length > 8 ? `<button class="quiet-toggle" data-act="toggle-unused">${state.showAllUnused ? "Show fewer" : `Show all ${unusedApps.length}`}</button>` : "";
+    // One you haven't opened in a year: how big, since when, where it is, and a way to remove it.
+    const appRow = (a) => {
+      const sure = state.uninstallConfirm === a.key;
+      const opened = state.uninstalled.has(a.key);
+      const since = `${a.from ? "played" : "opened"} ${yearsAgo(now - a.lastUsed)} ago`;
+      // Where it is, in full; whoever made it when there's no folder to show.
+      const where = a.dir || (a.from ? "" : a.publisher);
+      const folder = a.dir ? `<button class="mini-btn" data-act="reveal-path" data-path="${esc(a.dir)}" title="${esc(`Show in File Explorer: ${a.dir}`)}" aria-label="Show ${esc(a.name)} in File Explorer">${ICON.folder}</button>` : "";
+      return `<div class="item stays moved" id="un-${hash(a.key)}"><span class="led"></span>
+          <span class="item-main"><span class="item-name" title="${esc(a.dir ? `${a.name} · ${a.dir}` : a.name)}">${esc(a.name)}</span>
+          <span class="item-sub">${esc(`${a.size ? bytes(a.size) : "size unknown"} · ${since}`)}</span>${where ? `<span class="item-sub">${esc(where)}</span>` : ""}</span>
+          <span class="moved-acts">${folder}<button class="mini-btn wide${sure ? " sure" : ""}" data-act="uninstall-app" data-key="${esc(a.key)}" ${opened ? "disabled" : ""}>${opened ? "Opened" : sure ? "Sure? Uninstall" : "Uninstall"}</button></span></div>`;
+    };
+    // Apps and games each get their own list: a Steam library can hold hundreds of games, and
+    // the apps would be lost among them.
+    const unusedList = (key, title, list, note, none) => {
+      const all = state.showAllUnused.has(key);
+      const total = list.reduce((sum, a) => sum + a.size, 0);
+      const more = list.length > 8 ? `<button class="quiet-toggle" data-act="toggle-unused" data-which="${key}">${all ? "Show fewer" : `Show all ${list.length}`}</button>` : "";
+      return list.length
+        ? section(key, title, total ? bytes(total) : "", (all ? list : list.slice(0, 8)).map(appRow).join("") + more + `<p class="group-note">${note}</p>`)
+        : none
+          ? section(key, title, "", `<p class="empty">${none}</p>`)
+          : "";
+    };
+    const apps = unusedApps.filter((a) => !a.from);
+    const games = unusedApps.filter((a) => a.from);
     return (
-      (unusedApps.length
-        ? section(
-            "unused",
-            "Apps you haven't opened in a year",
-            "",
-            appList +
-              moreApps +
-              `<p class="group-note">Uninstall opens the app's own uninstaller, which may ask what to keep. Apps you use from a terminal or a right-click menu, runtimes, drivers, wallets and messengers are never listed.</p>`
-          )
-        : section("unused", "Apps you haven't opened in a year", "", `<p class="empty">None. Everything installed gets used.</p>`)) +
+      unusedList(
+        "unused",
+        "Apps you haven't opened in a year",
+        apps,
+        "Uninstall opens the app's own uninstaller. Drivers, runtimes, wallets, messengers and command-line tools are never listed.",
+        "None. Everything installed gets used."
+      ) +
+      unusedList("unused-games", "Games you haven't played in a year", games, "Going by Steam's own record. Uninstall hands the game to Steam, which asks first.", "") +
       section(
         "what-runs",
         "What runs",
@@ -3224,10 +3238,12 @@ in ${x.cwd}`)}">
         state.showHelpers = !state.showHelpers;
         render();
         break;
-      case "toggle-unused":
-        state.showAllUnused = !state.showAllUnused;
+      case "toggle-unused": {
+        const which = el.dataset.which || "unused";
+        if (!state.showAllUnused.delete(which)) state.showAllUnused.add(which);
         render();
         break;
+      }
       case "uninstall-app": {
         const key = el.dataset.key;
         clearTimeout(cleanTimer);

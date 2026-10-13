@@ -403,9 +403,11 @@
       { name: "Notion", command: "Notion.lnk", location: "Startup folder", enabled: true },
     ],
     unusedApps: [
-      { key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\nimbus-notes", name: "Nimbus Notes 10.3", publisher: "Nimbus Labs", version: "10.3", size: 915 * MB, lastUsed: now - 1703 * D2 },
-      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{AtlasRecorder}", name: "Atlas Recorder", publisher: "Atlas", version: "2.1", size: 400 * MB, lastUsed: now - 1067 * D2 },
-      { key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\retro-racer", name: "Retro Racer", publisher: "Pixel Forge", version: "1.0", size: 0, lastUsed: now - 2081 * D2 },
+      { key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\nimbus-notes", name: "Nimbus Notes 10.3", publisher: "Nimbus Labs", version: "10.3", size: 915 * MB, lastUsed: now - 1703 * D2, dir: "C:\\Program Files\\Nimbus Notes", from: null },
+      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{AtlasRecorder}", name: "Atlas Recorder", publisher: "Atlas", version: "2.1", size: 400 * MB, lastUsed: now - 1067 * D2, dir: "C:\\Program Files (x86)\\Atlas Recorder", from: null },
+      { key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\copperline-player", name: "Copperline Player", publisher: "Copperline", version: "3.3", size: 0, lastUsed: now - 2081 * D2, dir: null, from: null },
+      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 900001", name: "Lanternfall Tactics", publisher: "Pixel Forge", version: "", size: 9.2 * GB, lastUsed: now - 1290 * D2, dir: "E:\\SteamLibrary\\steamapps\\common\\Lanternfall Tactics", from: "Steam" },
+      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 900002", name: "Retro Racer", publisher: "Pixel Forge", version: "", size: 4.7 * GB, lastUsed: now - 840 * D2, dir: "D:\\SteamLibrary\\steamapps\\common\\Retro Racer", from: "Steam" },
     ],
     topMemory: [
       { name: "chrome.exe", mem: 5.1 * GB, count: 38 },
