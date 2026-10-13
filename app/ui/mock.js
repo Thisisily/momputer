@@ -826,6 +826,7 @@
     open_url: () => null,
     reveal: () => null,
     hide_window: () => null,
+    set_big: () => null,
     set_paused: () => null,
     stop_container: () => null,
     stop_wsl: () => null,

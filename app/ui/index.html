@@ -12,9 +12,13 @@
       <div class="brand">
         <span class="led" id="live"></span>
         <span class="wordmark dot" id="wordmark">momputer</span>
+        <span class="big-badge dot" id="big-badge" hidden>BIG MODE</span>
         <span class="checked num" id="checked"></span>
       </div>
       <div class="win-buttons">
+        <button class="icon-btn" id="btn-big" title="BIG MODE: a full window, with your PC on mom's desk" aria-label="BIG MODE" aria-pressed="false">
+          <svg viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/></svg>
+        </button>
         <button class="icon-btn" id="btn-refresh" title="Look again" aria-label="Look again">
           <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
         </button>
@@ -32,6 +36,14 @@
         </button>
       </div>
     </header>
+
+    <section class="stage" id="stage" aria-label="Your PC on mom's desk">
+      <div class="stage-3d" id="stage-3d"></div>
+      <div class="stage-screen" id="stage-screen"></div>
+      <div class="stage-parts" id="stage-parts" role="group" aria-label="The parts of your PC"></div>
+      <div class="stage-info" id="stage-info" aria-live="polite"></div>
+      <div class="stage-tip" id="stage-tip" hidden></div>
+    </section>
 
     <section class="note" aria-live="polite">
       <div class="screen" id="face" tabindex="0" role="button" aria-label="Mom. Click to boop her, drag to move the widget."></div>

@@ -53,6 +53,8 @@
     startup: null, // what starts with Windows (get_startup)
     startupAt: 0,
     startupBusy: null,
+    big: false, // BIG MODE: the full window, with your PC on mom's desk
+    bigPart: null, // the part of the PC that's picked there
     stopped: [], // servers mom stopped and can start again (get_stopped)
     startBusy: null, // the one starting now
     icons: new Map(), // .exe path -> its icon (a data: URI), or null when it has none (get_icons)
@@ -1446,6 +1448,155 @@ in ${x.cwd}`)}">
     }
     state.systemLoading = false;
     if (state.tab === "upkeep" && state.upkeepTab === "windows") render();
+    renderStage();
+  }
+
+  // ------------------------------------------------------------ BIG MODE
+
+  let stage = null; // the desk in three dimensions (big.js), while BIG MODE is on
+  let stageShape = ""; // how many sticks, drives and cards it was built with
+
+  /** The parts on mom's desk: what each is called, its line in "This PC", which checks are its
+      own, and how mom speaks of it. */
+  const PARTS = [
+    ["processor", "Processor", "Processor", (c) => c.area === "Performance", "Your processor", false],
+    ["memory", "Memory", "Memory", (c) => c.id.startsWith("memory"), "Your memory", false],
+    ["graphics", "Graphics card", "Graphics", (c) => c.id.startsWith("gpu"), "Your graphics card", false],
+    ["disks", "Drives", "Disks", (c) => /^(ssd-health|disk-health|windows-on-hdd|trim-off|optimize-off)/.test(c.id), "Your drives", true],
+    ["sound", "Sound", "Sound", (c) => c.area === "Sound", "Your sound", false],
+    ["board", "Motherboard", "Board", (c) => c.id === "bios-old", "Your motherboard", false],
+    ["windows", "Windows", "Windows", (c) => c.area === "Security" || c.area === "Updates", "Windows", false],
+  ];
+
+  /** Your PC as the desk shows it: each part with its checks and its light, and how many
+      sticks, drives and cards to draw. */
+  function bigModel() {
+    const sys = state.system;
+    const rows = new Map(sys ? sys.pc : []);
+    const checks = sys ? sys.checks : [];
+    const worst = (list) => (list.some((c) => c.level === "warn") ? "warn" : list.some((c) => c.level === "tip") ? "tip" : "ok");
+    const parts = PARTS.map(([id, label, row, mine, subject, plural]) => {
+      const own = checks.filter(mine);
+      return { id, label, subject, plural, row: rows.get(row) || "", checks: own, level: sys ? worst(own) : "none" };
+    });
+    const memory = rows.get("Memory") || "";
+    const sticks = +((/(\d+) × /.exec(memory) || /(\d+) sticks/.exec(memory) || [0, 2])[1]);
+    const list = (text) => text.split(" · ").filter(Boolean);
+    const drives = list(rows.get("Disks") || "")
+      .filter((d) => !/USB/.test(d))
+      .map((d) => (/NVMe/.test(d) ? "nvme" : /hard disk/.test(d) ? "hdd" : "ssd"));
+    const cards = list(rows.get("Graphics") || "").length || 1;
+    return { parts, sticks, drives, cards, levels: Object.fromEntries(parts.map((p) => [p.id, p.level])) };
+  }
+
+  /** The names of the parts across the top, and what mom knows about the one that's picked. */
+  function renderStage() {
+    if (!state.big) return;
+    const m = bigModel();
+    const led = (level) => `<span class="led ${level === "warn" ? "red" : level === "ok" ? "green" : ""}"></span>`;
+    morph(
+      $("#stage-parts"),
+      m.parts.map((p) => `<button class="part-pill" data-act="big-part" data-id="${p.id}" aria-pressed="${state.bigPart === p.id}">${led(p.level)}${esc(p.label)}</button>`).join("")
+    );
+    const p = m.parts.find((x) => x.id === state.bigPart);
+    let html;
+    if (!state.system) {
+      html = `<h3><span class="led green blink"></span>Looking over your PC…</h3><p class="stage-row">Its parts light up as mom gets to them.</p>`;
+    } else if (p) {
+      const rows = p.checks
+        .map(
+          (c) => `<div class="check-row${c.fix ? " stack" : ""}" data-led="${c.level === "warn" ? "red" : c.level === "ok" ? "green" : "off"}">
+            <div class="check-text"><strong>${esc(c.title)}</strong><span>${esc(c.detail)}</span></div>
+            ${c.fix ? `<div class="fix-row">${fixButton(c.fix)}</div>` : ""}
+          </div>`
+        )
+        .join("");
+      html = `<h3>${led(p.level)}${esc(p.label)}</h3>${p.row ? `<p class="stage-row">${esc(p.row)}</p>` : ""}${rows || `<p class="stage-row">Nothing to say about it. That's good news.</p>`}`;
+    } else {
+      const bad = m.parts.filter((x) => x.level === "warn").map((x) => x.label);
+      const said = bad.length ? `${bad.join(", ")} ${bad.length === 1 ? "needs" : "need"} a look: the red ${bad.length === 1 ? "light" : "lights"}.` : "Every light is green.";
+      html = `<h3>Your PC</h3><p class="stage-row">${esc(said)} Drag to look around, tap a part, or poke mom.</p>`;
+    }
+    morph($("#stage-info"), html);
+    if (!stage) return;
+    // More sticks or drives than it was drawn with: draw it again.
+    const shape = JSON.stringify([m.sticks, m.drives, m.cards]);
+    if (shape !== stageShape) openStage();
+    else stage.update(m);
+  }
+
+  /** Picks a part of the PC (again to let go): the desk leans in, and mom says how it is. */
+  function pickPart(id) {
+    state.bigPart = id && id !== state.bigPart ? id : null;
+    $("#stage-tip").hidden = true;
+    if (stage) stage.select(state.bigPart);
+    const p = bigModel().parts.find((x) => x.id === state.bigPart);
+    if (p && state.system) {
+      const trouble = p.checks.find((c) => c.level === "warn");
+      react(p.level === "warn" ? "stern" : p.level === "tip" ? "hmm" : "proud", 3200);
+      say(trouble ? trouble.title + "." : p.level === "tip" ? `${p.subject} could do better.` : `${p.subject} ${p.plural ? "are" : "is"} fine, sweetie.`, 4200);
+    }
+    renderStage();
+  }
+
+  /** The part under the pointer, named beside it. */
+  function stageTip(id, x, y) {
+    const tip = $("#stage-tip");
+    const p = id && bigModel().parts.find((q) => q.id === id);
+    if (!p) {
+      tip.hidden = true;
+      return;
+    }
+    tip.innerHTML = `${esc(p.label)}${p.row ? `<small>${esc(p.row.length > 64 ? p.row.slice(0, 63) + "…" : p.row)}</small>` : ""}`;
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+    tip.hidden = false;
+  }
+
+  /** Draws the desk (again, if it was there), with mom's own face laid on its monitor. */
+  async function openStage() {
+    try {
+      const big = await import("./big.js");
+      if (!state.big) return;
+      if (stage) stage.close();
+      const m = bigModel();
+      stageShape = JSON.stringify([m.sticks, m.drives, m.cards]);
+      stage = big.open($("#stage-3d"), $("#stage-screen"), m, { pick: (id) => pickPart(id || state.bigPart), hover: stageTip });
+      if (stage && state.bigPart) stage.select(state.bigPart);
+      if (!T) window.__momBig = stage; // the browser preview's tests find the parts through it
+    } catch (e) {
+      console.warn("no 3D here", e);
+    }
+  }
+
+  /** BIG MODE on or off: the window grows (or shrinks back to the widget), and mom moves between
+      her card and the monitor on the desk. */
+  async function setBigMode(on) {
+    if (state.big === on) return;
+    state.big = on;
+    $(".app").classList.toggle("big-mode", on);
+    $("#btn-big").setAttribute("aria-pressed", String(on));
+    $("#big-badge").hidden = !on;
+    try {
+      await invoke("set_big", { on });
+    } catch (e) {
+      console.warn("the window stayed as it was", e);
+    }
+    const face = $("#face");
+    if (on) {
+      $("#stage-screen").appendChild(face);
+      if (!state.system) loadSystem();
+      await openStage();
+      say("BIG MODE. Look at you, with a whole desk.", 3600);
+    } else {
+      if (stage) stage.close();
+      stage = null;
+      state.bigPart = null;
+      $(".note").prepend(face);
+      $("#stage-tip").hidden = true;
+    }
+    moveThumb(false);
+    renderStage();
   }
 
   function renderWindows() {
@@ -3224,6 +3375,9 @@ in ${x.cwd}`)}">
       case "forget-stopped":
         Promise.all(state.stopped.map((x) => invoke("forget_stopped", { id: x.id }).catch(() => null))).then(loadStopped);
         break;
+      case "big-part":
+        pickPart(el.dataset.id);
+        break;
       case "open-program":
         act(invoke("open_program", { name: el.dataset.url }), () => null);
         break;
@@ -3717,6 +3871,7 @@ in ${x.cwd}`)}">
   $("#btn-settings").addEventListener("click", () => (state.sheet && state.sheet.kind === "settings" ? closeSheet() : openSheet({ kind: "settings" })));
   $("#btn-about").addEventListener("click", () => (state.sheet && state.sheet.kind === "about" ? closeSheet() : openSheet({ kind: "about" })));
   $("#btn-hide").addEventListener("click", () => invoke("hide_window"));
+  $("#btn-big").addEventListener("click", () => setBigMode(!state.big));
   $("#btn-pin").addEventListener("click", async () => {
     if (!state.settings) state.settings = await invoke("get_settings");
     const on = !state.settings.config.ui.alwaysOnTop;

@@ -3738,3 +3738,198 @@ button.row-name:hover {
 .big-label {
   letter-spacing: 0.01em;
 }
+
+/* ---------------------------------------------------------------- BIG MODE */
+
+/* The widget grown into a full window. On the left, mom's desk: your PC in three dimensions,
+   with mom on its monitor. On the right, the widget as you know it. */
+.big-badge {
+  padding: 3px 9px 2px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+
+.stage {
+  display: none;
+}
+
+.app.big-mode {
+  grid-template-columns: minmax(0, 1fr) 440px;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.app.big-mode > .titlebar {
+  grid-column: 1 / -1;
+}
+
+.app.big-mode > .note,
+.app.big-mode > .tabs,
+.app.big-mode > .page {
+  grid-column: 2;
+}
+
+/* Mom is on the monitor, so her card keeps only what she says. */
+.app.big-mode > .note {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app.big-mode > .stage {
+  display: block;
+  position: relative;
+  grid-column: 1;
+  grid-row: 2 / 5;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 0 12px 12px;
+  border-radius: 28px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  overflow: hidden;
+}
+
+.stage-3d {
+  position: absolute;
+  inset: 0;
+}
+
+.stage-3d canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Mom's own element, laid onto the monitor's glass (big.js gives it the perspective). */
+.stage-screen {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.stage-screen .screen {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: auto;
+}
+
+.stage-screen .screen svg {
+  width: auto;
+  height: 94%;
+}
+
+/* The parts by name: the same as tapping them on the desk. */
+.stage-parts {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.part-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 13px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  backdrop-filter: blur(12px);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.part-pill:hover {
+  color: var(--ink);
+}
+
+.part-pill[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+/* What mom knows about the part you picked. */
+.stage-info {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  width: min(420px, calc(100% - 32px));
+  max-height: 48%;
+  overflow-y: auto;
+  padding: 14px 16px 12px;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  backdrop-filter: blur(16px);
+  scrollbar-width: none;
+}
+
+.stage-info:empty {
+  display: none;
+}
+
+.stage-info h3 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.stage-info .stage-row {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.stage-info .check-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.stage-tip {
+  position: fixed;
+  z-index: 6;
+  max-width: 320px;
+  padding: 6px 11px 7px;
+  border-radius: 12px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 12px;
+  font-weight: 650;
+  pointer-events: none;
+  transform: translate(14px, 16px);
+}
+
+.stage-tip small {
+  display: block;
+  font-weight: 500;
+  opacity: 0.72;
+}
+
+/* Settings, About and messages stay with the widget's column. */
+.app.big-mode .sheet {
+  left: auto;
+  width: 440px;
+}
+
+.app.big-mode .toast {
+  left: auto;
+  width: 416px;
+}

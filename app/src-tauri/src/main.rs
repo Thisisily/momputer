@@ -1250,6 +1250,33 @@ fn reveal(path: String, app: AppHandle) -> Res<()> {
     app.opener().reveal_item_in_dir(path).map_err(err)
 }
 
+/// BIG MODE: the widget becomes a normal-sized window, in the taskbar and in the middle of the
+/// screen. And back: the small widget by the tray again.
+#[tauri::command(async)]
+fn set_big(on: bool, app: AppHandle, s: State<'_, S>) {
+    let Some(win) = app.get_webview_window("main") else { return };
+    if on {
+        // As big as fits, up to a comfortable size.
+        let (mut w, mut h) = (1280.0_f64, 820.0_f64);
+        if let Ok(Some(monitor)) = win.primary_monitor() {
+            let area = monitor.work_area().size.to_logical::<f64>(monitor.scale_factor());
+            w = w.min(area.width - 60.0).max(960.0);
+            h = h.min(area.height - 60.0).max(620.0);
+        }
+        let _ = win.set_always_on_top(false);
+        let _ = win.set_skip_taskbar(false);
+        let _ = win.set_size(tauri::LogicalSize::new(w, h));
+        let _ = win.set_min_size(Some(tauri::LogicalSize::new(960.0, 620.0)));
+        let _ = win.center();
+    } else {
+        let _ = win.set_min_size(Some(tauri::LogicalSize::new(360.0, 440.0)));
+        let _ = win.set_size(tauri::LogicalSize::new(420.0, 680.0));
+        let _ = win.set_skip_taskbar(true);
+        let _ = win.set_always_on_top(s.cfg().ui.always_on_top);
+        place_window(&win);
+    }
+}
+
 #[tauri::command(async)]
 fn hide_window(app: AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -1370,6 +1397,7 @@ fn main() {
             open_url,
             reveal,
             hide_window,
+            set_big,
             set_paused,
         ])
         .setup(move |app| {
