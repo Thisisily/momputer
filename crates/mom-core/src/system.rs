@@ -35,10 +35,25 @@ pub struct Check {
     pub title: String,
     pub detail: String,
     pub fix: Option<Fix>,
+    /// More buttons, after the main one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub more: Vec<Fix>,
+    /// The things it's about, one line each: what each is and what to do with it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<Item>,
+}
+
+/// One thing a check is about ("Steam Streaming Speakers"), and a few words on it.
+#[derive(Clone, Debug, Serialize)]
+pub struct Item {
+    pub name: String,
+    pub note: String,
+    /// Its little light: "green" for keep, "off" for can go, "red" for trouble.
+    pub led: &'static str,
 }
 
 fn check(id: &str, area: &'static str, level: &'static str, title: String, detail: String, fix: Option<Fix>) -> Check {
-    Check { id: id.into(), area, level, title, detail, fix }
+    Check { id: id.into(), area, level, title, detail, fix, more: Vec::new(), items: Vec::new() }
 }
 
 fn open(label: &str, url: &str) -> Option<Fix> {
@@ -87,6 +102,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $o = [ordered]@{}
 $d = { param($x) if ($x) { ([datetime]$x).ToString('o') } }
 $o.mem = @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { @{ cap = [int64]$_.Capacity; speed = $_.Speed; conf = $_.ConfiguredClockSpeed; slot = "$($_.DeviceLocator)"; part = "$($_.PartNumber)".Trim(); maker = "$($_.Manufacturer)".Trim(); type = $_.SMBIOSMemoryType; form = $_.FormFactor } })
+$o.input = @(Get-PnpDevice -PresentOnly -Class Keyboard,Mouse | ForEach-Object { $p = (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_Parent').Data; $n = if ($p) { (Get-PnpDeviceProperty -InstanceId $p -KeyName 'DEVPKEY_Device_BusReportedDeviceDesc').Data }; @{ class = "$($_.Class)"; name = "$($_.FriendlyName)"; product = "$n" } })
 $o.optimize = "$((Get-ScheduledTask -TaskPath '\Microsoft\Windows\Defrag\' -TaskName 'ScheduledDefrag').State)"
 $o.disks = @(Get-CimInstance -Namespace root/Microsoft/Windows/Storage -ClassName MSFT_PhysicalDisk | ForEach-Object { @{ id = "$($_.DeviceId)"; name = "$($_.FriendlyName)".Trim(); media = $_.MediaType; bus = $_.BusType; health = $_.HealthStatus; size = [int64]$_.Size } })
 $o.sysdisk = "$((Get-CimInstance -Namespace root/Microsoft/Windows/Storage -ClassName MSFT_Partition -Filter "DriveLetter='$($env:SystemDrive[0])'").DiskNumber)"
@@ -136,9 +152,13 @@ fn gather() -> System {
     checks.extend(crate::sound::checks(&sound, &installed));
     checks.extend(registry());
     let mut pc = describe(&facts, &reg, gpu.as_ref());
-    if let Some(s) = crate::sound::summary(&sound) {
-        let at = pc.iter().position(|(k, _)| k == "Board").unwrap_or(pc.len());
-        pc.insert(at, ("Sound".into(), s));
+    let (keyboards, mice) = input_devices(&facts);
+    let before_board = |pc: &Vec<(String, String)>| pc.iter().position(|(k, _)| k == "Board").unwrap_or(pc.len());
+    for (label, list) in [("Sound", crate::sound::summary(&sound).into_iter().collect::<Vec<_>>()), ("Keyboard", keyboards), ("Mouse", mice)] {
+        if !list.is_empty() {
+            let at = before_board(&pc);
+            pc.insert(at, (label.into(), list.join(" · ")));
+        }
     }
     System { pc, checks, at: now }
 }
@@ -294,6 +314,63 @@ fn describe(f: &Value, reg: &Reg, gpu: Option<&crate::speed::Gpu>) -> Vec<(Strin
         pc.push(("Windows".into(), windows_name(reg.build, &reg.version, &reg.edition)));
     }
     pc
+}
+
+/// Words in a product's name that say which it is. A gaming mouse also shows up as a keyboard
+/// (for its macro keys) and a keyboard as a mouse (for its dial), so the name decides.
+const MOUSE_WORDS: &[&str] = &[
+    "mouse", "mice", "trackball", "touchpad", "touch pad", "trackpad", "basilisk", "deathadder", "viper", "naga", "mamba", "orochi", "cobra", "g502", "g305", "g203", "g903",
+    "g pro", "mx master", "mx anywhere", "mx vertical", "mx ergo", "pulsefire", "rival", "aerox", "sensei", "model o", "model d", "kone", "burst", "superlight", "pebble",
+    "m720", "m185", "m330", "lift", "glaive", "harpoon", "sabre", "dark core", "ironclaw", "scimitar",
+];
+const KEYBOARD_WORDS: &[&str] = &[
+    "keyboard", "keypad", "apex", "huntsman", "blackwidow", "ornata", "cynosa", "deathstalker", "k70", "k95", "k100", "k65", "k60", "k55", "g915", "g815", "g513", "g413",
+    "g213", "mx keys", "mx mechanical", "keychron", "alloy", "ducky", "varmilo", "wooting", "nuphy", "gmmk", "vulcan", "tkl", "strix scope", "tuf gaming k",
+];
+
+/// The keyboards and mice plugged in, by the names on their boxes.
+fn input_devices(f: &Value) -> (Vec<String>, Vec<String>) {
+    let (mut keyboards, mut mice): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    // Each product, and which kinds of device it presents itself as.
+    let mut products: Vec<(String, bool, bool)> = Vec::new();
+    for d in arr(f, "input") {
+        let product = text(&d, "product");
+        // A built-in one has no product name: Windows' own name for it will do.
+        let name = if product.is_empty() { text(&d, "name") } else { product };
+        if name.is_empty() {
+            continue;
+        }
+        let keyboard = text(&d, "class").eq_ignore_ascii_case("Keyboard");
+        match products.iter_mut().find(|(n, _, _)| *n == name) {
+            Some(p) => {
+                p.1 |= keyboard;
+                p.2 |= !keyboard;
+            }
+            None => products.push((name, keyboard, !keyboard)),
+        }
+    }
+    for (name, as_keyboard, as_mouse) in products {
+        let n = name.to_ascii_lowercase();
+        let shown = match n.as_str() {
+            "standard ps/2 keyboard" | "hid keyboard device" => "Built-in keyboard".to_string(),
+            "hid-compliant mouse" | "ps/2 compatible mouse" => "Mouse".to_string(),
+            _ => name.clone(),
+        };
+        let says_mouse = MOUSE_WORDS.iter().any(|w| n.contains(w));
+        let says_keyboard = KEYBOARD_WORDS.iter().any(|w| n.contains(w));
+        let (k, m) = match (says_keyboard, says_mouse) {
+            (true, false) => (true, false),
+            (false, true) => (false, true),
+            _ => (as_keyboard, as_mouse),
+        };
+        if k && !keyboards.contains(&shown) {
+            keyboards.push(shown.clone());
+        }
+        if m && !mice.contains(&shown) {
+            mice.push(shown);
+        }
+    }
+    (keyboards, mice)
 }
 
 /// "DDR4", from the memory type the board reports (SMBIOS). "LP" kinds are soldered on.
@@ -1279,6 +1356,21 @@ mod tests {
         assert_eq!(find(&f, "optimize-off").unwrap().fix.unwrap().value, "dfrgui.exe");
         let f = pc(nvme(12, 59, 0, 0), false, "Ready");
         assert!(find(&f, "trim-off").is_none() && find(&f, "optimize-off").is_none());
+    }
+
+    #[test]
+    fn keyboards_and_mice_go_by_the_name_on_the_box() {
+        let d = |class: &str, name: &str, product: &str| json!({"class": class, "name": name, "product": product});
+        // A gaming mouse also presents a keyboard, a keyboard also presents a mouse.
+        let f = json!({"input": [
+            d("Keyboard", "HID Keyboard Device", "Copperline Apex Pro"), d("Mouse", "HID-compliant mouse", "Copperline Apex Pro"),
+            d("Mouse", "Lanternfall Basilisk X", "Lanternfall Basilisk X"), d("Keyboard", "HID Keyboard Device", "Lanternfall Basilisk X"),
+            d("Keyboard", "Standard PS/2 Keyboard", ""), d("Mouse", "HID-compliant mouse", "Odd Pointer 3000"),
+        ]});
+        let (keyboards, mice) = input_devices(&f);
+        assert_eq!(keyboards, vec!["Copperline Apex Pro", "Built-in keyboard"]);
+        assert_eq!(mice, vec!["Lanternfall Basilisk X", "Odd Pointer 3000"]);
+        assert_eq!(input_devices(&json!({})), (vec![], vec![]));
     }
 
     #[test]

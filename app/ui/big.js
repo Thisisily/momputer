@@ -184,9 +184,24 @@ export function open(host, screenEl, model, on = {}) {
   glass.position.set(MX, 0.78 + 1.15, -0.4 + 0.082);
   monitor.add(glass);
 
-  // A keyboard, for the look of the thing.
-  box(2.5, 0.07, 0.82, P.key, MX, 0, 1.35);
-  box(2.34, 0.02, 0.66, P.edge, MX, 0.07, 1.35).castShadow = false;
+  // The keyboard and the mouse.
+  const keyboard = part("keyboard");
+  box(2.5, 0.07, 0.82, P.key, MX, 0, 1.35, keyboard.group);
+  box(2.34, 0.02, 0.66, P.edge, MX, 0.07, 1.35, keyboard.group).castShadow = false;
+  lamp(keyboard, MX + 1.14, 0.1, 1.03);
+  const mouse = part("mouse");
+  {
+    const geo = new THREE.SphereGeometry(0.2, 24, 16);
+    owned.push(geo);
+    const body = new THREE.Mesh(geo, material(P.key));
+    body.scale.set(0.8, 0.5, 1.25);
+    body.position.set(MX + 1.95, 0.07, 1.4);
+    body.castShadow = true;
+    body.receiveShadow = true;
+    mouse.group.add(body);
+  }
+  box(0.02, 0.012, 0.12, P.edge, MX + 1.95, 0.168, 1.27, mouse.group).castShadow = false;
+  lamp(mouse, MX + 1.95, 0.175, 1.47);
 
   // The speakers, either side of the monitor.
   const sound = part("sound");

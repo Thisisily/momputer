@@ -125,7 +125,7 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
     // From the Windows checkup (gathered on its own thread): what holds the PC back.
     if let Some(sys) = crate::system::cached() {
         for c in sys.checks.into_iter().filter(|c| c.level != "ok" && (matches!(c.area, "Performance" | "Hardware") || c.id == "two-antivirus" || c.id == "broken-services")) {
-            findings.push(Finding { more: vec![], timeline: None, id: c.id, level: c.level, title: c.title, detail: c.detail, fix: c.fix });
+            findings.push(Finding { more: c.more, timeline: None, id: c.id, level: c.level, title: c.title, detail: c.detail, fix: c.fix });
         }
     }
     let starting = crate::health::startup_apps(paths).iter().filter(|a| a.enabled).count();

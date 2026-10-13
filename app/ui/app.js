@@ -58,6 +58,7 @@
     stopped: [], // servers mom stopped and can start again (get_stopped)
     startBusy: null, // the one starting now
     icons: new Map(), // .exe path -> its icon (a data: URI), or null when it has none (get_icons)
+    more: new Set(), // long explanations that have been opened ("More")
     expanded: new Set(),
     stopping: new Set(),
     done: new Set(),
@@ -553,6 +554,32 @@
 
   // ------------------------------------------------------------ running: speed
 
+  /** A long explanation, kept short: its first sentence, with the rest behind "More". */
+  function brief(key, text) {
+    const t = String(text || "").trim();
+    const end = t.search(/[.!?:](\s|$)/);
+    if (t.length <= 120 || end < 0 || end + 2 >= t.length) return `<span>${esc(t)}</span>`;
+    const open = state.more.has(key);
+    const first = esc(t.slice(0, end + 1));
+    const rest = esc(t.slice(end + 1).trim());
+    return `<span>${first}${open ? ` ${rest}` : ""} <button class="more-btn" data-act="more" data-key="${esc(key)}" aria-expanded="${open}">${open ? "Less" : "More"}</button></span>`;
+  }
+
+  /** One thing mom found: its light, what it is in a sentence, a line for each thing it's about
+      (a sound output, say, and whether it can go), and every button that does something about
+      it. `extra` goes under the words (a chart). */
+  function checkRow(c, prefix, extra = "") {
+    const buttons = [c.fix, ...(c.more || [])].filter(Boolean).map(fixButton).join("");
+    const items = (c.items || [])
+      .map((i) => `<div class="check-item" data-led="${esc(i.led)}"><b>${esc(i.name)}</b><span>${esc(i.note)}</span></div>`)
+      .join("");
+    return `<div class="check-row${buttons || items ? " stack" : ""}" id="${prefix}-${hash(c.id)}" data-led="${c.level === "warn" ? "red" : c.level === "ok" ? "green" : "off"}">
+        <div class="check-text"><strong>${esc(c.title)}</strong>${brief(`${prefix}:${c.id}`, c.detail)}${extra}</div>
+        ${items ? `<div class="check-items">${items}</div>` : ""}
+        ${buttons ? `<div class="fix-row">${buttons}</div>` : ""}
+      </div>`;
+  }
+
   /** The one thing to do about a finding: copy a page only the browser can open, open Windows
       Settings, or show another part of the widget. */
   function fixButton(f) {
@@ -638,14 +665,7 @@
         "slow",
         "What mom found",
         "",
-        findings
-          .map(
-            (f) => `<div class="check-row${f.fix ? " stack" : ""}" id="spd-${hash(f.id)}" data-led="${f.level === "warn" ? "red" : f.level === "ok" ? "green" : "off"}">
-          <div class="check-text"><strong>${esc(f.title)}</strong><span>${esc(f.detail)}</span>${f.timeline ? timeline(f.timeline) : ""}</div>
-          ${f.fix ? `<div class="fix-row">${[f.fix, ...(f.more || [])].map(fixButton).join("")}</div>` : ""}
-        </div>`
-          )
-          .join("")
+        findings.map((f) => checkRow(f, "spd", f.timeline ? timeline(f.timeline) : "")).join("")
       );
     }
     const rows = [];
@@ -1208,7 +1228,7 @@ in ${x.cwd}`)}">
       .sort((a, b) => (order[a.level] ?? 1) - (order[b.level] ?? 1))
       .map(
         (c) => `<div class="check-row" id="chk-${hash(c.id)}" data-led="${c.level === "warn" ? "red" : c.level === "ok" ? "green" : "off"}">
-          <div class="check-text"><strong>${esc(c.title)}</strong><span>${esc(c.detail)}</span></div>
+          <div class="check-text"><strong>${esc(c.title)}</strong>${brief(`chk:${c.id}`, c.detail)}</div>
           ${c.action ? `<button class="secondary" data-act="open-uri" data-url="${esc(c.action.url)}" title="Opens Windows Settings">${esc(c.action.label)}${ICON.out}</button>` : ""}
         </div>`
       )
@@ -1424,14 +1444,7 @@ in ${x.cwd}`)}">
         `sys-${area.toLowerCase()}`,
         title,
         "",
-        list
-          .map(
-            (c) => `<div class="check-row${c.fix ? " stack" : ""}" id="sys-${hash(c.id)}" data-led="${c.level === "warn" ? "red" : c.level === "ok" ? "green" : "off"}">
-          <div class="check-text"><strong>${esc(c.title)}</strong><span>${esc(c.detail)}</span></div>
-          ${c.fix ? `<div class="fix-row">${fixButton(c.fix)}</div>` : ""}
-        </div>`
-          )
-          .join("")
+        list.map((c) => checkRow(c, "sys")).join("")
       );
     }
     return html;
@@ -1459,13 +1472,15 @@ in ${x.cwd}`)}">
   /** The parts on mom's desk: what each is called, its line in "This PC", which checks are its
       own, and how mom speaks of it. */
   const PARTS = [
-    ["processor", "Processor", "Processor", (c) => c.area === "Performance", "Your processor", false],
-    ["memory", "Memory", "Memory", (c) => c.id.startsWith("memory"), "Your memory", false],
-    ["graphics", "Graphics card", "Graphics", (c) => c.id.startsWith("gpu"), "Your graphics card", false],
-    ["disks", "Drives", "Disks", (c) => /^(ssd-health|disk-health|windows-on-hdd|trim-off|optimize-off)/.test(c.id), "Your drives", true],
-    ["sound", "Sound", "Sound", (c) => c.area === "Sound", "Your sound", false],
-    ["board", "Motherboard", "Board", (c) => c.id === "bios-old", "Your motherboard", false],
-    ["windows", "Windows", "Windows", (c) => c.area === "Security" || c.area === "Updates", "Windows", false],
+    ["processor", "Processor", "Processor", (c) => c.area === "Performance", "Your processor", false, ["Power settings", "ms-settings:powersleep"]],
+    ["memory", "Memory", "Memory", (c) => c.id.startsWith("memory"), "Your memory", false, null],
+    ["graphics", "Graphics card", "Graphics", (c) => c.id.startsWith("gpu"), "Your graphics card", false, ["Display settings", "ms-settings:display"]],
+    ["disks", "Drives", "Disks", (c) => /^(ssd-health|disk-health|windows-on-hdd|trim-off|optimize-off)/.test(c.id), "Your drives", true, ["Storage settings", "ms-settings:storagesense"]],
+    ["sound", "Sound", "Sound", (c) => c.area === "Sound", "Your sound", false, ["Sound settings", "ms-settings:sound"]],
+    ["keyboard", "Keyboard", "Keyboard", () => false, "Your keyboard", false, ["Typing settings", "ms-settings:typing"]],
+    ["mouse", "Mouse", "Mouse", () => false, "Your mouse", false, ["Mouse settings", "ms-settings:mousetouchpad"]],
+    ["board", "Motherboard", "Board", (c) => c.id === "bios-old", "Your motherboard", false, null],
+    ["windows", "Windows", "Windows", (c) => c.area === "Security" || c.area === "Updates", "Windows", false, ["Windows Update", "ms-settings:windowsupdate"]],
   ];
 
   /** Your PC as the desk shows it: each part with its checks and its light, and how many
@@ -1475,9 +1490,18 @@ in ${x.cwd}`)}">
     const rows = new Map(sys ? sys.pc : []);
     const checks = sys ? sys.checks : [];
     const worst = (list) => (list.some((c) => c.level === "warn") ? "warn" : list.some((c) => c.level === "tip") ? "tip" : "ok");
-    const parts = PARTS.map(([id, label, row, mine, subject, plural]) => {
-      const own = checks.filter(mine);
-      return { id, label, subject, plural, row: rows.get(row) || "", checks: own, level: sys ? worst(own) : "none" };
+    // A keyboard's or mouse's maker often leaves a helper running all day (Speed knows): that's its to answer for.
+    const helpers = state.speed ? state.speed.findings.filter((f) => f.id.startsWith("extras-")) : [];
+    const parts = PARTS.map(([id, label, row, mine, subject, plural, settings]) => {
+      const text = rows.get(row) || "";
+      let own = checks.filter(mine);
+      if (id === "keyboard" || id === "mouse") {
+        const makers = text.split(" · ").map((n) => n.split(" ")[0].toLowerCase()).filter((w) => w.length > 2);
+        own = helpers.filter((f) => makers.some((w) => f.title.toLowerCase().includes(w)));
+      }
+      // Nothing plugged in that mom can see: its light stays off.
+      const level = !sys ? "none" : (id === "keyboard" || id === "mouse") && !text ? "none" : worst(own);
+      return { id, label, subject, plural, settings, row: text, checks: own, level };
     });
     const memory = rows.get("Memory") || "";
     const sticks = +((/(\d+) × /.exec(memory) || /(\d+) sticks/.exec(memory) || [0, 2])[1]);
@@ -1503,15 +1527,10 @@ in ${x.cwd}`)}">
     if (!state.system) {
       html = `<h3><span class="led green blink"></span>Looking over your PC…</h3><p class="stage-row">Its parts light up as mom gets to them.</p>`;
     } else if (p) {
-      const rows = p.checks
-        .map(
-          (c) => `<div class="check-row${c.fix ? " stack" : ""}" data-led="${c.level === "warn" ? "red" : c.level === "ok" ? "green" : "off"}">
-            <div class="check-text"><strong>${esc(c.title)}</strong><span>${esc(c.detail)}</span></div>
-            ${c.fix ? `<div class="fix-row">${fixButton(c.fix)}</div>` : ""}
-          </div>`
-        )
-        .join("");
-      html = `<h3>${led(p.level)}${esc(p.label)}</h3>${p.row ? `<p class="stage-row">${esc(p.row)}</p>` : ""}${rows || `<p class="stage-row">Nothing to say about it. That's good news.</p>`}`;
+      const rows = p.checks.map((c) => checkRow(c, "big")).join("");
+      const nothing = p.row ? "Nothing to say about it. That's good news." : `Mom can't see ${p.plural ? "any" : "one"} plugged in.`;
+      const settings = p.settings ? `<div class="stage-acts"><button class="link-btn" data-act="open-uri" data-url="${esc(p.settings[1])}">${esc(p.settings[0])}${ICON.out}</button></div>` : "";
+      html = `<h3>${led(p.level)}${esc(p.label)}</h3>${p.row ? `<p class="stage-row">${esc(p.row)}</p>` : ""}${rows || `<p class="stage-row">${nothing}</p>`}${settings}`;
     } else {
       const bad = m.parts.filter((x) => x.level === "warn").map((x) => x.label);
       const said = bad.length ? `${bad.join(", ")} ${bad.length === 1 ? "needs" : "need"} a look: the red ${bad.length === 1 ? "light" : "lights"}.` : "Every light is green.";
@@ -1533,8 +1552,9 @@ in ${x.cwd}`)}">
     const p = bigModel().parts.find((x) => x.id === state.bigPart);
     if (p && state.system) {
       const trouble = p.checks.find((c) => c.level === "warn");
-      react(p.level === "warn" ? "stern" : p.level === "tip" ? "hmm" : "proud", 3200);
-      say(trouble ? trouble.title + "." : p.level === "tip" ? `${p.subject} could do better.` : `${p.subject} ${p.plural ? "are" : "is"} fine, sweetie.`, 4200);
+      react(p.level === "warn" ? "stern" : p.level === "tip" || p.level === "none" ? "hmm" : "proud", 3200);
+      const none = p.level === "none" ? `I can't see ${p.subject.toLowerCase().replace("your ", "a ")} from here.` : "";
+      say(none || (trouble ? trouble.title + "." : p.level === "tip" ? `${p.subject} could do better.` : `${p.subject} ${p.plural ? "are" : "is"} fine, sweetie.`), 4200);
     }
     renderStage();
   }
@@ -3377,6 +3397,11 @@ in ${x.cwd}`)}">
         break;
       case "big-part":
         pickPart(el.dataset.id);
+        break;
+      case "more":
+        if (!state.more.delete(el.dataset.key)) state.more.add(el.dataset.key);
+        render();
+        renderStage();
         break;
       case "open-program":
         act(invoke("open_program", { name: el.dataset.url }), () => null);

@@ -3933,3 +3933,69 @@ button.row-name:hover {
   left: auto;
   width: 416px;
 }
+
+/* ---------------------------------------------------------------- saying less */
+
+/* A long explanation shows its first sentence; this opens the rest. */
+.more-btn {
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--line-2);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.more-btn:hover {
+  text-decoration-color: var(--ink);
+}
+
+/* A line for each thing a finding is about: its name, and what to do with it. */
+.check-items {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.check-item {
+  position: relative;
+  display: grid;
+  gap: 0;
+  padding-left: 15px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.check-item::before {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--led-off);
+}
+
+.check-item[data-led="green"]::before {
+  background: var(--green);
+}
+
+.check-item[data-led="red"]::before {
+  background: var(--red);
+}
+
+.check-item b {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.check-item span {
+  color: var(--ink-2);
+}
+
+.stage-acts {
+  margin-top: 10px;
+}
