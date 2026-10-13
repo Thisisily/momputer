@@ -1814,11 +1814,21 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         // Projects can sit outside your own folders, where other people on this PC can write
         // (the top of a second drive). There: one at a time, never following a link, even one
         // swapped in while mom works, and only what's still yours at that moment.
+        // "In your own folders" goes by where a thing really is, not by how its path is spelled:
+        // a Projects folder in your profile can be a link to another drive.
+        let home = std::fs::canonicalize(&ctx.paths.home).ok();
+        let at_home = |t: &Path| match (&home, std::fs::canonicalize(t)) {
+            (Some(home), Ok(real)) => real.starts_with(home),
+            _ => false,
+        };
         each(&|c: &Cand| {
-            if c.targets.iter().all(|t| t.starts_with(&ctx.paths.home)) {
+            if !c.targets.iter().all(|t| crate::elevate::owned_by_me(t)) {
+                return false;
+            }
+            if c.targets.iter().all(|t| at_home(t)) {
                 remove_all(&c.targets, live).into_iter().all(|gone| gone)
             } else {
-                c.targets.iter().all(|t| crate::elevate::owned_by_me(t) && remove_without_following(t))
+                c.targets.iter().all(|t| remove_without_following(t))
             }
         })
     } else {

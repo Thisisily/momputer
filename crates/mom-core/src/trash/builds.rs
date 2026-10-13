@@ -83,6 +83,11 @@ struct Project {
     rust: bool,
 }
 
+/// A real file (not a link, not a folder) that you own.
+fn my_file(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).map(|m| m.is_file()).unwrap_or(false) && crate::elevate::owned_by_me(path)
+}
+
 fn newest_activity(dir: &Path, project: bool) -> u64 {
     let mut newest = ACTIVITY
         .iter()
@@ -100,8 +105,11 @@ fn walk(dir: &Path, rel: &str, depth: usize, inherited: u64, seen: &mut HashSet<
     if !seen.insert(norm_path(&dir.to_string_lossy())) {
         return;
     }
-    let js = dir.join("package.json").is_file();
-    let rust = dir.join("Cargo.toml").is_file();
+    // What makes a folder a project is a file, and it has to be your file: in a folder other
+    // people can add to, a package.json dropped next to your own "build" or "dist" folder would
+    // otherwise make mom offer that folder up.
+    let js = my_file(&dir.join("package.json"));
+    let rust = my_file(&dir.join("Cargo.toml"));
     let project = js || rust;
     let active = if project || dir.join(".git").exists() { newest_activity(dir, project).max(inherited) } else { inherited };
     // Only your own projects: under a shared folder, someone else's can sit next to yours.
