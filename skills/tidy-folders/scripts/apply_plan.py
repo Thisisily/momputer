@@ -11,6 +11,8 @@ Rules it enforces, whatever the plan says:
     hash of the plan's actions, so a plan edited after approval is refused
   * only full paths on a local disk: network shares, mapped network drives and device
     paths are refused (they can be another name for a protected folder)
+  * the path that is checked is the path that is used: anything not written as the
+    plain, real name ('/', '..', an 8.3 short name such as APPDAT~1) is refused
   * never touches Windows, Program Files, ProgramData, AppData, registered program
     folders, launcher game libraries, drive roots or the user's top-level folders;
     checked on the real location too, so 8.3 short names and junctions can't dodge it
@@ -91,13 +93,34 @@ def odd_name(path):
 
 
 def real(path):
-    """Where the path really is: parent resolved through junctions and 8.3 short names."""
+    """Where the path really is: the parent resolved through junctions, read by its exact name
+    (the same way every file operation here addresses it, so both see the same folder)."""
     parent, name = os.path.split(path.rstrip("\\/"))
     try:
-        parent = plain(os.path.realpath(parent))
+        parent = plain(os.path.realpath(xp(parent)))
     except OSError:
         pass
     return os.path.join(parent, name)
+
+
+def long_name(path):
+    """`path` with every part that exists spelled by its real name (8.3 short names expanded), or
+    None if Windows can't say. Links are not followed; parts that don't exist yet stay as written."""
+    if not sv.IS_WIN:
+        return path
+    import ctypes
+    tail, cur = [], path
+    while not os.path.lexists(xp(cur)):
+        parent, name = os.path.split(cur)
+        if not name or parent == cur:
+            return None
+        tail.insert(0, name)
+        cur = parent
+    buf = ctypes.create_unicode_buffer(32768)
+    n = ctypes.windll.kernel32.GetLongPathNameW(xp(cur), buf, len(buf))
+    if not n or n >= len(buf):
+        return None
+    return os.path.join(plain(buf.value), *tail)
 
 
 def on_local_drive(path):
@@ -252,10 +275,23 @@ class Guard:
         """None if `path` may be touched, else the reason it may not. Checks the path as written and where it really is."""
         if not isinstance(path, str) or not re.match(r"^[A-Za-z]:\\", path):
             return "not a full path on a local drive (network and device paths are refused)"
-        if ".." in re.split(r"[\\/]", path):
-            return "a path with '..' in it"
-        if ":" in path[2:]:
-            return "a path with ':' in a name"
+        # The path that is checked must be the path that is used. Files are opened by their exact
+        # name, so anything Windows would quietly rewrite or read as another name is refused here:
+        # "/", "..", ".", doubled or trailing backslashes, and 8.3 short names (APPDAT~1 is AppData).
+        if "/" in path or os.path.normpath(path) != path:
+            return "not written as a plain path ('/', '..', '.', or a doubled or trailing backslash)"
+        if ":" in path[2:] or re.search(r'[<>"|?*\x00-\x1f]', path[2:]):
+            return "a path with characters Windows doesn't allow in names"
+        actual = long_name(path)
+        if actual is None:
+            return "a path Windows can't resolve"
+        if sv.norm(actual) != sv.norm(path):
+            return "not the real name of that file or folder (a short 8.3 name or another alias)"
+        # A folder whose name ends in a dot or space is one other programs read as a different
+        # folder ("sub." as "sub"): never go through one, and never create one.
+        folders = path[3:].split("\\")[:-1]
+        if any(part != part.rstrip(". ") for part in folders):
+            return "inside a folder whose name ends in a dot or space"
         there = real(path)
         if not on_local_drive(path) or not on_local_drive(there):
             return "on a network drive or share, not a local disk"

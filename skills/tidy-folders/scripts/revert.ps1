@@ -55,9 +55,16 @@ function WhyNot([string]$p) {
     if ($p -notmatch '^[A-Za-z]:\\[^\\]') { return 'not a full path on a local disk' }
     if ($p.Substring(2).Contains(':')) { return 'a name with a colon in it' }
     if ($p.Contains('/')) { return 'a path with a forward slash' }
-    foreach ($part in $p.Split('\')) {
+    # The path that is checked must be the path that is used: nothing Windows would quietly
+    # rewrite or read as another name.
+    if ($p -match '[<>"|?*]') { return 'a name with characters Windows does not allow' }
+    $names = @($p.Substring(3).Split('\'))
+    for ($i = 0; $i -lt $names.Count; $i++) {
+        $part = $names[$i]
+        if ($part -eq '') { return 'a doubled or trailing backslash' }
         if ($part -eq '..' -or $part -eq '.') { return 'a path with dots for a folder' }
         if ($part -match '~\d') { return 'a short (8.3) name; use apply_plan.py --undo instead' }
+        if ($i -lt $names.Count - 1 -and ($part.EndsWith('.') -or $part.EndsWith(' '))) { return 'a folder name ending in a dot or space' }
     }
     try { $kind = (New-Object System.IO.DriveInfo ($p.Substring(0, 3))).DriveType } catch { return 'an unknown drive' }
     if ($kind -ne [System.IO.DriveType]::Fixed -and $kind -ne [System.IO.DriveType]::Removable) { return 'on a network drive, not a local disk' }
