@@ -155,6 +155,8 @@ pub struct UiConfig {
     pub scan_interval_secs: u64,
     /// Leftovers using more than this share of the machine's CPU set off the meltdown alarm.
     pub cpu_alert_percent: f32,
+    /// Ask GitHub once a day whether there's a newer momputer. The only thing she asks the internet.
+    pub check_updates: bool,
 }
 
 impl Default for UiConfig {
@@ -169,6 +171,7 @@ impl Default for UiConfig {
             notify_every_minutes: 30,
             scan_interval_secs: 3,
             cpu_alert_percent: 25.0,
+            check_updates: true,
         }
     }
 }

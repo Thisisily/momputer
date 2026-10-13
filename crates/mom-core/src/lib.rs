@@ -32,6 +32,7 @@ pub mod speed;
 pub mod startup;
 pub mod system;
 pub mod tidy;
+pub mod updates;
 pub mod trash;
 pub mod util;
 pub mod voice;

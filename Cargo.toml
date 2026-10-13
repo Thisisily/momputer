@@ -4,7 +4,7 @@ members = ["crates/mom-core", "crates/mom-cli", "app/src-tauri"]
 default-members = ["crates/mom-core", "crates/mom-cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 authors = ["momputer contributors"]

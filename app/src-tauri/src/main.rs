@@ -768,6 +768,23 @@ fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// Is there a newer momputer? Asks GitHub at most once a day, and not at all if that's switched
+/// off in Settings, unless `now` (the person pressed "Check now").
+#[tauri::command]
+async fn get_update(now: bool, s: State<'_, S>) -> Res<mom_core::updates::Update> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let current = env!("CARGO_PKG_VERSION");
+        if now || s.cfg().ui.check_updates {
+            mom_core::updates::check(&s.paths, current, now)
+        } else {
+            mom_core::updates::known(&s.paths, current)
+        }
+    })
+    .await
+    .map_err(err)
+}
+
 /// Why mom can't clean as administrator from this copy of the app, if she can't: shown before
 /// anyone presses the button.
 #[tauri::command(async)]
@@ -1239,7 +1256,9 @@ fn open_url(url: String, app: AppHandle) -> Res<()> {
     let security = url == "windowsdefender:" || url == "windowsdefender://network/";
     // The author's other projects, from the About sheet.
     let author = ["https://getmarsell.com", "https://ilisium.xyz"].iter().any(|site| url == *site || url.starts_with(&format!("{site}/")));
-    if !(local || codex_thread || settings_page || author || driver_page || security || url.starts_with("https://github.com/")) {
+    // Where a newer momputer is fetched from.
+    let install_page = url == mom_core::updates::GET_IT;
+    if !(local || codex_thread || settings_page || author || driver_page || security || install_page || url.starts_with("https://github.com/")) {
         return Err("mom only opens local servers, Codex threads, Windows Settings pages and the project's own pages".into());
     }
     app.opener().open_url(url, None::<&str>).map_err(err)
@@ -1353,6 +1372,7 @@ fn main() {
             admin_check,
             measure_spot,
             app_version,
+            get_update,
             clean_progress,
             stop_clean,
             files_state,

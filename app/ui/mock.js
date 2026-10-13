@@ -564,7 +564,7 @@
       hooks: { enabled: true, nagProcesses: true, nagClutter: true, shareRules: true, stopOnSessionEnd: false, minAgeSecs: 5 },
       tidy: { reportsFolder: "Documents", minFamily: 3, screenshotPile: 10 },
       trash: { tempMinAgeDays: 7, agentScratchDays: 67, archiveDir: null, conversationsAfterDays: 67 },
-      ui: { alwaysOnTop: false, notifications: true, notifyLeftovers: true, notifyMeltdown: true, notifyCleanups: true, notifyAfterMinutes: 10, notifyEveryMinutes: 30, scanIntervalSecs: 3, cpuAlertPercent: 25 },
+      ui: { alwaysOnTop: false, notifications: true, notifyLeftovers: true, notifyMeltdown: true, notifyCleanups: true, notifyAfterMinutes: 10, notifyEveryMinutes: 30, scanIntervalSecs: 3, cpuAlertPercent: 25, checkUpdates: true },
       protect: [],
       kept: [],
     },
@@ -676,7 +676,9 @@
       return { id, freed, deleted: goes.length, skipped: 0, message };
     },
     admin_check: async () => (await wait(60), null),
-    app_version: () => "0.1.0",
+    app_version: () => "0.2.0",
+    // "?update" in the address shows what a newer version looks like.
+    get_update: async () => (await wait(300), { current: "0.2.0", latest: location.search.includes("update") ? "0.3.0" : "0.2.0", newer: location.search.includes("update"), checked: now, asked: now, problem: null, getIt: "https://thisisily.github.io/momputer/" }),
     measure_spot: async ({ id }) => {
       await wait(700);
       emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });

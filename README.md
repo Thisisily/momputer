@@ -69,7 +69,7 @@ Want every detail? [momputer, in detail](docs/in-detail.md).
 
 It isn't code-signed yet, so Windows warns that it's from an unknown publisher. Choose **More info**, then **Run anyway**.
 
-Mom lives by the clock. Click her for the widget. The arrows in its title bar are BIG MODE.
+Mom lives by the clock. Click her for the widget. The arrows in its title bar are BIG MODE. When a newer version is out, a red light shows on the "i", with the button to get it.
 
 <details>
 <summary>Build it from source</summary>
@@ -102,7 +102,7 @@ Run from a folder of your own like this, it all works except the clean-ups that 
 - Delete anything without showing you first. You press, then you confirm.
 - Stop Windows' own processes, an agent itself, or anything you marked "keep".
 - Throw your own files away for good: those go to the Recycle Bin.
-- Send anything anywhere.
+- Send anything about you or your PC anywhere. The one thing she asks the internet is whether there's a newer version, and you can switch that off.
 - Ask for administrator rights from a copy something else could have swapped.
 
 [The full list, and how she knows who left what](docs/in-detail.md#how-mom-knows-who-did-it).
@@ -115,7 +115,7 @@ Teach mom a new agent, a new kind of trash, or a new face: [CONTRIBUTING.md](CON
 
 Releases are built from this repository by GitHub Actions and aren't code-signed yet. [How signing is set up](docs/signing.md).
 
-Privacy policy: This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+Privacy: momputer sends nothing about you or your PC anywhere. Once a day it asks GitHub whether there's a newer version (the same request from every copy); Settings turns that off.
 
 ## Roadmap
 

@@ -75,6 +75,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Is there a newer momputer? Asks GitHub (the one thing mom asks the internet).
+    Update {
+        #[arg(long)]
+        json: bool,
+    },
     /// A checkup for the whole machine: disks, memory, restarts, startup apps.
     Health {
         #[arg(long)]
@@ -443,6 +448,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Machines { .. })
         | Some(Cmd::Trash { .. })
         | Some(Cmd::Health { .. })
+        | Some(Cmd::Update { .. })
         | Some(Cmd::Speed { .. })
         | Some(Cmd::Programs { .. })
         | Some(Cmd::Pc { .. })
@@ -768,6 +774,19 @@ fn run(cli: Cli) -> Result<i32> {
                 Err(why) => bail!("{why}"),
             },
         },
+        Some(Cmd::Update { json }) => {
+            let u = mom_core::updates::check(&paths, env!("CARGO_PKG_VERSION"), true);
+            if json {
+                print_json(&u)?;
+            } else if u.newer {
+                println!("{}  {}", st.pink(&st.bold("mom")), st.bold(&format!("\"{} is out. You have {}.\"", u.latest.as_deref().unwrap_or_default(), u.current)));
+                println!("  Get it: {}", u.get_it);
+            } else if let Some(why) = &u.problem {
+                println!("{}  {}", st.pink(&st.bold("mom")), st.bold(&format!("\"You have {}. {why}\"", u.current)));
+            } else {
+                println!("{}  {}", st.pink(&st.bold("mom")), st.bold(&format!("\"You have {}, the newest.\"", u.current)));
+            }
+        }
         Some(Cmd::Health { json }) => {
             let table = mom_core::procs::Sampler::new().sample();
             let h = mom_core::health::check(&table, &paths);

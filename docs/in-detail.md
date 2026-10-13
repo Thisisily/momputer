@@ -82,6 +82,7 @@ mom machines           Docker, WSL and Hyper-V
 mom trash              what can go, and what each clean-up does (mom trash <id> lists the files)
 mom trash clean all    take out the safe trash (never the Recycle Bin or your own files)
 mom health             drives, memory, restarts, Storage Sense and startup apps
+mom update             is there a newer momputer? (asks GitHub)
 mom speed              what's slowing the PC down, and what's busy right now
 mom programs           every program running, one line each (only looks)
 mom pc                 what the PC is, and its protection, updates, hardware and registry leftovers
@@ -151,7 +152,7 @@ Listing the machine costs a single `NtQuerySystemInformation` call. Only runtime
   - The Recycle Bin is only emptied when you ask.
 - Touch anything you marked "keep", anything matching `protect` in the config, or anything started with `MOMPUTER_KEEP=1`.
 - Edit an agent's settings file without backing it up first (`~/.momputer/backups`), or at all if she can't parse it.
-- Send anything anywhere. momputer has no network code.
+- Send anything about you or your PC anywhere. The one thing momputer asks the internet is whether there's a newer version: one request to GitHub a day, the same from every copy, and a switch in Settings turns it off. (`mom update` asks when you tell it to.)
 - Hand your "yes" to the wrong program. Before Windows asks you to let `mom` run as administrator, she checks that nothing running as you could have swapped it: it has to be installed for all users (in Program Files), and when momputer is signed, `mom.exe` has to carry the very same signature. Run as administrator, `mom` only looks, and cleans the spots that need one.
 
 ## Settings

@@ -53,6 +53,9 @@
     startup: null, // what starts with Windows (get_startup)
     startupAt: 0,
     startupBusy: null,
+    update: null, // is there a newer momputer (get_update)
+    updateBusy: false,
+    updateTold: null, // the version mom has already mentioned this time
     big: false, // BIG MODE: the full window, with your PC on mom's desk
     bigPart: null, // the part of the PC that's picked there
     stopped: [], // servers mom stopped and can start again (get_stopped)
@@ -1464,6 +1467,41 @@ in ${x.cwd}`)}">
     renderStage();
   }
 
+  // ------------------------------------------------------------ versions
+
+  /** Asks whether there's a newer momputer (the backend asks GitHub at most once a day, and not
+      at all if that's switched off, unless `now`). A new one gets a dot on the About button and
+      one mention. */
+  async function loadUpdate(now = false) {
+    if (state.updateBusy) return;
+    state.updateBusy = true;
+    if (state.sheet && state.sheet.kind === "about") renderSheet();
+    try {
+      state.update = await invoke("get_update", { now });
+    } catch (e) {
+      console.warn("no word on new versions", e);
+    }
+    state.updateBusy = false;
+    const u = state.update;
+    $("#btn-about").classList.toggle("has-news", !!(u && u.newer));
+    if (u && u.newer && state.updateTold !== u.latest) {
+      state.updateTold = u.latest;
+      toast(`momputer ${u.latest} is out. It's under the "i".`);
+    }
+    if (state.sheet && state.sheet.kind === "about") renderSheet();
+  }
+
+  /** In About: whether this is the newest version, and the button that gets the newer one. */
+  function updateLine() {
+    const u = state.update;
+    const again = `<button class="link-btn" data-act="update-check" ${state.updateBusy ? "disabled" : ""}>${state.updateBusy ? "Asking…" : "Check now"}</button>`;
+    if (u && u.newer)
+      return `<div class="about-update is-new"><span class="led red"></span><span><b>${esc(u.latest)} is out.</b> You have ${esc(u.current)}.</span>
+        <button class="primary" data-act="open-uri" data-url="${esc(u.getIt)}">Get ${esc(u.latest)}${ICON.out}</button></div>`;
+    const said = !u ? "" : u.problem && !u.latest ? esc(u.problem) : u.latest ? "This is the newest version." : "Mom hasn't asked about new versions yet.";
+    return `<div class="about-update"><span>${said}</span>${again}</div>`;
+  }
+
   // ------------------------------------------------------------ BIG MODE
 
   let stage = null; // the desk in three dimensions (big.js), while BIG MODE is on
@@ -2724,6 +2762,7 @@ in ${x.cwd}`)}">
           <div class="about-word dot">momputer</div>
           <div class="about-tag">A mom for you, your computer and your AIs.</div>
           <div class="about-meta">${state.version ? `<span class="about-ver num">v${esc(state.version)}</span>` : ""}<span>Free for personal use</span></div>
+          ${updateLine()}
         </div>
       </div>
       <div class="about-note">
@@ -2739,7 +2778,7 @@ in ${x.cwd}`)}">
         <div class="about-tip-foot"><span>momputer is free for personal use, and stays that way. A tip keeps her going.</span>
           <button class="primary" data-act="copy-text" data-text="${esc(addr)}" data-what="${esc(coin)}">Copy</button></div>
       </div>
-      <p class="about-foot">Free for personal use (PolyForm Noncommercial) · momputer itself never goes online; links open in your browser.<br>
+      <p class="about-foot">Free for personal use (PolyForm Noncommercial) · The one thing momputer asks the internet is whether there's a newer version. Nothing about you or your PC is sent.<br>
         <span class="about-hint">There's one room in this house nobody tidies.</span></p>`;
   }
 
@@ -2790,6 +2829,7 @@ in ${x.cwd}`)}">
         "",
         sw("alwaysOnTop", c.ui.alwaysOnTop, "Keep on top", "Stay above other windows.") +
           sw("autostart", st.autostart, "Start with Windows", "Mom starts quietly in the tray when you log in.") +
+          sw("checkUpdates", c.ui.checkUpdates, "New versions", "Ask GitHub once a day whether there's a newer momputer. Nothing about your PC is sent.") +
           sw("paused", state.paused, "Take a break", `Stop watching until you switch this off. Otherwise mom looks every ${num("scanIntervalSecs", c.ui.scanIntervalSecs, 1, 60)} seconds.`)
       )}
       <p class="foot">momputer ${esc(st.version)}. Settings live in ${esc(st.configPath)}.</p>`;
@@ -3398,6 +3438,9 @@ in ${x.cwd}`)}">
       case "big-part":
         pickPart(el.dataset.id);
         break;
+      case "update-check":
+        loadUpdate(true);
+        break;
       case "more":
         if (!state.more.delete(el.dataset.key)) state.more.add(el.dataset.key);
         render();
@@ -3817,7 +3860,9 @@ in ${x.cwd}`)}">
       if (key === "notifyMeltdown") c.ui.notifyMeltdown = on;
       if (key === "notifyCleanups") c.ui.notifyCleanups = on;
       if (key === "alwaysOnTop") c.ui.alwaysOnTop = on;
+      if (key === "checkUpdates") c.ui.checkUpdates = on;
     });
+    if (key === "checkUpdates" && on) loadUpdate();
     if (key === "autoStop") toast(on ? "Deal. I'll clean up after them myself." : "Fine. I'll just tell you.");
     if (key === "notifications") toast(on ? "I'll let you know when it matters." : "Okay. Not a peep.");
   });
@@ -3921,6 +3966,10 @@ in ${x.cwd}`)}">
     applySnap(await invoke("get_snapshot"));
     state.ready = true;
     loadStopped();
+    // New versions: a first look once things have settled, then now and then (she asks GitHub at
+    // most once a day, however often this runs).
+    setTimeout(loadUpdate, 20000);
+    setInterval(loadUpdate, 6 * 3600 * 1000);
     bridge.listen("snapshot", (e) => applySnap(e.payload));
     // Watchdog: if updates stop arriving (a hidden window can miss them), go and fetch one.
     setInterval(async () => {
