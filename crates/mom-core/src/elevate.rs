@@ -181,36 +181,75 @@ pub fn admin_may_delete(target: &Path) -> Result<(), String> {
     }
 }
 
-/// May mom run `program` for you? Only a whole path to a real file (not a link) that you or
-/// Windows own, in a folder you or Windows own, and neither of them open to change by just
-/// anybody on this PC (Everyone, Users, whoever is signed in). A program found by its name on
-/// the PATH could otherwise be something another account dropped into a folder everyone can
-/// write to, waiting to be run as you.
+/// A program mom is about to run, held open: until this is dropped nothing can write to it,
+/// delete it, rename it, or rename a folder it's in.
+#[derive(Debug)]
+pub struct Held {
+    _file: std::fs::File,
+    /// Where it really is, with no links on the way: the path to run.
+    pub path: String,
+}
+
+/// Opens `program` for mom to run for you, if Windows says it's signed by `org` (of `country`):
+/// the organisation named in a certificate Windows trusts, chain and all. A name found on the
+/// PATH could otherwise be anything somebody dropped into a folder that's searched first.
 ///
-/// An account or group that was let in by name is fine: that was set up on purpose (a coding
-/// agent's sandbox account, in the profile it works in), and it's the same program your own
-/// terminal runs.
-pub fn safe_to_run(program: &Path) -> bool {
-    if !program.is_absolute() || program.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return false;
-    }
+/// What Windows checks is the open file itself, and the file stays open in the `Held`, so what
+/// runs is what was checked: nothing can swap it in between. Who else may write where it lies
+/// doesn't come into it, with one exception: a program loads what lies next to it, so its
+/// folder has to be yours or Windows', and not one a crowd (Everyone, Users, whoever is signed
+/// in) can put things in. An account let into that folder by name still can, as it can for the
+/// same program run from your own terminal.
+pub fn hold_signed(program: &Path, org: &str, country: &str) -> Result<Held, String> {
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        match std::fs::symlink_metadata(program) {
-            Ok(m) if m.is_file() && m.file_attributes() & 0x400 == 0 => {}
-            _ => return false,
+        use std::os::windows::fs::OpenOptionsExt;
+        let name = program.display();
+        if !program.is_absolute() {
+            return Err(format!("{name} isn't a whole path, so mom won't run it."));
         }
-        let Some(dir) = program.parent() else { return false };
-        // Write, append, DELETE, WRITE_DAC, WRITE_OWNER, GENERIC_WRITE, GENERIC_ALL; and in the
-        // folder, deleting what's there (so it can't be swapped for something else).
-        const CHANGE: u32 = 0x2 | 0x4 | 0x0001_0000 | 0x0004_0000 | 0x0008_0000 | 0x4000_0000 | 0x1000_0000;
-        acl::yours(program, CHANGE) && acl::yours(dir, CHANGE | 0x40)
+        // Others may read it meanwhile (Windows has to, to run it); nobody may write to it,
+        // delete it or rename it.
+        let file = std::fs::OpenOptions::new().read(true).share_mode(1).open(program).map_err(|e| format!("Mom couldn't open {name}: {e}"))?;
+        let path = match (file.metadata(), final_path(&file)) {
+            (Ok(m), Some(p)) if m.is_file() && p.to_ascii_lowercase().ends_with(".exe") => p,
+            _ => return Err(format!("{name} isn't a program on this PC, so mom won't run it.")),
+        };
+        match signer(Path::new(&path), Some(&file))? {
+            Some(s) if s.org == org && s.country == country => {}
+            _ => return Err(format!("{name} isn't signed by {org}, so mom won't run it.")),
+        }
+        // Add a file or a folder, DELETE, WRITE_DAC, WRITE_OWNER, GENERIC_WRITE, GENERIC_ALL,
+        // and deleting what's in it (FILE_DELETE_CHILD).
+        const CHANGE: u32 = 0x2 | 0x4 | 0x0001_0000 | 0x0004_0000 | 0x0008_0000 | 0x4000_0000 | 0x1000_0000 | 0x40;
+        if !Path::new(&path).parent().is_some_and(|dir| acl::yours(dir, CHANGE)) {
+            return Err(format!("{name} is in a folder anybody on this PC can put things in, so mom won't run it."));
+        }
+        Ok(Held { _file: file, path })
     }
     #[cfg(not(windows))]
     {
-        std::fs::symlink_metadata(program).map(|m| m.is_file()).unwrap_or(false)
+        let _ = (program, org, country);
+        Err("Only on Windows.".into())
     }
+}
+
+/// Where an open file really is ("C:\..."), every link on the way followed. Nothing for a file
+/// that isn't on one of this PC's lettered drives (one on another computer, say).
+#[cfg(windows)]
+fn final_path(file: &std::fs::File) -> Option<String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+    let mut buf = vec![0u16; 1024];
+    // SAFETY: the handle is open for the length of the call; `buf` is ours, and its length is given.
+    let n = unsafe { GetFinalPathNameByHandleW(file.as_raw_handle() as _, buf.as_mut_ptr(), buf.len() as u32, 0) } as usize;
+    if n == 0 || n >= buf.len() {
+        return None;
+    }
+    let full = String::from_utf16(&buf[..n]).ok()?;
+    let plain = full.strip_prefix(r"\\?\")?;
+    let b = plain.as_bytes();
+    (b.len() > 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\').then(|| plain.to_string())
 }
 
 /// What to do when mom won't ask for an administrator from where she is.
@@ -263,15 +302,35 @@ pub fn safe_to_elevate(exe: &Path, app: &Path) -> Result<(), String> {
 /// The certificate `file` is signed with, if it's signed (checked by Windows, chain and all).
 /// A signature that doesn't check out is an error, not "unsigned".
 pub fn signature(file: &Path) -> Result<Option<Vec<u8>>, String> {
+    Ok(signer(file, None)?.map(|s| s.cert))
+}
+
+/// Who signed a file: the certificate, and the organisation and country it names.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Signer {
+    cert: Vec<u8>,
+    org: String,
+    country: String,
+}
+
+/// Who signed `file`, if it's signed (checked by Windows, chain and all). Given the file
+/// `open`, Windows reads it through that handle: what's checked is the file that's held open,
+/// whatever its path leads to by then.
+fn signer(file: &Path, open: Option<&std::fs::File>) -> Result<Option<Signer>, String> {
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::{TRUST_E_NOSIGNATURE, TRUST_E_PROVIDER_UNKNOWN, TRUST_E_SUBJECT_FORM_UNKNOWN};
+        use windows_sys::Win32::Security::Cryptography::{CertGetNameStringW, CERT_NAME_ATTR_TYPE};
         use windows_sys::Win32::Security::WinTrust::{
             WTHelperGetProvSignerFromChain, WTHelperProvDataFromStateData, WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA,
             WINTRUST_FILE_INFO, WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
         };
         let path = wide(&file.to_string_lossy());
         let mut info = WINTRUST_FILE_INFO { cbStruct: std::mem::size_of::<WINTRUST_FILE_INFO>() as u32, pcwszFilePath: path.as_ptr(), ..Default::default() };
+        if let Some(open) = open {
+            use std::os::windows::io::AsRawHandle;
+            info.hFile = open.as_raw_handle() as _;
+        }
         let mut data = WINTRUST_DATA {
             cbStruct: std::mem::size_of::<WINTRUST_DATA>() as u32,
             dwUIChoice: WTD_UI_NONE,
@@ -299,7 +358,17 @@ pub fn signature(file: &Path) -> Result<Option<Vec<u8>>, String> {
                 if leaf.is_null() || (*leaf).pbCertEncoded.is_null() {
                     return None;
                 }
-                Some(std::slice::from_raw_parts((*leaf).pbCertEncoded, (*leaf).cbCertEncoded as usize).to_vec())
+                // One part of the name the certificate was issued to, by its number ("2.5.4.10").
+                let named = |oid: &[u8]| {
+                    let mut buf = [0u16; 256];
+                    let n = CertGetNameStringW(leaf, CERT_NAME_ATTR_TYPE, 0, oid.as_ptr().cast(), buf.as_mut_ptr(), buf.len() as u32) as usize;
+                    String::from_utf16_lossy(&buf[..n.saturating_sub(1).min(buf.len())])
+                };
+                Some(Signer {
+                    cert: std::slice::from_raw_parts((*leaf).pbCertEncoded, (*leaf).cbCertEncoded as usize).to_vec(),
+                    org: named(b"2.5.4.10\0"),
+                    country: named(b"2.5.4.6\0"),
+                })
             }
         });
         data.dwStateAction = WTD_STATEACTION_CLOSE;
@@ -313,7 +382,7 @@ pub fn signature(file: &Path) -> Result<Option<Vec<u8>>, String> {
     }
     #[cfg(not(windows))]
     {
-        let _ = file;
+        let _ = (file, open);
         Ok(None)
     }
 }
@@ -546,57 +615,110 @@ pub fn split_command(cmd: &str) -> Option<(String, String)> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_program_is_run_only_where_not_just_anybody_could_have_put_it() {
-        let root = std::env::temp_dir().join(format!("mom-run-{}", std::process::id()));
+    /// A folder of the test's own under the temp folder, with only the person running the tests
+    /// let in, whoever the temp folder itself lets in.
+    #[cfg(windows)]
+    fn own_folder(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("mom-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        // A folder of its own, whoever the temp folder lets in: only the person running the tests.
-        #[cfg(windows)]
-        let icacls = |path: &Path, args: &[&str]| {
-            let mut all = vec![path.to_str().unwrap()];
-            all.extend(args);
-            crate::util::run("icacls", &all, std::time::Duration::from_secs(20)).map(|o| o.ok()).unwrap_or(false)
-        };
-        #[cfg(windows)]
         assert!(icacls(&root, &["/inheritance:r", "/grant:r", &format!("*{}:(OI)(CI)F", acl::me()[0])]));
+        root
+    }
+
+    #[cfg(windows)]
+    fn icacls(path: &Path, args: &[&str]) -> bool {
+        let mut all = vec![path.to_str().unwrap()];
+        all.extend(args);
+        crate::util::run("icacls", &all, std::time::Duration::from_secs(20)).map(|o| o.ok()).unwrap_or(false)
+    }
+
+    /// Edge comes signed (by Microsoft Corporation, US) wherever it's installed.
+    #[cfg(windows)]
+    fn edge() -> Option<std::path::PathBuf> {
+        let edge = std::path::PathBuf::from(std::env::var("ProgramFiles(x86)").unwrap_or_default()).join(r"Microsoft\Edge\Application\msedge.exe");
+        edge.is_file().then_some(edge)
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_program_is_run_only_if_its_signer_is_who_it_should_be() {
+        // This test program isn't signed; a path that isn't whole, a folder and nothing at all aren't programs.
+        let me = std::env::current_exe().unwrap();
+        let refused = |p: &Path| hold_signed(p, "Microsoft Corporation", "US").unwrap_err();
+        assert!(refused(&me).contains("isn't signed by Microsoft Corporation"), "{}", refused(&me));
+        assert!(refused(Path::new("msedge.exe")).contains("isn't a whole path"));
+        assert!(refused(me.parent().unwrap()).contains("won't run it") || refused(me.parent().unwrap()).contains("couldn't open"));
+        assert!(refused(&me.with_file_name("nothing-here.exe")).contains("couldn't open"));
+        let Some(edge) = edge() else { return };
+        let root = own_folder("signed");
         std::fs::create_dir_all(root.join("bin")).unwrap();
         let exe = root.join("bin").join("claude.exe");
-        std::fs::write(&exe, b"x").unwrap();
-        assert!(safe_to_run(&exe), "one you made, in a folder of your own");
-        // Not a whole path, a path with "..", a folder, and something that isn't there: no.
-        assert!(!safe_to_run(Path::new("claude.exe")));
-        assert!(!safe_to_run(&root.join("bin").join("..").join("bin").join("claude.exe")));
-        assert!(!safe_to_run(&root.join("bin")));
-        assert!(!safe_to_run(&root.join("bin").join("nothing.exe")));
-        #[cfg(windows)]
-        {
-            // A folder everyone on the PC may put things in, and what's in it: could be anybody's.
-            for (name, crowd) in [("everyone", "S-1-1-0"), ("users", "S-1-5-32-545"), ("signed-in", "S-1-5-11")] {
-                let open = root.join(name);
-                std::fs::create_dir_all(&open).unwrap();
-                assert!(icacls(&open, &["/grant", &format!("*{crowd}:(OI)(CI)M")]), "{name}");
-                let theirs = open.join("claude.exe");
-                std::fs::write(&theirs, b"x").unwrap();
-                assert!(!safe_to_run(&theirs), "a program in a folder {name} can change");
-            }
-            // Your own folder, but the program itself is open to everyone: no.
-            let loose = root.join("bin").join("loose.exe");
-            std::fs::write(&loose, b"x").unwrap();
-            assert!(icacls(&loose, &["/grant", "*S-1-1-0:M"]));
-            assert!(!safe_to_run(&loose));
-            // Reading and running it is all a crowd may do: still yours.
-            let shown = root.join("bin").join("shown.exe");
-            std::fs::write(&shown, b"x").unwrap();
-            assert!(icacls(&shown, &["/grant", "*S-1-5-32-545:RX"]));
-            assert!(safe_to_run(&shown));
-            // One account or group let in by name isn't a crowd; the groups everyone is in are.
-            assert!(acl::named("S-1-5-21-1111-2222-3333-1004"));
-            for crowd in ["S-1-1-0", "S-1-5-11", "S-1-5-32-545", "S-1-5-4", "S-1-15-2-1", "S-1-5-21-1111-2222-3333-513", "S-1-5-21-1111-2222-3333-501"] {
-                assert!(!acl::named(crowd), "{crowd}");
-            }
+        std::fs::copy(&edge, &exe).unwrap();
+        // Signed by who it should be: held, and the path to run is where it really is.
+        let held = hold_signed(&exe, "Microsoft Corporation", "US").unwrap();
+        assert!(Path::new(&held.path).is_absolute() && !held.path.starts_with(r"\\") && held.path.to_lowercase().ends_with(r"\bin\claude.exe"), "{}", held.path);
+        // While it's held it can be read (Windows has to, to run it) and nothing else: not written
+        // to, deleted or renamed, and neither can the folders it's in be renamed.
+        assert!(std::fs::File::open(&exe).is_ok());
+        assert!(std::fs::OpenOptions::new().write(true).open(&exe).is_err());
+        assert!(std::fs::remove_file(&exe).is_err());
+        assert!(std::fs::rename(&exe, root.join("bin").join("other.exe")).is_err());
+        assert!(std::fs::rename(root.join("bin"), root.join("elsewhere")).is_err());
+        assert!(std::fs::rename(&root, root.with_extension("moved")).is_err());
+        assert!(exe.is_file() && signature(&exe).unwrap().is_some());
+        drop(held);
+        assert!(std::fs::OpenOptions::new().write(true).open(&exe).is_ok(), "let go of once it's dropped");
+        // Signed, but not by who it should be: the organisation and the country both count.
+        for (org, country) in [("Anthropic, PBC", "US"), ("Microsoft Corporation", "DE"), ("Microsoft", "US"), ("", "")] {
+            let why = hold_signed(&exe, org, country).unwrap_err();
+            assert!(why.contains("isn't signed by"), "{why}");
         }
-        let _ = std::fs::remove_dir_all(&root);
+        // Reached through a link, it's the real file that's held and its real path that's run.
+        let link = root.join("link");
+        if junction::create(root.join("bin"), &link).is_ok() {
+            let held = hold_signed(&link.join("claude.exe"), "Microsoft Corporation", "US").unwrap();
+            assert!(held.path.to_lowercase().ends_with(r"\bin\claude.exe"), "{}", held.path);
+            drop(held);
+            let _ = junction::delete(&link);
+            let _ = std::fs::remove_dir(&link);
+        }
+        // One changed byte and Windows no longer vouches for it.
+        let mut bytes = std::fs::read(&exe).unwrap();
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 0xff;
+        std::fs::write(&exe, bytes).unwrap();
+        assert!(hold_signed(&exe, "Microsoft Corporation", "US").unwrap_err().contains("doesn't check out"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_signed_program_isnt_run_from_a_folder_anybody_can_put_things_in() {
+        let Some(edge) = edge() else { return };
+        let root = own_folder("crowd");
+        // A program loads what lies next to it: in a folder everyone on the PC may put things in,
+        // even the right program isn't run.
+        for (name, crowd) in [("everyone", "S-1-1-0"), ("users", "S-1-5-32-545"), ("signed-in", "S-1-5-11")] {
+            let open = root.join(name);
+            std::fs::create_dir_all(&open).unwrap();
+            assert!(icacls(&open, &["/grant", &format!("*{crowd}:(OI)(CI)M")]), "{name}");
+            std::fs::copy(&edge, open.join("claude.exe")).unwrap();
+            let why = hold_signed(&open.join("claude.exe"), "Microsoft Corporation", "US").unwrap_err();
+            assert!(why.contains("anybody on this PC can put things in"), "{name}: {why}");
+        }
+        // A crowd that may only look and run is no trouble.
+        let shown = root.join("shown");
+        std::fs::create_dir_all(&shown).unwrap();
+        assert!(icacls(&shown, &["/grant", "*S-1-5-32-545:(OI)(CI)RX"]));
+        std::fs::copy(&edge, shown.join("claude.exe")).unwrap();
+        assert!(hold_signed(&shown.join("claude.exe"), "Microsoft Corporation", "US").is_ok());
+        // One account or group let in by name isn't a crowd; the groups everyone is in are.
+        assert!(acl::named("S-1-5-21-1111-2222-3333-1004"));
+        for crowd in ["S-1-1-0", "S-1-5-11", "S-1-5-32-545", "S-1-5-4", "S-1-15-2-1", "S-1-5-21-1111-2222-3333-513", "S-1-5-21-1111-2222-3333-501"] {
+            assert!(!acl::named(crowd), "{crowd}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -129,7 +129,7 @@ Running > Agents ends with a row for each agent that has a set-up on this PC: Cl
 - **Settings that apply everywhere**: whether the agent asks before it runs commands, a settings file that can't be read, keys kept in plain text, an instructions file long enough to slow every session.
 - **Skills** and the files all of this lives in.
 
-Mom herself only reads: she starts no server, runs no hook and asks nothing over the network. Check now is the one thing that does more, and it's Claude Code doing it, when you press the button: never as administrator, and only a `claude` that not just anybody on the PC could have swapped. A finding is a sentence with something to do: a command to copy, or a note for your agent.
+Mom herself only reads: she starts no server, runs no hook and asks nothing over the network. Check now is the one thing that does more, and it's Claude Code doing it, when you press the button: never as administrator, and only a `claude.exe` that Windows says Anthropic signed. A finding is a sentence with something to do: a command to copy, or a note for your agent.
 
 Tap any row to read the file behind it. That switches to BIG MODE, where there's room for a page: Markdown is laid out, settings files are shown as written. What looks like a key, a token or a password is blanked before the file reaches the screen, and only files mom herself found in an agent's set-up can be opened. She goes by names and shapes (what follows `--token`, anything under `env`, a long run of letters and digits), so a short password in the middle of a note can get past her: it's your own file on your own screen, but look it over before you share it. A settings file she can't read properly isn't shown at all: she couldn't tell what in it is a key.
 

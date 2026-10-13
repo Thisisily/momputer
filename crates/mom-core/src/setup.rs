@@ -1093,7 +1093,8 @@ fn claude(paths: &Paths) -> Option<AgentSetup> {
     }
     // What Claude Code itself found when mom last asked it to check (`ask_claude`): that's the
     // word on each server it listed, over anything guessed from files.
-    a.can_check = !crate::elevate::is_elevated() && claude_program(paths).is_ok();
+    // (Whether mom will run it is settled when she's asked to: see `ask_claude`.)
+    a.can_check = !crate::elevate::is_elevated() && !claude_programs(std::env::var_os("PATH").as_deref(), &paths.home).is_empty();
     if let Some((at, found)) = live(paths, "claude") {
         a.checked = Some(at);
         // (A warning about how a server is called stands: that it answers doesn't make plain http safe.)
@@ -1255,20 +1256,23 @@ fn simple(paths: &Paths, (id, agent, dir, servers_file, servers_key, memory_file
 
 // ------------------------------------------------------------------ asking the agent itself
 
-/// Where Claude Code's command is: on the PATH, or where its installer puts it. Only one mom may
-/// run (`elevate::safe_to_run`): a whole path to a real file that not just anybody on this PC
-/// could have put there or changed. The first `claude` on the PATH is as far as she looks, since
-/// that's the one that would run. Otherwise, why not.
-fn claude_program(paths: &Paths) -> Result<PathBuf, &'static str> {
-    let found = crate::util::on_path("claude").or_else(|| {
-        let local = paths.home.join(".local").join("bin");
-        ["claude.exe", "claude.cmd"].iter().map(|n| local.join(n)).find(|p| p.is_file())
-    });
-    match found {
-        None => Err("Claude Code's command isn't on this PC's PATH, so mom can't ask it."),
-        Some(p) if !crate::elevate::safe_to_run(&p) => Err("Claude Code's command is where anybody on this PC could change it, so mom won't run it."),
-        Some(p) => Ok(p),
+/// Who signs Claude Code's program for Windows: the organisation and the country its
+/// certificate names.
+const CLAUDE_SIGNER: (&str, &str) = ("Anthropic, PBC", "US");
+
+/// Every `claude.exe` Windows would find by that name, in its order: in the PATH's folders
+/// (`path`; whole paths only, never "wherever mom happens to be"), then where Claude Code's
+/// installer puts it. Not the `claude.cmd` a package manager writes: mom can check who signed a
+/// program, not everything a script goes on to start.
+fn claude_programs(path: Option<&std::ffi::OsStr>, home: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    let folders = path.map(|p| std::env::split_paths(p).filter(|dir| dir.is_absolute()).collect::<Vec<_>>()).unwrap_or_default();
+    for program in folders.into_iter().chain(Some(home.join(".local").join("bin"))).map(|dir| dir.join("claude.exe")) {
+        if found.len() < 4 && !found.contains(&program) && program.is_file() {
+            found.push(program);
+        }
     }
+    found
 }
 
 fn live_file(paths: &Paths) -> PathBuf {
@@ -1317,8 +1321,22 @@ pub fn ask_claude(paths: &Paths) -> Result<usize, String> {
     if crate::elevate::is_elevated() {
         return Err("Mom won't start other programs while she's running as administrator. Ask again from the ordinary widget.".into());
     }
-    let program = claude_program(paths)?;
-    let out = crate::util::run_in(&program.to_string_lossy(), &["mcp", "list"], Some(&paths.home), std::time::Duration::from_secs(120)).map_err(|e| format!("Claude Code didn't start: {e}"))?;
+    // Only the Claude Code that Anthropic signed, held open from the check until it has finished
+    // (`elevate::hold_signed`): the first one on the PATH that is.
+    let mut program = Err("Mom couldn't find claude.exe on this PC's PATH, so she can't ask it.".to_string());
+    for found in claude_programs(std::env::var_os("PATH").as_deref(), &paths.home) {
+        let held = crate::elevate::hold_signed(&found, CLAUDE_SIGNER.0, CLAUDE_SIGNER.1);
+        if held.is_ok() || program.as_ref().is_err_and(|why| why.starts_with("Mom couldn't find")) {
+            program = held;
+        }
+        if program.is_ok() {
+            break;
+        }
+    }
+    let program = program?;
+    let out = crate::util::run_in(&program.path, &["mcp", "list"], Some(&paths.home), std::time::Duration::from_secs(120));
+    drop(program);
+    let out = out.map_err(|e| format!("Claude Code didn't start: {e}"))?;
     if out.timed_out {
         return Err("Claude Code took too long to check its servers.".into());
     }
@@ -1557,6 +1575,41 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let paths = Paths::under(&root);
         (root, paths)
+    }
+
+    #[test]
+    fn only_a_claude_exe_at_a_whole_path_is_a_candidate() {
+        let (root, paths) = fixture("programs");
+        let exe = |dir: &str, name: &str| {
+            let p = root.join(dir).join(name);
+            put(&p, "x");
+            p
+        };
+        exe("npm", "claude.cmd");
+        exe("scripts", "claude.bat");
+        let first = exe("tools", "claude.exe");
+        let own = exe("home/.local/bin", "claude.exe");
+        std::fs::create_dir_all(root.join("folder").join("claude.exe")).unwrap();
+        let path = std::env::join_paths([
+            PathBuf::from("."),
+            PathBuf::from(""),
+            PathBuf::from("tools"),
+            root.join("npm"),
+            root.join("scripts"),
+            root.join("folder"),
+            root.join("nowhere"),
+            root.join("tools"),
+            root.join("tools"),
+            root.join("home").join(".local").join("bin"),
+        ])
+        .unwrap();
+        // The scripts, the folder by that name and the folders that aren't whole paths are passed
+        // over; the installer's own place is looked at even when the PATH doesn't name it.
+        assert_eq!(claude_programs(Some(&path), &root.join("home")), [first.clone(), own.clone()]);
+        assert_eq!(claude_programs(None, &root.join("home")), [own]);
+        assert_eq!(claude_programs(Some(std::ffi::OsStr::new("")), &root.join("nobody")), Vec::<PathBuf>::new());
+        let _ = paths;
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
