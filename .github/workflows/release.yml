@@ -30,8 +30,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
       # No build cache here: what gets signed is built from scratch.
-      - name: Install the Tauri CLI
-        run: cargo install tauri-cli --version "^2.12" --locked
+      #
+      # The Tauri CLI (it only puts the installers together) is Tauri's own ready-made build,
+      # checked against the fingerprint written here. Compiling it from source took ten minutes
+      # of every run. For a newer one, change the version and the fingerprint together: both
+      # are on its release page (github.com/tauri-apps/tauri/releases, "tauri-cli v...").
+      - name: Get the Tauri CLI
+        shell: pwsh
+        env:
+          TAURI_CLI: 2.12.2
+          TAURI_CLI_SHA256: bef439eb1a0edd5192ed0009945e5de660b642a51519efe7d6953d70c5ab1939
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'cargo-tauri.zip'
+          Invoke-WebRequest "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v$env:TAURI_CLI/cargo-tauri-x86_64-pc-windows-msvc.zip" -OutFile $zip
+          $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $env:TAURI_CLI_SHA256) { throw "The Tauri CLI that came down isn't the one expected (its fingerprint is $got)." }
+          $bin = Join-Path $HOME '.cargo/bin'
+          Expand-Archive $zip -DestinationPath $bin -Force
+          cargo tauri --version
+          if ($LASTEXITCODE -ne 0) { throw 'The Tauri CLI is not where cargo looks for it.' }
 
       - name: Test
         run: cargo test -p mom-core -p mom-cli
