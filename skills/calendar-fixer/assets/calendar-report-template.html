@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calendar report</title>
+<meta name="description" content="A read-only look at six weeks of a Google Calendar, with fixes to approve one by one.">
+<meta name="referrer" content="no-referrer">
+<style>
+:root {
+  --bg: #f5f5f3; --card: #ffffff; --ink: #0b0b0b; --ink-2: #4a4a4a; --muted: #8a8a8a; --line: #e2e2de;
+  --bar: #0b0b0b; --bar-2: #bdbdb8; --red: #d71921; --green: #1e9e57; --focus: #0b0b0b;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+    --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+  --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+body { padding: 0 16px 150px; overflow-wrap: anywhere; }
+main { max-width: 1080px; margin: 0 auto; }
+a { color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.label { font: 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); vertical-align: middle; }
+.dot.red { background: var(--red); } .dot.green { background: var(--green); }
+header.top { padding: 40px 0 20px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between; }
+h1 { font: 600 34px/1.1 var(--sans); letter-spacing: -.02em; margin: 6px 0 0; }
+h2 { font: 600 19px/1.3 var(--sans); margin: 0; }
+h3 { font: 600 15px/1.3 var(--sans); margin: 0; }
+.sub { color: var(--ink-2); }
+section { margin-top: 28px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; min-width: 0; }
+.grid { display: grid; gap: 12px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.tile .num { font: 500 30px/1.1 var(--mono); letter-spacing: -.02em; margin-top: 8px; }
+.tile .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.two { grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
+.highlights { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
+.headline { font-size: 17px; margin: 0; }
+.bars { display: grid; gap: 8px; margin-top: 14px; }
+.bar-row { display: grid; grid-template-columns: minmax(80px, 30%) 1fr minmax(64px, auto); gap: 10px; align-items: center; }
+.bar-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.bar-row svg { display: block; width: 100%; height: 18px; }
+.bar-row rect.cap { fill: var(--line); }
+.bar-row rect.fill { fill: var(--bar); }
+.bar-row:hover rect.fill { opacity: .75; }
+.bar-val { font: 12px/18px var(--mono); color: var(--ink-2); white-space: nowrap; text-align: right; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.chart { margin-top: 14px; }
+svg.cols { display: block; width: 100%; overflow: visible; }
+svg.cols .col { fill: var(--bar); }
+svg.cols .col.off { fill: var(--bar-2); }
+svg.cols .col.past { opacity: .4; }
+svg.cols .hit { fill: transparent; }
+svg.cols g:hover .col { opacity: .7; }
+svg.cols text { fill: var(--muted); font: 11px var(--mono); }
+svg.cols line { stroke: var(--line); }
+svg.cols line.now { stroke: var(--muted); stroke-dasharray: 2 3; }
+svg.cols circle.flag { fill: var(--red); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px; text-decoration: none; display: inline-block; white-space: nowrap; }
+.btn:hover { border-color: var(--ink); }
+.btn.small { padding: 2px 10px; font-size: 12px; }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.group-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.group-head .meta { color: var(--muted); font: 12px var(--mono); }
+.group-desc { color: var(--ink-2); font-size: 13px; margin: 6px 0 10px; }
+.items { list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.item input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: var(--ink); }
+.item .who { font-weight: 600; font-size: 14px; }
+.item .addr { font: 12px var(--mono); color: var(--ink-2); }
+.item .why { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.item .does { color: var(--ink-2); font-size: 13px; margin-top: 4px; }
+.item .side { font: 12px/1.5 var(--mono); color: var(--muted); text-align: right; max-width: 180px; }
+.item select { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 2px 6px; font-size: 13px; }
+.row-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.more { color: var(--muted); font-size: 12px; margin-top: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 8px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: break-word; }
+th { font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 400; white-space: nowrap; }
+td.num { font-family: var(--mono); white-space: nowrap; }
+.scroll-x { overflow-x: auto; }
+.dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 12px 16px; z-index: 5; }
+.dock-in { max-width: 1080px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.dock .sum { font: 13px var(--mono); }
+.dock textarea { width: 100%; min-height: 60px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--bg); }
+.toast { position: fixed; left: 50%; bottom: 104px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 6; max-width: 90vw; }
+.toast.on { opacity: 1; }
+.hidden { display: none !important; }
+@media (max-width: 560px) {
+  h1 { font-size: 28px; }
+  .item { grid-template-columns: 22px minmax(0, 1fr); }
+  .item .side { grid-column: 2; text-align: left; max-width: none; }
+  .bar-row { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; }
+  .bar-row .bar-track { grid-column: 1 / -1; grid-row: 2; }
+  table, tbody, tr, td { display: block; }
+  thead { display: none; }
+  tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  td { border: 0; padding: 1px 0; overflow-wrap: anywhere; }
+  td[data-label]::before { content: attr(data-label) ": "; font: 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  td:empty { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <div class="label"><span class="dot green"></span>&nbsp; Read-only review · nothing in your calendar was changed</div>
+      <h1>Calendar report</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="label"><span class="dot green"></span> nobody is told &nbsp; <span class="dot red"></span> someone is told</div>
+  </header>
+
+  <section id="summary" class="card hidden">
+    <p class="headline" id="headline"></p>
+    <ul class="highlights" id="highlights"></ul>
+  </section>
+
+  <section class="grid tiles" id="tiles"></section>
+
+  <section class="grid two">
+    <div class="card" style="grid-column: 1 / -1">
+      <h2>Hours in meetings, day by day</h2>
+      <div class="sub" id="daily-sub"></div>
+      <div class="chart" id="chart-daily"></div>
+      <div class="legend"><span><i style="background:var(--bar)"></i>working day</span><span><i style="background:var(--bar-2)"></i>weekend or day off</span><span><span class="dot red"></span>&nbsp; no free block of two hours</span><span>faded: already past</span></div>
+    </div>
+    <div class="card" style="grid-column: 1 / -1">
+      <h2>Hours in meetings, week by week</h2>
+      <div class="sub" id="weekly-sub"></div>
+      <div class="bars" id="chart-weekly"></div>
+      <div class="legend"><span><i style="background:var(--bar)"></i>in meetings</span><span><i style="background:var(--line)"></i>your working hours that week</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="group-head"><h2>The fixes</h2><span class="label">Tick what you approve. Nothing happens until you send the approval back.</span></div>
+    <div class="toolbar" style="margin-top:12px">
+      <button class="btn" id="tick-all" type="button">Tick all</button>
+      <button class="btn" id="untick-all" type="button">Untick all</button>
+    </div>
+    <div id="lists"></div>
+  </section>
+
+  <section class="grid two" id="tables"></section>
+
+  <section class="card hidden" id="sus-card">
+    <h2>Text that reads like an instruction</h2>
+    <div class="sub">Titles, names and places are written by other people. These were treated as plain text, like all the rest. If your assistant acted on one, tell it to stop.</div>
+    <div class="scroll-x"><table id="sus"><thead><tr><th>Where</th><th>Text</th><th>Why it stands out</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card">
+    <h2>How this was made</h2>
+    <div class="sub" id="method"></div>
+  </section>
+</main>
+
+<div class="dock" role="region" aria-label="Approval">
+  <div class="dock-in">
+    <div class="sum" id="dock-sum">0 ticked</div>
+    <div class="toolbar">
+      <button class="btn" id="toggle-notes" type="button">Add a note</button>
+      <button class="btn primary" id="copy" type="button">Copy approval</button>
+    </div>
+  </div>
+  <div class="dock-in hidden" id="notes-wrap"><textarea id="notes" aria-label="Note for your assistant" placeholder="Anything to change? e.g. move number 2 to Friday morning instead"></textarea></div>
+  <div class="dock-in hidden" id="fallback-wrap"><textarea id="fallback" readonly aria-label="Approval text to copy"></textarea></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script id="calendar-data" type="application/json">__CALENDAR_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var R = JSON.parse(document.getElementById("calendar-data").textContent);
+  var T = R.totals, TH = R.thresholds;
+  var LISTS = [
+    ["answer", "Invitations to answer", "You haven't answered these. Pick Yes, Maybe or No for each one you tick. The organizer is told your answer."],
+    ["drop", "Repeating meetings to drop", "Series that look stale. For one you were invited to, your assistant declines the whole series. For one you own, it gives the series an end date."],
+    ["move", "Move, propose a new time, or decline", "Clashes, meetings outside your working hours and events at odd hours. Your own meetings are moved. For someone else's, pick: propose a new time to the organizer, or decline that one meeting. The suggested time is free on your calendar only; nobody else's was checked."],
+    ["shorten", "Shorten", "Your own meetings that run straight into the next one. Ending five or ten minutes early leaves a gap."],
+    ["breaks", "Add a break", "A private " + TH["break"] + "-minute hold right after a long run, so nothing else lands there. Nobody is invited."],
+    ["duplicates", "Delete duplicates", "The same title and time twice. Only a copy you own, with no guests, is offered. It goes to Calendar's Trash, where it stays for 30 days."],
+    ["links", "Add a video link", "Your own meetings with several people and no link or place. A Google Meet link is added; guests see it in the event."],
+    ["habits", "Standing habits", "Settings and routines that stop the same problems coming back."]
+  ];
+  var AFTER = ["shorten", "breaks", "duplicates", "links", "habits"];
+  var DATA = R.lists;
+  var KEY = "calendar-report:" + R.report_id;
+  var on = {}, ans = {}, alt = {};
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { saved = null; }
+  if (!saved || typeof saved !== "object") saved = {};
+  LISTS.forEach(function (L) {
+    var k = L[0], max = (DATA[k] || []).length;
+    on[k] = new Set();
+    (Array.isArray(saved[k]) ? saved[k] : []).forEach(function (n) { if (typeof n === "number" && n >= 1 && n <= max && n % 1 === 0) on[k].add(n); });
+  });
+  // Nothing is ticked to begin with: most of these fixes tell another person something.
+  (DATA.answer || []).forEach(function (x) {
+    var s = saved.ans && saved.ans[x.n];
+    ans[x.n] = s === "yes" || s === "maybe" || s === "no" ? s : x.suggest;
+  });
+  (DATA.move || []).forEach(function (x) {
+    var s = saved.alt && saved.alt[x.n];
+    alt[x.n] = x.can_decline && (s === "decline" || (s !== "go" && x.suggest === "decline")) ? "decline" : "go";
+  });
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "text") n.textContent = attrs[k];
+      else if (k === "class") n.className = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    for (var i = 2; i < arguments.length; i++) { var c = arguments[i]; if (c != null) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); }
+    return n;
+  }
+  function svg(tag, attrs) { var n = document.createElementNS("http://www.w3.org/2000/svg", tag); Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); }); return n; }
+  function count(n) { return n == null ? "–" : Number(n).toLocaleString("en-US"); }
+  function plural(n, one, many) { return count(n) + " " + (n === 1 ? one : many || one + "s"); }
+  function hours(min) { var h = min / 60; return (h >= 10 || h % 1 === 0 ? Math.round(h) : h.toFixed(1)) + " h"; }
+  function length(min) { var h = Math.floor(min / 60), m = min % 60; return h && m ? h + " h " + m + " min" : h ? h + " h" : m + " min"; }
+  function save() { try { var o = { ans: ans, alt: alt }; Object.keys(on).forEach(function (k) { o[k] = Array.from(on[k]); }); localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* private window */ } }
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(function () { t.classList.remove("on"); }, 1800); }
+  function copy(text, ok) {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { toast(ok); }, function () { fallback(text); });
+    else fallback(text);
+  }
+  function fallback(text) { var w = $("fallback-wrap"), t = $("fallback"); w.classList.remove("hidden"); t.value = text; t.focus(); t.select(); toast("Copy the selected text (Ctrl+C)"); }
+
+  // Links. The script checked these already; the page checks again and shows text when in doubt.
+  var MEETING_HOSTS = ["meet.google.com", "teams.microsoft.com", "teams.live.com", "whereby.com"];
+  var MEETING_DOMAINS = ["zoom.us", "webex.com"];
+  var MEETING_RX = /^https:\/\/([a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+)(?:\/[A-Za-z0-9._~%\/?=&+-]*)?$/;
+  var DAY_RX = /^https:\/\/calendar\.google\.com\/calendar\/u\/0\/r\/day\/\d{4}\/\d{1,2}\/\d{1,2}$/;
+  function meetingLink(u) {
+    if (typeof u !== "string" || !u || u.length > 600) return "";
+    var m = MEETING_RX.exec(u);
+    if (!m) return "";
+    var h = m[1], ok = MEETING_HOSTS.indexOf(h) >= 0;
+    MEETING_DOMAINS.forEach(function (d) { if (h === d || h.slice(-(d.length + 1)) === "." + d) ok = true; });
+    return ok ? u : "";
+  }
+  function dayLink(u) { return typeof u === "string" && DAY_RX.test(u) ? u : ""; }
+  function linkTo(href, text, cls) { return el("a", { "class": cls || "", href: href, target: "_blank", rel: "noopener noreferrer", text: text }); }
+  function dayButton(x) { var u = dayLink(x.day_link); return u ? linkTo(u, "Open the day", "btn small") : null; }
+  function place(where) {
+    if (!where || (!where.text && !where.link)) return null;
+    var u = meetingLink(where.link), line = el("div", { "class": "why" }, "Where: ");
+    if (u) {
+      var shown = u.slice(8); if (shown.length > 48) shown = shown.slice(0, 47) + "…";
+      line.appendChild(linkTo(u, shown));
+      if (where.text && u.indexOf(where.text) < 0) line.appendChild(document.createTextNode(" · " + where.text));
+    } else line.appendChild(document.createTextNode(where.text));
+    return line;
+  }
+
+  // ---- header and summary
+  var src = (R.sources || []).join(" + ") || "unknown source";
+  $("subtitle").textContent = [R.account, R.window.start + " to " + R.window.end, R.timezone, "from " + src, R.complete ? "" : "busy days were counted, not listed"].filter(Boolean).join(" · ");
+  if (R.headline || (R.highlights || []).length) {
+    $("summary").classList.remove("hidden");
+    $("headline").textContent = R.headline || "";
+    (R.highlights || []).forEach(function (h) { $("highlights").appendChild(el("li", { text: h })); });
+  }
+  var perWeek = T.minutes_ahead / T.weeks_ahead;
+  [
+    ["Meetings ahead", count(T.meetings_ahead), "in the next " + plural(T.weeks_ahead, "week")],
+    ["In meetings", hours(perWeek), "a week on average, from today"],
+    ["Clashes", count(T.clashes), "pairs of events at the same time", T.clashes],
+    ["Not answered", count(T.unanswered), "invitations still waiting", T.unanswered],
+    ["Back to back", count(T.runs), "runs of " + TH.run_meetings + "+ meetings or " + length(TH.run_minutes) + " with no gap", T.runs],
+    ["No room to think", count(T.no_free_days), "working days with no free " + length(TH.free_block), T.no_free_days],
+    ["Outside your hours", count(T.outside), "meetings before " + R.working.start + ", after " + R.working.end + " or on a day off", T.outside],
+    ["Stale series", count(T.stale), "repeating meetings worth dropping", T.stale]
+  ].forEach(function (t) {
+    var lab = el("div", { "class": "label" });
+    if (t.length > 3) { lab.appendChild(el("span", { "class": "dot " + (t[3] ? "red" : "green") })); lab.appendChild(document.createTextNode("  ")); }
+    lab.appendChild(document.createTextNode(t[0]));
+    $("tiles").appendChild(el("div", { "class": "card tile" }, lab, el("div", { "class": "num", text: t[1] }), el("div", { "class": "note", text: t[2] })));
+  });
+
+  // ---- hours per day (inline SVG, drawn at the width it has)
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  function drawDaily() {
+    var box = $("chart-daily"), d = R.daily, n = d.length, max = 60;
+    box.textContent = "";
+    if (!n) { box.appendChild(el("div", { "class": "sub", text: "Nothing to show." })); return; }
+    d.forEach(function (x) { max = Math.max(max, x[1]); });
+    var top = Math.max(2, Math.ceil(max / 120) * 2), step = top > 8 ? 4 : 2;
+    var W = Math.max(260, Math.floor(box.clientWidth || 900)), H = 150, left = 26, bottom = 34, gap = W < 520 ? 1 : 3;
+    var bw = Math.max(1, (W - left - gap * (n - 1)) / n);
+    var s = svg("svg", { "class": "cols", viewBox: "0 0 " + W + " " + (H + bottom), height: H + bottom, role: "img", "aria-label": "Hours in meetings per day, " + n + " days" });
+    for (var t = 0; t <= top; t += step) {
+      var y = H - t / top * (H - 12);
+      s.appendChild(svg("line", { x1: left, x2: W, y1: y + 0.5, y2: y + 0.5 }));
+      var lab = svg("text", { x: 0, y: y + 3 }); lab.textContent = t + "h"; s.appendChild(lab);
+    }
+    d.forEach(function (x, i) {
+      var date = new Date(x[0] + "T12:00:00Z"), xx = left + i * (bw + gap), h = x[1] / (top * 60) * (H - 12), r = Math.min(3, bw / 2, h);
+      var past = x[0] < R.window.today, g = svg("g", {});
+      var tip = svg("title", {});
+      tip.textContent = DAYS[date.getUTCDay()] + " " + date.getUTCDate() + " " + MONTHS[date.getUTCMonth()] + ": " + (x[1] ? length(x[1]) + " in " + plural(x[2], "meeting") : "no meetings") + (x[4] ? " · no free block of two hours" : "") + (x[3] ? " · weekend or day off" : "");
+      var hit = svg("rect", { "class": "hit", x: xx - gap / 2, y: 0, width: bw + gap, height: H + 12 });
+      hit.appendChild(tip); g.appendChild(hit);
+      if (h > 0) g.appendChild(svg("path", { "class": "col" + (x[3] ? " off" : "") + (past ? " past" : ""), d: "M" + xx + "," + H + "V" + (H - h + r) + "Q" + xx + "," + (H - h) + " " + (xx + r) + "," + (H - h) + "H" + (xx + bw - r) + "Q" + (xx + bw) + "," + (H - h) + " " + (xx + bw) + "," + (H - h + r) + "V" + H + "Z" }));
+      if (x[4]) g.appendChild(svg("circle", { "class": "flag", cx: xx + bw / 2, cy: H + 7, r: Math.max(1.5, Math.min(2.5, bw / 2)) }));
+      s.appendChild(g);
+      if (x[0] === R.window.today) {
+        s.appendChild(svg("line", { "class": "now", x1: xx - gap / 2, x2: xx - gap / 2, y1: 0, y2: H }));
+        var now = svg("text", { x: xx + 2, y: 8 }); now.textContent = "today"; s.appendChild(now);
+      }
+      if (date.getUTCDay() === 1 && xx + 44 <= W) { var w = svg("text", { x: xx, y: H + 26 }); w.textContent = date.getUTCDate() + " " + MONTHS[date.getUTCMonth()]; s.appendChild(w); }
+    });
+    box.appendChild(s);
+  }
+  (function () {
+    var busiest = 0;
+    R.daily.forEach(function (x) { if (x[0] >= R.window.today) busiest = Math.max(busiest, x[1]); });
+    $("daily-sub").textContent = "Your working day is " + R.working.start + "–" + R.working.end + ", " + R.working.days.join(" ") + (R.working.given ? "" : " (assumed)") + ". Fullest day ahead: " + length(busiest) + " of meetings.";
+    drawDaily();
+    var raf = 0, last = $("chart-daily").clientWidth;
+    window.addEventListener("resize", function () {
+      if (raf) return;
+      raf = requestAnimationFrame(function () { raf = 0; var w = $("chart-daily").clientWidth; if (w !== last) { last = w; drawDaily(); } });
+    });
+  })();
+
+  // ---- hours per week (one small SVG per row, so labels stay real text)
+  (function () {
+    var box = $("chart-weekly"), max = 1;
+    R.weekly.forEach(function (w) { max = Math.max(max, w.minutes, w.capacity); });
+    $("weekly-sub").textContent = "How much of each week's working time goes to meetings.";
+    R.weekly.forEach(function (w) {
+      var share = w.capacity ? Math.round(w.minutes / w.capacity * 100) + "%" : "–";
+      var track = svg("svg", { role: "img", "aria-label": w.label + ": " + length(w.minutes) + " in meetings" });
+      var tip = svg("title", {}); tip.textContent = w.label + ": " + length(w.minutes) + " in " + plural(w.meetings, "meeting") + ", " + share + " of " + length(w.capacity) + " working time";
+      track.appendChild(tip);
+      if (w.capacity) track.appendChild(svg("rect", { "class": "cap", x: 0, y: 3, height: 12, rx: 3, width: (w.capacity / max * 100).toFixed(2) + "%" }));
+      if (w.minutes) track.appendChild(svg("rect", { "class": "fill", x: 0, y: 3, height: 12, rx: 3, width: Math.max(0.6, w.minutes / max * 100).toFixed(2) + "%" }));
+      box.appendChild(el("div", { "class": "bar-row" }, el("div", { "class": "bar-label", text: w.label + (w.now ? " · now" : "") }), el("div", { "class": "bar-track" }, track), el("div", { "class": "bar-val", text: hours(w.minutes) + " · " + share })));
+    });
+    if (!R.weekly.length) box.appendChild(el("div", { "class": "sub", text: "Nothing to show." }));
+  })();
+
+  // ---- tickable lists
+  var DOES = {
+    decline_series: "Declines every future meeting in this series.",
+    end_series: "Gives the series an end date, so it stops repeating. What already happened stays.",
+    add_break: "Adds a private hold. Nobody is invited.",
+    delete_event: "Deletes this one copy. It stays in Calendar's Trash for 30 days.",
+    add_video: "Adds a Google Meet link."
+  };
+  function rowFor(key, x) {
+    var body = el("div", null, el("div", { "class": "who", text: x.n + ". " + x.title }));
+    if (key === "habits") {
+      body.appendChild(el("div", { "class": "why", text: x.why }));
+      body.appendChild(el("div", { "class": "why", text: "How: " + x.how }));
+      body.appendChild(el("div", { "class": "why", text: "Your assistant: " + x.agent }));
+      return [body, null];
+    }
+    body.appendChild(el("div", { "class": "addr", text: x.when + " · " + x.calendar_name + (x.repeats ? " · repeats" : "") }));
+    (x.why || []).forEach(function (w) { body.appendChild(el("div", { "class": "why", text: w })); });
+    if (key === "answer") {
+      var sel = el("select", { "aria-label": "Answer for " + x.title });
+      [["yes", "Yes"], ["maybe", "Maybe"], ["no", "No"]].forEach(function (o) { var op = el("option", { value: o[0], text: o[1] }); if (ans[x.n] === o[0]) op.selected = true; sel.appendChild(op); });
+      sel.addEventListener("change", function () { ans[x.n] = sel.value; save(); update(); });
+      body.appendChild(el("div", { "class": "does" }, "Answer: ", sel));
+    } else if (key === "move") {
+      var verb = x.action === "move" ? "Moves it to " : "Proposes to the organizer: ";
+      var slot = x.slot ? verb + x.slot.when + "." : "No free time found in your next working days. Say a time in the note.";
+      if (x.can_decline) {
+        var pick = el("select", { "aria-label": "What to do with " + x.title });
+        [["go", "Propose a new time"], ["decline", "Decline this one"]].forEach(function (o) { var op = el("option", { value: o[0], text: o[1] }); if (alt[x.n] === o[0]) op.selected = true; pick.appendChild(op); });
+        pick.addEventListener("change", function () { alt[x.n] = pick.value; save(); update(); });
+        body.appendChild(el("div", { "class": "does" }, "Do: ", pick));
+        body.appendChild(el("div", { "class": "does", text: alt[x.n] === "decline" ? "Declines this one meeting. The rest of a series stays." : slot }));
+      } else body.appendChild(el("div", { "class": "does", text: slot }));
+    } else if (key === "links") {
+      body.appendChild(el("div", { "class": "does", text: DOES.add_video + (x.scope === "series" ? " On every meeting in the series." : "") }));
+    } else if (DOES[x.action]) {
+      body.appendChild(el("div", { "class": "does", text: DOES[x.action] }));
+    }
+    var p = place(x.where); if (p) body.appendChild(p);
+    var told = x.tells_count > 0;
+    body.appendChild(el("div", { "class": "why" }, el("span", { "class": "dot " + (told ? "red" : "green") }), " Told: " + x.tells + (told && x.tells === "the organizer" && x.organizer ? " (" + x.organizer + ")" : "")));
+    var day = dayButton(x); if (day) body.appendChild(el("div", { "class": "row-tools" }, day));
+    var side = el("div", { "class": "side" });
+    if (key !== "breaks") {
+      side.appendChild(document.createTextNode(x.guests ? plural(x.guests, x.mine ? "guest" : "other") : "just you"));
+      side.appendChild(el("br"));
+      side.appendChild(document.createTextNode(x.mine ? "yours" : (x.organizer ? "by " + x.organizer : "someone else's")));
+    }
+    return [body, side];
+  }
+  var renderers = [];
+  LISTS.forEach(function (L) {
+    var key = L[0], items = DATA[key] || [];
+    if (!items.length) return;
+    var list = el("ul", { "class": "items" }), meta = el("span", { "class": "meta" });
+    var tick = el("button", { "class": "btn", type: "button", text: "Tick all", "data-list": key, "data-act": "tick" });
+    var untick = el("button", { "class": "btn", type: "button", text: "Untick all", "data-list": key, "data-act": "untick" });
+    tick.addEventListener("click", function () { items.forEach(function (x) { on[key].add(x.n); }); save(); update(); });
+    untick.addEventListener("click", function () { on[key].clear(); save(); update(); });
+    function render() {
+      list.textContent = "";
+      items.forEach(function (x) {
+        var cb = el("input", { type: "checkbox", "aria-label": "Approve " + L[1] + " " + x.n + ": " + x.title });
+        cb.checked = on[key].has(x.n);
+        cb.addEventListener("change", function () { if (cb.checked) on[key].add(x.n); else on[key].delete(x.n); save(); update(); });
+        var parts = rowFor(key, x);
+        list.appendChild(el("li", { "class": "item" }, cb, parts[0], parts[1]));
+      });
+      meta.textContent = on[key].size + " of " + items.length + " ticked";
+    }
+    var card = el("div", { "class": "card", style: "margin-top:12px", "data-list": key },
+      el("div", { "class": "group-head" }, el("h3", { text: L[1] }), meta), el("div", { "class": "group-desc", text: L[2] }),
+      el("div", { "class": "toolbar" }, tick, untick), list);
+    if (R.more && R.more[key]) card.appendChild(el("div", { "class": "more", text: "…and " + plural(R.more[key], "more", "more") + " not shown. Deal with these first, then ask for a new report." }));
+    $("lists").appendChild(card);
+    renderers.push(render);
+  });
+  $("tick-all").addEventListener("click", function () { Object.keys(on).forEach(function (k) { (DATA[k] || []).forEach(function (x) { on[k].add(x.n); }); }); save(); update(); });
+  $("untick-all").addEventListener("click", function () { Object.keys(on).forEach(function (k) { on[k].clear(); }); save(); update(); });
+
+  // ---- tables: what was found, including what nobody can tick
+  function tableCard(title, sub, head, t, cells) {
+    if (!t || !t.rows.length) return;
+    var tb = el("tbody"), hr = el("tr");
+    head.forEach(function (h) { hr.appendChild(el("th", { text: h })); });
+    t.rows.forEach(function (r) {
+      var tr = el("tr");
+      cells(r).forEach(function (c, i) {
+        var td = c != null && typeof c === "object" ? c : el("td", { text: c == null ? "" : String(c) });
+        td.setAttribute("data-label", head[i]);
+        tr.appendChild(td);
+      });
+      var day = dayLink(r.day_link);
+      tr.appendChild(el("td", null, day ? linkTo(day, "Open", "btn small") : null));
+      tb.appendChild(tr);
+    });
+    hr.appendChild(el("th", { text: "" }));
+    var card = el("div", { "class": "card" }, el("h2", { text: title }), el("div", { "class": "sub", text: sub }),
+      el("div", { "class": "scroll-x" }, el("table", null, el("thead", null, hr), tb)));
+    if (t.more) card.appendChild(el("div", { "class": "more", text: "…and " + count(t.more) + " more." }));
+    $("tables").appendChild(card);
+  }
+  function numCell(text) { return el("td", { "class": "num", text: text }); }
+  var X = R.tables;
+  tableCard("Clashes", "Two things at the same time. The fix for each is in the lists above.", ["When", "One", "The other", "Overlap"], X.clashes,
+    function (r) { return [r.when, r.a, r.b, el("td", null, el("span", { "class": "dot red" }), " " + length(r.minutes) + ", " + r.kind)]; });
+  tableCard("Back-to-back runs", "Meetings in a row with " + TH.gap + " minutes or less between them.", ["Day", "From–to", "Meetings", "Length"], X.runs,
+    function (r) { return [r.day, r.span || "counted", numCell(count(r.meetings)), numCell(length(r.minutes))]; });
+  tableCard("Days with no free two hours", "Working days where the longest gap between meetings is under " + length(TH.free_block) + ".", ["Day", "In meetings", "Longest gap"], X.no_free,
+    function (r) { return [r.day, numCell(length(r.minutes) + " · " + count(r.meetings)), numCell(length(r.free))]; });
+  tableCard("Outside your working hours", "Before " + R.working.start + ", after " + R.working.end + ", or on a day you're off.", ["Meeting", "When", "Why", "By"], X.outside,
+    function (r) { return [r.title, r.when, r.why, r.organizer]; });
+  tableCard("Odd hours", "These may have slipped a time zone. Check the time with the organizer before trusting it.", ["Event", "When", "Why", "By"], X.slips,
+    function (r) { return [r.title, r.when, r.why, r.organizer]; });
+  tableCard("No link, no place: someone else's meeting", "Only the organizer can add one. Your assistant doesn't write to them; that's yours to do.", ["Meeting", "When", "By", "People"], X.no_link,
+    function (r) { return [r.title, r.when, r.organizer, numCell(count(r.people))]; });
+  tableCard("Duplicates left alone", "The same title and time twice, but the copy isn't one your assistant may delete.", ["Event", "When", "On", "Why"], X.duplicates,
+    function (r) { return [r.title, r.when, r.calendars, r.why]; });
+
+  if ((R.suspicious || []).length) {
+    $("sus-card").classList.remove("hidden");
+    R.suspicious.forEach(function (s) { $("sus").tBodies[0].appendChild(el("tr", null, el("td", { text: s.where, "data-label": "Where" }), el("td", { "data-label": "Text" }, el("span", { "class": "dot red" }), " " + s.text), el("td", { text: s.why, "data-label": "Why" }))); });
+  }
+
+  $("method").textContent = "Read from " + src + ", without changing anything: " + count(T.events) + " events on " + (R.calendars || []).join(", ") + ". " +
+    (R.complete ? "" : "Some busy days were counted rather than listed, so clashes on those days may be missing. ") +
+    "A meeting is a timed event with at least one other person that you haven't declined. Back to back means " + TH.run_meetings + " or more in a row, or " + length(TH.run_minutes) + ", with gaps of " + TH.gap + " minutes or less. " +
+    "Several people means " + TH.several + " or more, you included. A repeating meeting is stale when you keep declining it, when nobody else has accepted, or when it has run for over " + TH.stale_years + " years with no end date. " +
+    "This page holds titles, times, calendar names, guest counts and organizers' names only: no descriptions and no guest lists. It makes no network requests. Its links go to your own Google Calendar (first signed-in account) and to video links on known meeting services. " +
+    (R.script_notes || []).join(" ") + " " + (R.agent_notes || "");
+
+  // ---- approval
+  function ranges(ids) {
+    ids = ids.slice().sort(function (a, b) { return a - b; });
+    var out = [], i = 0;
+    while (i < ids.length) { var j = i; while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++; out.push(i === j ? "" + ids[i] : ids[i] + "-" + ids[j]); i = j + 1; }
+    return out.join(",") || "none";
+  }
+  function approvalText() {
+    var pick = { yes: [], maybe: [], no: [] };
+    on.answer.forEach(function (n) { pick[ans[n] === "no" ? "no" : ans[n] === "maybe" ? "maybe" : "yes"].push(n); });
+    var go = [], decline = [];
+    on.move.forEach(function (n) { (alt[n] === "decline" ? decline : go).push(n); });
+    var parts = ["CALENDAR-APPROVE report=" + R.report_id, "yes=" + ranges(pick.yes), "maybe=" + ranges(pick.maybe), "no=" + ranges(pick.no),
+      "drop=" + ranges(Array.from(on.drop)), "move=" + ranges(go), "decline=" + ranges(decline)];
+    AFTER.forEach(function (k) { parts.push(k + "=" + ranges(Array.from(on[k]))); });
+    var note = $("notes").value.trim();
+    return parts.join(" ") + (note ? "\nnote: " + note.replace(/\s+/g, " ") : "");
+  }
+  function update() {
+    renderers.forEach(function (r) { r(); });
+    var total = 0, told = 0;
+    Object.keys(on).forEach(function (k) { total += on[k].size; (DATA[k] || []).forEach(function (x) { if (on[k].has(x.n) && x.tells_count > 0) told++; }); });
+    $("dock-sum").textContent = total + " ticked" + (total ? " · " + (told ? told + " will tell someone" : "nobody is told") : "");
+  }
+  $("copy").addEventListener("click", function () { copy(approvalText(), "Approval copied. Paste it to your assistant."); });
+  $("toggle-notes").addEventListener("click", function () { $("notes-wrap").classList.toggle("hidden"); });
+  update();
+})();
+</script>
+</body>
+</html>

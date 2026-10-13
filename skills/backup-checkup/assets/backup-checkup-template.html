@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backup checkup</title>
+<meta name="description" content="Which of this computer's folders have a second copy somewhere, what would be lost if its disk died today, and a plan to approve item by item.">
+<style>
+:root {
+  --bg: #f5f5f3; --card: #ffffff; --ink: #0b0b0b; --ink-2: #4a4a4a; --muted: #8a8a8a; --line: #e2e2de;
+  --bar: #0b0b0b; --bar-2: #bdbdb8; --red: #d71921; --green: #1e9e57; --focus: #0b0b0b;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+    --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+  --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+body { padding: 0 16px 150px; }
+main { max-width: 1080px; margin: 0 auto; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.label { font: 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); vertical-align: middle; flex: none; }
+.dot.red { background: var(--red); } .dot.green { background: var(--green); }
+.dot.none { background: none; border: 1px solid var(--muted); }
+header.top { padding: 40px 0 20px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between; }
+h1 { font: 600 34px/1.1 var(--sans); letter-spacing: -.02em; margin: 6px 0 0; }
+h2 { font: 600 19px/1.3 var(--sans); margin: 0; }
+h3 { font: 600 15px/1.3 var(--sans); margin: 0; }
+.sub { color: var(--ink-2); }
+.small { font-size: 13px; }
+section { margin-top: 28px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; min-width: 0; }
+.grid { display: grid; gap: 12px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.two { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.tile .num { font: 500 30px/1.1 var(--mono); letter-spacing: -.02em; margin-top: 8px; }
+.tile .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.verdict { font: 600 26px/1.2 var(--sans); letter-spacing: -.01em; margin: 0; }
+.headline { font-size: 17px; margin: 8px 0 0; color: var(--ink-2); }
+.highlights { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
+.group-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.group-head .meta { color: var(--muted); font: 12px var(--mono); }
+/* the share bar */
+.share { display: block; width: 100%; height: 18px; margin-top: 14px; }
+.share .s-none { fill: var(--bar); } .share .s-old { fill: var(--bar); fill-opacity: .55; }
+.share .s-check { fill: var(--bar); fill-opacity: .28; } .share .s-ok { fill: var(--line); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 12px; color: var(--ink-2); }
+.legend svg { width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
+/* folders */
+.rows { list-style: none; margin: 12px 0 0; padding: 0; }
+.row { padding: 12px 0; border-top: 1px solid var(--line); }
+.row-head { display: flex; gap: 8px 12px; align-items: baseline; justify-content: space-between; }
+.row-head .name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.row-head .name .dot { margin-right: 8px; }
+.row-head .size { font: 13px var(--mono); white-space: nowrap; }
+.row .path { font: 12px/1.45 var(--mono); color: var(--muted); word-break: break-all; margin-top: 2px; }
+.row .what { color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+.row .guard { font-size: 13px; margin-top: 6px; }
+.row .guard.bad { font-weight: 600; }
+.bar-svg { display: block; width: 100%; height: 8px; margin-top: 8px; }
+.bar-svg .track { fill: var(--line); } .bar-svg .fill { fill: var(--bar); } .bar-svg .fill.soft { fill: var(--bar-2); }
+/* lose list */
+.lose { list-style: none; margin: 12px 0 0; padding: 0; counter-reset: lose; }
+.lose li { display: grid; grid-template-columns: 26px 1fr auto; gap: 4px 10px; padding: 9px 0; border-top: 1px solid var(--line); counter-increment: lose; align-items: baseline; }
+.lose li::before { content: counter(lose); font: 12px var(--mono); color: var(--muted); }
+.lose .name { font-weight: 600; overflow-wrap: anywhere; }
+.lose .size { font: 13px var(--mono); white-space: nowrap; }
+.lose .why { grid-column: 2 / -1; color: var(--ink-2); font-size: 13px; }
+/* keepers, drives, repos */
+.keeper { padding: 10px 0; border-top: 1px solid var(--line); }
+.keeper .name { font-weight: 600; } .keeper .name .dot { margin-right: 8px; }
+.keeper .state { font: 12px var(--mono); color: var(--muted); margin-left: 8px; }
+.keeper ul { margin: 4px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+td.num { font-family: var(--mono); white-space: nowrap; }
+td .path { font: 12px/1.45 var(--mono); color: var(--muted); word-break: break-all; }
+td .dot { margin-right: 6px; }
+.scroll-x { overflow-x: auto; }
+details > summary { cursor: pointer; padding: 6px 0; font-size: 13px; color: var(--ink-2); }
+.plain { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 13px; }
+/* plan */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
+.btn:hover { border-color: var(--ink); }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.group { margin-top: 12px; }
+.group-desc { color: var(--ink-2); font-size: 13px; margin: 6px 0 10px; }
+.items { list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.item { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.item input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: var(--ink); }
+.item .title { font-weight: 600; overflow-wrap: anywhere; }
+.item .title .dot { margin-right: 8px; }
+.item .cmd { font: 13px/1.45 var(--mono); margin-top: 4px; padding: 6px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+.item .why { color: var(--ink-2); font-size: 13px; margin-top: 4px; }
+.item .where { color: var(--muted); font: 12px/1.45 var(--mono); margin-top: 4px; word-break: break-all; }
+.item .size { font: 12px var(--mono); color: var(--ink-2); white-space: nowrap; text-align: right; }
+/* sticky approval bar */
+.dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 12px 16px; z-index: 5; }
+.dock-in { max-width: 1080px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.dock .sum { font: 13px var(--mono); }
+.dock textarea { width: 100%; min-height: 60px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--bg); }
+.toast { position: fixed; left: 50%; bottom: 104px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 6; max-width: 90vw; }
+.toast.on { opacity: 1; }
+.hidden { display: none !important; }
+@media (max-width: 560px) {
+  h1 { font-size: 28px; }
+  .verdict { font-size: 22px; }
+  .item { grid-template-columns: 22px 1fr; }
+  .item .size { grid-column: 2; text-align: left; }
+  .tile .num { font-size: 24px; }
+  #repos thead { display: none; }
+  #repos tr { display: block; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  #repos td { display: block; border: 0; padding: 2px 0; }
+  #repos td.num::before { content: "last commit "; color: var(--muted); }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+<main id="app">
+  <header class="top">
+    <div>
+      <div class="label"><span class="dot green"></span>&nbsp; Read-only check · nothing was copied, uploaded or changed</div>
+      <h1>If this disk died today</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="label"><span class="dot green"></span> has a second copy &nbsp; <span class="dot red"></span> doesn't &nbsp; <span class="dot none"></span> look</div>
+  </header>
+
+  <section class="card" id="summary">
+    <p class="verdict" id="verdict"></p>
+    <p class="headline hidden" id="headline"></p>
+    <ul class="highlights" id="highlights"></ul>
+    <div id="share"></div>
+  </section>
+
+  <section class="grid tiles" id="tiles"></section>
+
+  <section class="card">
+    <h2>Your folders</h2>
+    <div class="sub">Each folder with your own files in it, what keeps a second copy of it, and how old that copy is where it can be known.</div>
+    <ul class="rows" id="places"></ul>
+    <div class="sub small" id="places-note" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card">
+    <h2>You would lose</h2>
+    <div class="sub">What has no second copy, or only an old one. Things that can't be replaced come first, then by size.</div>
+    <ol class="lose" id="lose"></ol>
+  </section>
+
+  <section class="grid two">
+    <div class="card">
+      <h2>What is keeping copies</h2>
+      <div class="sub">Backup and sync programs found on this PC, from their own settings.</div>
+      <div id="keepers" style="margin-top:8px"></div>
+    </div>
+    <div class="card">
+      <h2>Other drives</h2>
+      <div class="sub">A second copy only counts if it is on a different disk, or somewhere else entirely.</div>
+      <div id="drives" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <section class="card" id="repo-card">
+    <h2>Code that exists only here</h2>
+    <div class="sub">Git repositories whose own files show work that is on no remote. Git itself was never run.</div>
+    <div class="scroll-x" style="margin-top:8px"><table id="repos"><thead><tr><th>Repository</th><th>What is only here</th><th>Last commit</th></tr></thead><tbody></tbody></table></div>
+    <div id="repos-ok"></div>
+  </section>
+
+  <section>
+    <div class="group-head"><h2>The plan</h2><span class="label">Tick what you want. Nothing happens until you send the approval back.</span></div>
+    <div class="sub small" style="margin-top:6px">This skill never copies, uploads or changes a setting itself. A ticked item is one of Windows' own pages opened for you, or something you do with your assistant talking you through it.</div>
+    <div class="toolbar" style="margin-top:12px">
+      <button class="btn" id="tick-all" type="button">Tick all</button>
+      <button class="btn" id="untick-all" type="button">Untick all</button>
+    </div>
+    <div id="groups"></div>
+  </section>
+
+  <section class="card">
+    <h2>What this check can't see</h2>
+    <ul class="plain" id="cant-see"></ul>
+  </section>
+</main>
+
+<div class="dock" role="region" aria-label="Approval">
+  <div class="dock-in">
+    <div class="sum" id="dock-sum">0 ticked</div>
+    <div class="toolbar">
+      <button class="btn" id="toggle-notes" type="button">Add a note</button>
+      <button class="btn primary" id="copy" type="button">Copy approval</button>
+    </div>
+  </div>
+  <div class="dock-in hidden" id="notes-wrap"><textarea id="notes" placeholder="Anything to change? e.g. I already back up Pictures to a NAS" aria-label="Note for your assistant"></textarea></div>
+  <div class="dock-in hidden" id="fallback-wrap"><textarea id="fallback" readonly aria-label="Approval text to copy"></textarea></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script id="report-data" type="application/json">__BACKUP_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("report-data").textContent);
+  var A = D.actions || [], S = D.survey || {}, PROFILE = S.profile || "";
+  var SVGNS = "http://www.w3.org/2000/svg";
+  var KEY = "backup-checkup:" + D.plan_id;
+  var on = new Set();
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { saved = null; }
+  if (!Array.isArray(saved)) saved = null;
+  A.forEach(function (a) { if (saved ? saved.indexOf(a.id) >= 0 : a["default"]) on.add(a.id); });
+
+  function $(id) { return document.getElementById(id); }
+  function fill(n, attrs, kids, from) {
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "text") n.textContent = attrs[k];
+      else if (k === "class") n.setAttribute("class", attrs[k]);
+      else n.setAttribute(k, attrs[k]);
+    });
+    for (var i = from; i < kids.length; i++) { var c = kids[i]; if (c != null) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); }
+    return n;
+  }
+  function el(tag, attrs) { return fill(document.createElement(tag), attrs, arguments, 2); }
+  function svg(tag, attrs) { return fill(document.createElementNS(SVGNS, tag), attrs, arguments, 2); }
+  function bytes(n) {
+    if (n == null) return "–";
+    var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
+  }
+  function count(n) { return (n || 0).toLocaleString("en-US"); }
+  function plural(n, one, many) { return count(n) + " " + (n === 1 ? one : many); }
+  function short(p) {
+    if (!p) return "";
+    if (typeof p !== "string") p = String(p);
+    if (PROFILE && p.toLowerCase() === PROFILE.toLowerCase()) return "~";
+    if (PROFILE && p.toLowerCase().indexOf(PROFILE.toLowerCase() + "\\") === 0) return "~" + p.slice(PROFILE.length);
+    return p;
+  }
+  function dot(kind, title) { return el("span", { "class": "dot " + kind, title: title || "" }); }
+  function age(days) { return days == null ? "" : days === 0 ? "today" : days === 1 ? "1 day ago" : count(days) + " days ago"; }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(Array.from(on))); } catch (e) { /* private window */ } }
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(function () { t.classList.remove("on"); }, 2200); }
+  var DOT = { ok: "green", none: "red", old: "red", check: "none", partial: "none" };
+  var WORD = { ok: "has a second copy", none: "no second copy", old: "only an old copy", check: "needs a look", partial: "partly copied" };
+
+  // ---- header and verdict
+  var b = S.budget || {}, sum = S.summary || {}, places = S.places || [];
+  $("subtitle").textContent = [(S.generated || "").replace("T", " "), count(b.entries_seen) + " files and folders looked at in " + Math.round(b.seconds || 0) + " s" + (b.truncated ? " (stopped at the time limit: some folders are only partly measured)" : "")].filter(Boolean).join(" · ");
+  $("verdict").textContent = (sum.headline || "") + ".";
+  if (D.notes && D.notes.headline) { $("headline").classList.remove("hidden"); $("headline").textContent = D.notes.headline; }
+  ((D.notes && D.notes.highlights) || []).forEach(function (h) { $("highlights").appendChild(el("li", { text: h })); });
+  var counted = places.filter(function (p) { return p.counts; });
+  var share = { none: 0, old: 0, check: 0, ok: 0 }, totalOwn = 0;
+  counted.forEach(function (p) { var k = p.verdict === "partial" ? "check" : p.verdict; share[k] += p.own_bytes; totalOwn += p.own_bytes; });
+  if (totalOwn > 0) {
+    var s = svg("svg", { "class": "share", viewBox: "0 0 1000 18", preserveAspectRatio: "none", role: "img", "aria-label": "How much of your files has a second copy" }), x = 0;
+    [["none", "no second copy"], ["old", "only an old copy"], ["check", "needs a look"], ["ok", "has a second copy"]].forEach(function (seg) {
+      var w = 1000 * share[seg[0]] / totalOwn;
+      if (w <= 0) return;
+      var r = svg("rect", { "class": "s-" + seg[0], x: x.toFixed(1), y: 0, width: Math.max(2, w).toFixed(1), height: 18 }, svg("title", { text: seg[1] + ": " + bytes(share[seg[0]]) }));
+      s.appendChild(r); x += w;
+    });
+    var legend = el("div", { "class": "legend" });
+    [["none", "no second copy"], ["old", "only an old copy"], ["check", "needs a look"], ["ok", "has a second copy"]].forEach(function (seg) {
+      if (!share[seg[0]]) return;
+      legend.appendChild(el("span", null, svg("svg", { viewBox: "0 0 10 10", "class": "share", style: "display:inline-block;width:10px;height:10px;margin:0 6px 0 0", "aria-hidden": "true" }, svg("rect", { "class": "s-" + seg[0], x: 0, y: 0, width: 10, height: 10 })), seg[1] + " · " + bytes(share[seg[0]])));
+    });
+    $("share").appendChild(s); $("share").appendChild(legend);
+  }
+
+  // ---- tiles
+  var repos = S.repos || [], repoBad = repos.filter(function (r) { return ["no-remote", "local-remote", "unpushed", "stash"].indexOf(r.state) >= 0; });
+  var newest = null;
+  (S.protectors || []).forEach(function (p) { if (p.last_copy && (!newest || p.last_copy > newest)) newest = p.last_copy; });
+  var newestAge = newest ? Math.max(0, Math.round((Date.parse((S.generated || "").slice(0, 10)) - Date.parse(newest)) / 86400000)) : null;
+  [["No second copy", count(sum.none || 0), (sum.none === 1 ? "folder" : "folders") + " · " + bytes(share.none) + " of your own files"],
+   ["Only an old copy", count(sum.old || 0), (sum.old === 1 ? "folder" : "folders") + (share.old ? " · " + bytes(share.old) + " last copied over a month ago" : "")],
+   ["Code only on this PC", count(repoBad.length), "of " + plural(repos.length, "repository", "repositories") + " found"],
+   ["Newest dated backup", newest ? (isNaN(newestAge) ? newest : plural(newestAge, "day", "days")) : "none", newest ? "ago, on " + newest + " · sync folders have no date" : "no backup with a date was found"]].forEach(function (t) {
+    $("tiles").appendChild(el("div", { "class": "card tile" }, el("div", { "class": "label", text: t[0] }), el("div", { "class": "num", text: t[1] }), el("div", { "class": "note", text: t[2] })));
+  });
+
+  // ---- folders
+  var ORDER = { none: 0, old: 1, check: 2, partial: 3, ok: 4 };
+  var maxOwn = 0;
+  counted.forEach(function (p) { maxOwn = Math.max(maxOwn, p.own_bytes); });
+  function guardLines(p) {
+    var out = [];
+    (p.protection || []).forEach(function (g) {
+      var t = g.by + ": " + g.how + ".";
+      if (g.last_copy) t += " Last copy " + g.last_copy + (g.age_days != null ? " (" + age(g.age_days) + ")" : "") + ".";
+      else if (g.state === "ok") t += " Kept in step while it runs.";
+      out.push([g.state, t]);
+    });
+    out.sort(function (x, y) { return (ORDER[x[0]] === undefined ? 9 : -ORDER[x[0]]) - (ORDER[y[0]] === undefined ? 9 : -ORDER[y[0]]); });
+    (p.maybe_on || []).forEach(function (h) {
+      out.push(["check", "'" + h.backup + "' on " + short(h.drive) + " holds a folder with this name, last changed " + (h.newest || "unknown") + ". It may be an old copy" + (h.same_disk ? ", but it is on the same disk" : "") + "."]);
+    });
+    if (p.repos) out.push(["check", plural(p.repos, "Git repository", "Git repositories") + " inside" + (p.repos_at_risk ? ", " + count(p.repos_at_risk) + " with work that is on no remote (see below)." : ", all in step with a remote.")]);
+    if (p.online_only_bytes) out.push(["ok", bytes(p.online_only_bytes) + " of it is online-only: those files live in the cloud, not on this disk."]);
+    if (p.truncated) out.push(["check", "Only partly measured (time limit)."]);
+    return out;
+  }
+  var FIRST = 12, hiddenRows = [];
+  counted.slice().sort(function (x, y) { return (ORDER[x.verdict] - ORDER[y.verdict]) || (y.level - x.level) || (y.own_bytes - x.own_bytes); }).forEach(function (p, idx) {
+    var bar = svg("svg", { "class": "bar-svg", viewBox: "0 0 1000 8", preserveAspectRatio: "none", "aria-hidden": "true" });
+    bar.appendChild(svg("rect", { "class": "track", x: 0, y: 0, width: 1000, height: 8 }));
+    bar.appendChild(svg("rect", { "class": "fill" + (p.verdict === "ok" ? " soft" : ""), x: 0, y: 0, height: 8, width: Math.max(3, Math.round(1000 * (maxOwn ? p.own_bytes / maxOwn : 0))) }));
+    var li = el("li", { "class": "row" },
+      el("div", { "class": "row-head" }, el("div", { "class": "name" }, dot(DOT[p.verdict], WORD[p.verdict]), short(p.label)), el("div", { "class": "size", text: bytes(p.own_bytes) })),
+      el("div", { "class": "path", text: short(p.path) }),
+      el("div", { "class": "what", text: [p.what, p.level_words, p.newest ? "newest file " + p.newest : "", p.recreate_bytes ? bytes(p.recreate_bytes) + " more can be made again (packages, build output)" : ""].filter(Boolean).join(" · ") }),
+      bar);
+    li.appendChild(el("div", { "class": "guard" + (p.verdict === "none" || p.verdict === "old" ? " bad" : ""), text: WORD[p.verdict].charAt(0).toUpperCase() + WORD[p.verdict].slice(1) + "." }));
+    guardLines(p).forEach(function (g) { li.appendChild(el("div", { "class": "guard sub", text: g[1] })); });
+    if (idx >= FIRST) { li.classList.add("hidden"); hiddenRows.push(li); }
+    $("places").appendChild(li);
+  });
+  if (hiddenRows.length) {
+    var moreRows = el("button", { "class": "btn", type: "button", style: "margin-top:12px", text: "Show the other " + plural(hiddenRows.length, "folder", "folders") });
+    moreRows.addEventListener("click", function () { hiddenRows.forEach(function (r) { r.classList.remove("hidden"); }); moreRows.remove(); });
+    $("places").parentNode.insertBefore(moreRows, $("places-note"));
+  }
+  if (!counted.length) $("places").appendChild(el("li", { "class": "row sub", text: "No folders with your own files were found." }));
+  var aside = [];
+  var skipped = places.filter(function (p) { return !p.counts; });
+  if (skipped.length) aside.push("Not counted: " + skipped.map(function (p) { return short(p.label) + (p.program_like ? " (programs)" : " (nearly empty)"); }).join(", ") + ".");
+  if ((S.left_out || []).length) aside.push("Left out as game or program folders, which can be installed again: " + S.left_out.map(short).join(", ") + ".");
+  if ((S.not_measured || []).length) aside.push("Ran out of time before measuring: " + S.not_measured.map(short).join(", ") + ".");
+  $("places-note").textContent = aside.join(" ");
+
+  // ---- you would lose
+  (S.lose || []).slice(0, 20).forEach(function (x) {
+    var why = x.verdict === "old" ? "its only copy is " + (x.age_days != null ? count(x.age_days) + " days old" : "old") + ", so everything since then"
+      : x.verdict === "none" ? "no second copy anywhere" : x.verdict === "partial" ? "only what was pushed to Git remotes is safe" : "a program may cover it; this check can't tell";
+    $("lose").appendChild(el("li", null, el("div", { "class": "name", text: short(x.label) }), el("div", { "class": "size", text: bytes(x.bytes) }),
+      el("div", { "class": "why", text: [x.level_words, x.what, why].filter(Boolean).join(" · ") })));
+  });
+  if ((S.lose || []).length > 20) $("lose").parentNode.appendChild(el("div", { "class": "sub small", style: "margin-top:8px", text: "And " + plural(S.lose.length - 20, "smaller folder", "smaller folders") + ", listed under Your folders." }));
+  if (!(S.lose || []).length) $("lose").appendChild(el("li", null, el("div", { "class": "name", text: "Nothing stands out." }), el("div", { "class": "size", text: "" }), el("div", { "class": "why", text: "Every folder counted has a second copy somewhere." })));
+
+  // ---- keepers and drives
+  var STATE = { "set-up": "set up", "installed": "installed", "not-set-up": "not set up", "note": "not a backup" };
+  (S.protectors || []).forEach(function (p) {
+    var good = p.state === "set-up" && p.running !== false && p.coverage === "known" && (p.covers || []).length;
+    var kind = p.state === "not-set-up" || p.state === "note" ? "none" : good ? "green" : p.running === false ? "red" : "none";
+    var box = el("div", { "class": "keeper" }, el("div", null, el("span", { "class": "name" }, dot(kind), p.name), el("span", { "class": "state", text: STATE[p.state] || p.state })));
+    var ul = el("ul");
+    if (p.account) ul.appendChild(el("li", { text: "Account: " + p.account }));
+    (p.facts || []).forEach(function (f) { ul.appendChild(el("li", { text: f })); });
+    (p.covers || []).forEach(function (c) { ul.appendChild(el("li", null, el("span", { "class": "mono small", text: short(c.path) }), " · " + c.how + (c.last_copy ? ", last copy " + c.last_copy : ""))); });
+    if (ul.childNodes.length) box.appendChild(ul);
+    $("keepers").appendChild(box);
+  });
+  var others = (S.drives || []).filter(function (d) { return !d.system; });
+  others.forEach(function (d) {
+    var real = d.type === "fixed" || d.type === "removable";
+    var name = d.test ? "Test drive " + (d.label || "") : d.root.slice(0, 2) + (d.label ? "  " + d.label : "");
+    var note = !real ? (d.type === "network" ? "A network drive. Not looked inside; it may hold copies." : d.type === "virtual" ? "A cloud or virtual drive, not a disk in this PC." : "Not looked at (" + d.type + ").")
+      : d.same_disk === true ? "On the same disk as Windows. It would be lost with it, so a copy here doesn't count."
+      : d.same_disk === false ? "A separate disk" + (d.type === "removable" ? " (removable)" : "") + (d.free != null ? " with " + bytes(d.free) + " free." : ".")
+      : "This check couldn't tell whether it is a separate disk.";
+    var box = el("div", { "class": "keeper" }, el("div", null, el("span", { "class": "name" }, dot(real && d.same_disk === false ? "green" : real && d.same_disk === true ? "red" : "none"), name)));
+    var ul = el("ul", null, el("li", { text: note }));
+    (d.backups || []).forEach(function (bk) { ul.appendChild(el("li", null, el("span", { "class": "mono small", text: bk.name }), " · " + bk.kind + (bk.newest ? ", newest file " + bk.newest : ""))); });
+    if (real && !(d.backups || []).length) ul.appendChild(el("li", { text: "Nothing on it looks like a backup." }));
+    box.appendChild(ul);
+    $("drives").appendChild(box);
+  });
+  if (!others.length) $("drives").appendChild(el("div", { "class": "keeper sub", text: "No other drive is connected. A second copy has to live on another disk or in the cloud." }));
+
+  // ---- repositories
+  var RWORD = { "no-remote": "No remote: the whole history is only on this PC", "local-remote": "Its only remote is another folder, not a server",
+    "unpushed": "Commits that are on no remote", "stash": "Stashed work, which is never pushed", "differs": "Differs from its remote; can't tell which is newer without running Git",
+    "unknown": "Couldn't be read", "empty": "No commits yet", "ok": "In step with its remote" };
+  var rt = $("repos").tBodies[0], okRepos = [];
+  repos.forEach(function (r) {
+    if (r.state === "ok" || r.state === "empty") { okRepos.push(r); return; }
+    var bits = [];
+    (r.branches || []).forEach(function (br) {
+      if (br.state === "ahead") bits.push("branch " + br.name + ": " + (br.ahead ? "about " + plural(br.ahead, "commit", "commits") : "commits") + " never pushed");
+      else if (br.state === "only-here") bits.push("branch " + br.name + " exists only here");
+      else if (br.state === "differs") bits.push("branch " + br.name + " differs from its remote");
+    });
+    if (r.stashes) bits.push(plural(r.stashes, "stash", "stashes"));
+    if (r.changed_since_commit) bits.push("files changed since the last commit (may be uncommitted)");
+    (r.notes || []).forEach(function (n) { bits.push(n); });
+    if (r.place_verdict === "ok") bits.push("its files are also in a synced folder");
+    var remotes = (r.remotes || []).map(function (x) { return x.name + " → " + x.shown; }).join(", ");
+    rt.appendChild(el("tr", null,
+      el("td", null, el("div", { style: "font-weight:600;overflow-wrap:anywhere", text: r.name }), el("div", { "class": "path", text: short(r.path) })),
+      el("td", null, el("div", null, dot(r.state === "differs" || r.state === "unknown" ? "none" : "red"), RWORD[r.state] || r.state), bits.length ? el("div", { "class": "sub", style: "overflow-wrap:anywhere", text: bits.join(" · ") }) : null,
+        remotes ? el("div", { "class": "path", text: "remote: " + remotes }) : null),
+      el("td", { "class": "num", text: r.last_commit || "–" })));
+  });
+  if (!repos.length) { $("repo-card").classList.add("hidden"); }
+  else if (!rt.childNodes.length) rt.appendChild(el("tr", null, el("td", { colspan: "3", "class": "sub", text: "Every repository found is in step with a remote." })));
+  if (okRepos.length) {
+    var holder = el("div", { "class": "sub small", style: "overflow-wrap:anywhere" });
+    var det = el("details", null, el("summary", { text: plural(okRepos.length, "repository is", "repositories are") + " in step with a remote (as of the last push or fetch)" }), holder);
+    holder.textContent = okRepos.map(function (r) { return r.name + (r.changed_since_commit ? " (files changed since the last commit)" : ""); }).join(", ");
+    $("repos-ok").appendChild(det);
+  }
+
+  // ---- the plan
+  var GROUPS = [
+    ["open", "Windows' own pages, opened for you", "Ticking one opens that page. The switches on it are yours to flip.", function (a) { return a.kind === "open"; }],
+    ["copies", "Copies to set up", "Explained, not done for you. A copy made by hand is only as fresh as the day you made it; File History or a sync folder keeps one up to date by itself. Tick the ones you want to be walked through.", function (a) { return a.kind === "guide" && a.guide_id !== "push-repo"; }],
+    ["repos", "Code to push", "You run Git yourself in each folder. Tick the ones you want help with.", function (a) { return a.kind === "guide" && a.guide_id === "push-repo"; }]
+  ];
+  var renderers = [];
+  GROUPS.forEach(function (g) {
+    var items = A.filter(g[3]);
+    if (!items.length) return;
+    var list = el("ul", { "class": "items" }), meta = el("span", { "class": "meta" }), boxes = [];
+    items.forEach(function (a) {
+      var cb = el("input", { type: "checkbox", "aria-label": "Approve: " + a.title });
+      cb.addEventListener("change", function () { if (cb.checked) on.add(a.id); else on.delete(a.id); save(); update(); });
+      boxes.push([cb, a]);
+      var body = el("div", null, el("div", { "class": "title" }, a.kind === "open" ? dot("green", "opens a Windows page") : dot("none", "for you"), a.title));
+      if (a.kind === "open") body.appendChild(el("div", { "class": "cmd", text: a.shows }));
+      if (a.detail) body.appendChild(el("div", { "class": "why", text: a.detail }));
+      body.appendChild(el("div", { "class": "why", text: a.how }));
+      if (a.path) body.appendChild(el("div", { "class": "where", text: short(a.path) }));
+      list.appendChild(el("li", { "class": "item" }, cb, body, el("div", { "class": "size", text: a.bytes ? bytes(a.bytes) : "" })));
+    });
+    var tick = el("button", { "class": "btn", type: "button", text: "Tick all" });
+    var untick = el("button", { "class": "btn", type: "button", text: "Untick all" });
+    tick.addEventListener("click", function () { items.forEach(function (a) { on.add(a.id); }); save(); update(); });
+    untick.addEventListener("click", function () { items.forEach(function (a) { on.delete(a.id); }); save(); update(); });
+    $("groups").appendChild(el("div", { "class": "card group", "data-kind": g[0] },
+      el("div", { "class": "group-head" }, el("h3", { text: g[1] }), meta),
+      el("div", { "class": "group-desc", text: g[2] }),
+      el("div", { "class": "toolbar" }, tick, untick), list));
+    renderers.push(function () {
+      var n = 0;
+      boxes.forEach(function (p) { p[0].checked = on.has(p[1].id); if (p[0].checked) n++; });
+      meta.textContent = count(n) + " of " + count(items.length) + " ticked";
+    });
+  });
+  if (!A.length) $("groups").appendChild(el("div", { "class": "card group sub", text: "Nothing to suggest." }));
+  $("tick-all").addEventListener("click", function () { A.forEach(function (a) { on.add(a.id); }); save(); update(); });
+  $("untick-all").addEventListener("click", function () { on.clear(); save(); update(); });
+
+  (S.cant_see || []).forEach(function (t) { $("cant-see").appendChild(el("li", { text: t })); });
+  $("cant-see").appendChild(el("li", { text: "A synced folder is a second copy, not a history. Delete or damage a file and the change is copied too; most services keep the old version for about a month." }));
+  if (b.links_left_alone) $("cant-see").appendChild(el("li", { text: count(b.links_left_alone) + " junctions, symlinks and online-only folders were left alone, and no file of yours was opened." }));
+
+  // ---- approval
+  function ranges(ids) {
+    ids.sort(function (x, y) { return x - y; });
+    var out = [], i = 0;
+    while (i < ids.length) { var j = i; while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++; out.push(i === j ? "" + ids[i] : ids[i] + "-" + ids[j]); i = j + 1; }
+    return out.join(",");
+  }
+  function chosen() { return A.filter(function (a) { return on.has(a.id); }); }
+  function tally(list) { var t = { open: 0, guide: 0 }; list.forEach(function (a) { t[a.kind]++; }); return t; }
+  function approvalText() {
+    var list = chosen(), t = tally(list), note = $("notes").value.trim();
+    return "BACKUP-APPROVE plan=" + D.plan_id + " ids=" + (ranges(list.map(function (a) { return a.id; })) || "none") + "\n" +
+      "Windows pages to open: " + t.open + " · things I'll do myself: " + t.guide + (note ? "\nnote: " + note.replace(/\s+/g, " ") : "");
+  }
+  function update() {
+    renderers.forEach(function (r) { r(); });
+    var t = tally(chosen());
+    $("dock-sum").textContent = count(on.size) + " ticked · " + count(t.open) + " Windows pages to open · " + count(t.guide) + " for you to do";
+  }
+  function fallback(text) {
+    var w = $("fallback-wrap"), t = $("fallback");
+    w.classList.remove("hidden"); t.value = text; t.focus(); t.select();
+    toast("Copy the selected text (Ctrl+C)");
+  }
+  $("copy").addEventListener("click", function () {
+    var text = approvalText();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { toast("Approval copied. Paste it to your assistant."); }, function () { fallback(text); });
+    } else fallback(text);
+  });
+  $("toggle-notes").addEventListener("click", function () { $("notes-wrap").classList.toggle("hidden"); });
+  update();
+})();
+</script>
+</body>
+</html>

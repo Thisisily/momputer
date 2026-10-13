@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drive report</title>
+<meta name="description" content="A read-only look at a Google Drive: what is shared, what fills it, and fixes to approve one by one.">
+<meta name="referrer" content="no-referrer">
+<style>
+:root {
+  --bg: #f5f5f3; --card: #ffffff; --ink: #0b0b0b; --ink-2: #4a4a4a; --muted: #8a8a8a; --line: #e2e2de;
+  --bar: #0b0b0b; --bar-2: #bdbdb8; --red: #d71921; --green: #1e9e57; --focus: #0b0b0b;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+    --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+  --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+body { padding: 0 16px 150px; overflow-wrap: anywhere; }
+main { max-width: 1080px; margin: 0 auto; }
+a { color: inherit; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.label { font: 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); vertical-align: middle; }
+.dot.red { background: var(--red); } .dot.green { background: var(--green); }
+header.top { padding: 40px 0 20px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between; }
+h1 { font: 600 34px/1.1 var(--sans); letter-spacing: -.02em; margin: 6px 0 0; }
+h2 { font: 600 19px/1.3 var(--sans); margin: 0; }
+h3 { font: 600 15px/1.3 var(--sans); margin: 0; }
+.sub { color: var(--ink-2); }
+section { margin-top: 28px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; min-width: 0; }
+.grid { display: grid; gap: 12px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.tile .num { font: 500 30px/1.1 var(--mono); letter-spacing: -.02em; margin-top: 8px; }
+.tile .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.two { grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
+.highlights { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
+.headline { font-size: 17px; margin: 0; }
+.bars { display: grid; gap: 8px; margin-top: 14px; }
+.bar-row { display: grid; grid-template-columns: minmax(80px, 34%) 1fr minmax(64px, auto); gap: 10px; align-items: center; }
+.bar-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.bar-row svg { display: block; width: 100%; height: 18px; }
+.bar-row rect.fill { fill: var(--bar); }
+.bar-row rect.fill.second { fill: var(--bar-2); }
+.bar-row:hover rect.fill { opacity: .75; }
+.bar-val { font: 12px/18px var(--mono); color: var(--ink-2); white-space: nowrap; text-align: right; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.chart { margin-top: 14px; }
+svg.cols { display: block; width: 100%; overflow: visible; }
+svg.cols .col { fill: var(--bar); }
+svg.cols .col.old { fill: var(--bar-2); }
+svg.cols .hit { fill: transparent; }
+svg.cols g:hover .col { opacity: .7; }
+svg.cols text { fill: var(--muted); font: 11px var(--mono); }
+svg.cols text.val { fill: var(--ink-2); }
+svg.cols line { stroke: var(--line); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px; text-decoration: none; display: inline-block; white-space: nowrap; }
+.btn:hover { border-color: var(--ink); }
+.btn.small { padding: 2px 10px; font-size: 12px; }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.group-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.group-head .meta { color: var(--muted); font: 12px var(--mono); }
+.group-desc { color: var(--ink-2); font-size: 13px; margin: 6px 0 10px; }
+.items { list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.item { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.item input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: var(--ink); }
+.item .who { font-weight: 600; font-size: 14px; }
+.item .addr { font: 12px var(--mono); color: var(--ink-2); }
+.item .why { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.item .does { color: var(--ink-2); font-size: 13px; margin-top: 4px; }
+.item .side { font: 12px/1.5 var(--mono); color: var(--muted); text-align: right; max-width: 180px; }
+.row-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.query code { font: 12px var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+.more { color: var(--muted); font-size: 12px; margin-top: 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 8px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: break-word; }
+th { font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 400; white-space: nowrap; }
+td.num { font-family: var(--mono); white-space: nowrap; }
+.scroll-x { overflow-x: auto; }
+.dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 12px 16px; z-index: 5; }
+.dock-in { max-width: 1080px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.dock .sum { font: 13px var(--mono); }
+.dock textarea { width: 100%; min-height: 60px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--bg); }
+.toast { position: fixed; left: 50%; bottom: 104px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 6; max-width: 90vw; }
+.toast.on { opacity: 1; }
+.hidden { display: none !important; }
+@media (max-width: 560px) {
+  h1 { font-size: 28px; }
+  .item { grid-template-columns: 22px minmax(0, 1fr); }
+  .item .side { grid-column: 2; text-align: left; max-width: none; }
+  .bar-row { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; }
+  .bar-row .bar-track { grid-column: 1 / -1; grid-row: 2; }
+  table, tbody, tr, td { display: block; }
+  thead { display: none; }
+  tr { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  td { border: 0; padding: 1px 0; overflow-wrap: anywhere; }
+  td[data-label]::before { content: attr(data-label) ": "; font: 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  td:empty { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <div class="label"><span class="dot green"></span>&nbsp; Read-only review · nothing in your Drive was changed, and no file was opened</div>
+      <h1>Drive report</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="label"><span class="dot green"></span> nobody loses access &nbsp; <span class="dot red"></span> someone loses access</div>
+  </header>
+
+  <section id="summary" class="card hidden">
+    <p class="headline" id="headline"></p>
+    <ul class="highlights" id="highlights"></ul>
+  </section>
+
+  <section class="grid tiles" id="tiles"></section>
+
+  <section class="grid two">
+    <div class="card"><h2>What fills your storage</h2><div class="sub">Files you own, by type. Only these count against your storage.</div><div class="bars" id="chart-types"></div></div>
+    <div class="card"><h2>Whose files these are</h2><div class="sub">Files other people own sit in your Drive but use their storage, not yours.</div><div class="bars" id="chart-owners"></div></div>
+    <div class="card" style="grid-column: 1 / -1">
+      <h2>When your files were last touched</h2>
+      <div class="sub" id="years-sub"></div>
+      <div class="chart" id="chart-years"></div>
+      <div class="legend"><span><i style="background:var(--bar)"></i>opened or changed in the last year or so</span><span><i style="background:var(--bar-2)"></i>not since</span></div>
+    </div>
+    <div class="card" style="grid-column: 1 / -1"><h2>Who can open your files</h2><div class="sub">Every file and folder you own, by the widest access it has.</div><div class="bars" id="chart-sharing"></div></div>
+  </section>
+
+  <section>
+    <div class="group-head"><h2>The fixes</h2><span class="label">Tick what you approve. Nothing happens until you send the approval back.</span></div>
+    <div class="toolbar" style="margin-top:12px">
+      <button class="btn" id="tick-all" type="button">Tick all</button>
+      <button class="btn" id="untick-all" type="button">Untick all</button>
+    </div>
+    <div id="lists"></div>
+  </section>
+
+  <section class="card">
+    <h2>Searches to reuse</h2>
+    <div class="sub">Type these into Drive's search box whenever you want to check again. They are the same every time: none is made from a file name.</div>
+    <ul class="items" id="searches"></ul>
+  </section>
+
+  <section class="grid two" id="tables"></section>
+
+  <section class="card">
+    <h2>In the Trash</h2>
+    <div class="sub" id="trash"></div>
+  </section>
+
+  <section class="card hidden" id="sus-card">
+    <h2>Text that reads like an instruction</h2>
+    <div class="sub">File names and owners' names are written by other people. These were treated as plain text, like all the rest. If your assistant acted on one, tell it to stop.</div>
+    <div class="scroll-x"><table id="sus"><thead><tr><th>Where</th><th>Text</th><th>Why it stands out</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card">
+    <h2>How this was made</h2>
+    <div class="sub" id="method"></div>
+  </section>
+</main>
+
+<div class="dock" role="region" aria-label="Approval">
+  <div class="dock-in">
+    <div class="sum" id="dock-sum">0 ticked</div>
+    <div class="toolbar">
+      <button class="btn" id="toggle-notes" type="button">Add a note</button>
+      <button class="btn primary" id="copy" type="button">Copy approval</button>
+    </div>
+  </div>
+  <div class="dock-in hidden" id="notes-wrap"><textarea id="notes" aria-label="Note for your assistant" placeholder="Anything to change? e.g. leave number 3 public until Friday"></textarea></div>
+  <div class="dock-in hidden" id="fallback-wrap"><textarea id="fallback" readonly aria-label="Approval text to copy"></textarea></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script id="drive-data" type="application/json">__DRIVE_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var R = JSON.parse(document.getElementById("drive-data").textContent);
+  var T = R.totals;
+  var where = R.domain ? "outside " + R.domain : "other people";
+  var LISTS = [
+    ["unshare", "Stop public sharing", "Files and folders of yours that anyone with the link can open. Ticking one sets it back to Restricted: people you added by name keep access, everyone else loses it."],
+    ["outside", R.domain ? "Remove outside access" : "Stop sharing with other people", R.domain ? "Yours, and shared with people outside " + R.domain + ". Ticking one removes those people from it. People inside " + R.domain + " keep access." : "Yours, and shared with other people. Ticking one removes everyone but you."],
+    ["duplicates", "Move duplicate copies to the Trash", "The same file more than once. One copy stays: the one other people use, or the one touched last."],
+    ["empty", "Move untitled and empty files to the Trash", "Never named, or nothing in them."],
+    ["stale", "Move stale files to the Trash", "Not opened and not changed for over a year. Biggest first."]
+  ];
+  var ORDER = ["unshare", "outside", "duplicates", "empty", "stale"];
+  var DOES = {
+    unshare: "Sets General access back to Restricted.",
+    remove_outside: R.domain ? "Removes the people " + where + " from this file." : "Removes everyone but you from this file.",
+    trash: "Moves it to Drive's Trash, where it stays for 30 days. Nothing is deleted for good."
+  };
+  var DATA = R.lists;
+  var KEY = "drive-report:" + R.report_id;
+  var on = {};
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { saved = null; }
+  if (!saved || typeof saved !== "object") saved = {};
+  // Nothing is ticked to begin with: every one of these changes who can open a file, or removes one.
+  ORDER.forEach(function (k) {
+    var max = (DATA[k] || []).length;
+    on[k] = new Set();
+    (Array.isArray(saved[k]) ? saved[k] : []).forEach(function (n) { if (typeof n === "number" && n >= 1 && n <= max && n % 1 === 0) on[k].add(n); });
+  });
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "text") n.textContent = attrs[k];
+      else if (k === "class") n.className = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    for (var i = 2; i < arguments.length; i++) { var c = arguments[i]; if (c != null) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); }
+    return n;
+  }
+  function svg(tag, attrs) { var n = document.createElementNS("http://www.w3.org/2000/svg", tag); Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); }); return n; }
+  function count(n) { return n == null ? "–" : Number(n).toLocaleString("en-US"); }
+  function plural(n, one, many) { return count(n) + " " + (n === 1 ? one : many || one + "s"); }
+  function bytes(n) {
+    if (n == null) return "–";
+    var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
+  }
+  function save() { try { var o = {}; Object.keys(on).forEach(function (k) { o[k] = Array.from(on[k]); }); localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* private window */ } }
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(function () { t.classList.remove("on"); }, 1800); }
+  function copy(text, ok) {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { toast(ok); }, function () { fallback(text); });
+    else fallback(text);
+  }
+  function fallback(text) { var w = $("fallback-wrap"), t = $("fallback"); w.classList.remove("hidden"); t.value = text; t.focus(); t.select(); toast("Copy the selected text (Ctrl+C)"); }
+
+  // Links. The script built these from checked file ids and fixed searches; the page checks again and shows no link when in doubt.
+  var FILE_RX = /^https:\/\/drive\.google\.com\/open\?id=[A-Za-z0-9][A-Za-z0-9_-]{18,99}$/;
+  var SEARCH_RX = /^https:\/\/drive\.google\.com\/drive\/search\?q=[A-Za-z0-9%._-]{1,200}$/;
+  var PAGES = ["https://drive.google.com/drive/quota", "https://drive.google.com/drive/trash"];
+  function driveLink(u) { return typeof u === "string" && (FILE_RX.test(u) || SEARCH_RX.test(u) || PAGES.indexOf(u) >= 0) ? u : ""; }
+  function openButton(u, text) { u = driveLink(u); return u ? el("a", { "class": "btn small", href: u, target: "_blank", rel: "noopener noreferrer", text: text || "Open in Drive" }) : null; }
+
+  // ---- header and summary
+  var src = (R.sources || []).join(" + ") || "unknown source";
+  $("subtitle").textContent = [R.account, "as of " + R.today, "from " + src, R.complete ? "" : "a very large Drive: some totals were counted, not listed"].filter(Boolean).join(" · ");
+  if (R.headline || (R.highlights || []).length) {
+    $("summary").classList.remove("hidden");
+    $("headline").textContent = R.headline || "";
+    (R.highlights || []).forEach(function (h) { $("highlights").appendChild(el("li", { text: h })); });
+  }
+  var S = R.storage || {};
+  [
+    S.used_bytes != null ? ["Storage used", bytes(S.used_bytes), S.total_bytes ? "of " + bytes(S.total_bytes) + ", shared with Gmail and Photos" : "across Drive, Gmail and Photos"]
+                         : ["Your files", bytes(T.mine_bytes), plural(T.mine, "file or folder", "files and folders") + " you own"],
+    ["Looked at", count(T.files), "files and folders, " + count(T.theirs) + " of them owned by others"],
+    ["Open to anyone", count(T.public), "of yours with a public link" + (T.public_edit ? ", " + count(T.public_edit) + " editable" : ""), T.public],
+    [R.domain ? "Shared outside" : "Shared", count(T.outside), "of yours, with " + plural(T.outside_people, "person", "people") + " " + (R.domain ? "outside " + R.domain : "in all"), R.domain ? T.outside : null],
+    ["Duplicates", bytes(T.dup_bytes), "in extra copies of " + plural(T.dup_groups, "file")],
+    ["Stale", bytes(T.stale_bytes), plural(T.stale, "file") + " untouched for over a year"],
+    ["In the Trash", bytes(T.trash_bytes), plural(T.trash, "item") + ", still counted against your storage"]
+  ].forEach(function (t) {
+    var lab = el("div", { "class": "label" });
+    if (t.length > 3 && t[3] != null) { lab.appendChild(el("span", { "class": "dot " + (t[3] ? "red" : "green") })); lab.appendChild(document.createTextNode("  ")); }
+    lab.appendChild(document.createTextNode(t[0]));
+    $("tiles").appendChild(el("div", { "class": "card tile" }, lab, el("div", { "class": "num", text: t[1] }), el("div", { "class": "note", text: t[2] })));
+  });
+
+  // ---- bars (one small SVG per row, so labels stay real text)
+  function bars(target, rows) {
+    var box = $(target), max = 0;
+    rows.forEach(function (r) { max = Math.max(max, r.value); });
+    if (!rows.length) { box.appendChild(el("div", { "class": "sub", text: "Nothing to show." })); return; }
+    rows.forEach(function (r) {
+      var track = svg("svg", { role: "img", "aria-label": r.label + ": " + r.text });
+      var tip = svg("title", {}); tip.textContent = r.title || r.label + ": " + r.text; track.appendChild(tip);
+      if (r.value > 0) track.appendChild(svg("rect", { "class": "fill" + (r.second ? " second" : ""), x: 0, y: 3, height: 12, rx: 3, width: Math.max(0.6, max ? r.value / max * 100 : 0).toFixed(2) + "%" }));
+      var lab = el("div", { "class": "bar-label", title: r.label });
+      if (r.dot) { lab.appendChild(el("span", { "class": "dot " + r.dot })); lab.appendChild(document.createTextNode("  ")); }
+      lab.appendChild(document.createTextNode(r.label));
+      box.appendChild(el("div", { "class": "bar-row" }, lab, el("div", { "class": "bar-track" }, track), el("div", { "class": "bar-val", text: r.text })));
+    });
+  }
+  bars("chart-types", (R.by_type || []).slice(0, 10).map(function (t) { return { label: t[0], value: t[1], text: bytes(t[1]) + " · " + plural(t[2], "file") }; }));
+  bars("chart-owners", (R.by_owner || []).map(function (o) { return { label: o[0], value: o[1], second: !o[3], text: bytes(o[1]) + " · " + plural(o[2], "file") }; }));
+  bars("chart-sharing", (R.overview || []).map(function (o) { return { label: o[0], value: o[1], dot: o[2] ? (o[1] ? "red" : "green") : "", text: plural(o[1], "item") }; }));
+
+  // ---- last touched, by year (inline SVG, drawn at the width it has)
+  function drawYears() {
+    var box = $("chart-years"), d = R.by_year || [], n = d.length, max = 1;
+    box.textContent = "";
+    if (!n) { box.appendChild(el("div", { "class": "sub", text: "Nothing to show." })); return; }
+    d.forEach(function (x) { max = Math.max(max, x[1]); });
+    var W = Math.max(260, Math.floor(box.clientWidth || 900)), H = 150, bottom = 22, gap = W < 520 ? 6 : 14;
+    var slot = W / n, bw = Math.max(4, Math.min(56, slot - gap));
+    var s = svg("svg", { "class": "cols", viewBox: "0 0 " + W + " " + (H + bottom), height: H + bottom, role: "img", "aria-label": "Size of your files by the year they were last opened or changed" });
+    s.appendChild(svg("line", { x1: 0, x2: W, y1: H + 0.5, y2: H + 0.5 }));
+    d.forEach(function (x, i) {
+      var xx = i * slot + (slot - bw) / 2, h = x[1] ? Math.max(2, x[1] / max * (H - 22)) : 0, r = Math.min(4, bw / 2, h), g = svg("g", {});
+      var tip = svg("title", {}); tip.textContent = x[0] + ": " + bytes(x[1]) + " in " + plural(x[2], "file");
+      var hit = svg("rect", { "class": "hit", x: i * slot, y: 0, width: slot, height: H + bottom });
+      hit.appendChild(tip); g.appendChild(hit);
+      if (h > 0) g.appendChild(svg("path", { "class": "col" + (x[3] ? " old" : ""), d: "M" + xx + "," + H + "V" + (H - h + r) + "Q" + xx + "," + (H - h) + " " + (xx + r) + "," + (H - h) + "H" + (xx + bw - r) + "Q" + (xx + bw) + "," + (H - h) + " " + (xx + bw) + "," + (H - h + r) + "V" + H + "Z" }));
+      if (x[1] && bw >= 44) { var v = svg("text", { "class": "val", x: xx + bw / 2, y: H - h - 6, "text-anchor": "middle" }); v.textContent = bytes(x[1]); g.appendChild(v); }
+      var lab = svg("text", { x: xx + bw / 2, y: H + 15, "text-anchor": "middle" }); lab.textContent = bw < 30 ? String(x[0]).slice(-2) : x[0]; g.appendChild(lab);
+      s.appendChild(g);
+    });
+    box.appendChild(s);
+  }
+  (function () {
+    $("years-sub").textContent = bytes(T.stale_bytes) + " in " + plural(T.stale, "file") + " you haven't opened or changed since " + R.cutoff + ".";
+    drawYears();
+    var raf = 0, last = $("chart-years").clientWidth;
+    window.addEventListener("resize", function () {
+      if (raf) return;
+      raf = requestAnimationFrame(function () { raf = 0; var w = $("chart-years").clientWidth; if (w !== last) { last = w; drawYears(); } });
+    });
+  })();
+
+  // ---- tickable lists
+  function rowFor(x) {
+    var body = el("div", null, el("div", { "class": "who", text: x.n + ". " + x.name }));
+    body.appendChild(el("div", { "class": "addr", text: [x.kind, x.modified ? "changed " + x.modified : "", x.opened ? "opened " + x.opened : ""].filter(Boolean).join(" · ") }));
+    (x.why || []).forEach(function (w) { body.appendChild(el("div", { "class": "why", text: w })); });
+    body.appendChild(el("div", { "class": "does", text: DOES[x.action] || "" }));
+    body.appendChild(el("div", { "class": "why" }, el("span", { "class": "dot " + (x.cuts ? "red" : "green") }), " " + x.loses));
+    var open = openButton(x.link); if (open) body.appendChild(el("div", { "class": "row-tools" }, open));
+    return [body, el("div", { "class": "side", text: x.size ? bytes(x.size) : "" })];
+  }
+  var renderers = [];
+  LISTS.forEach(function (L) {
+    var key = L[0], items = DATA[key] || [];
+    if (!items.length) return;
+    var list = el("ul", { "class": "items" }), meta = el("span", { "class": "meta" });
+    var tick = el("button", { "class": "btn", type: "button", text: "Tick all", "data-list": key, "data-act": "tick" });
+    var untick = el("button", { "class": "btn", type: "button", text: "Untick all", "data-list": key, "data-act": "untick" });
+    tick.addEventListener("click", function () { items.forEach(function (x) { on[key].add(x.n); }); save(); update(); });
+    untick.addEventListener("click", function () { on[key].clear(); save(); update(); });
+    function render() {
+      list.textContent = "";
+      var size = 0;
+      items.forEach(function (x) {
+        var cb = el("input", { type: "checkbox", "aria-label": "Approve " + L[1] + " " + x.n + ": " + x.name });
+        cb.checked = on[key].has(x.n);
+        if (cb.checked) size += x.size || 0;
+        cb.addEventListener("change", function () { if (cb.checked) on[key].add(x.n); else on[key].delete(x.n); save(); update(); });
+        var parts = rowFor(x);
+        list.appendChild(el("li", { "class": "item" }, cb, parts[0], parts[1]));
+      });
+      meta.textContent = on[key].size + " of " + items.length + " ticked" + (x_trash(key) && size ? " · " + bytes(size) : "");
+    }
+    var card = el("div", { "class": "card", style: "margin-top:12px", "data-list": key },
+      el("div", { "class": "group-head" }, el("h3", { text: L[1] }), meta), el("div", { "class": "group-desc", text: L[2] }),
+      el("div", { "class": "toolbar" }, tick, untick), list);
+    if (R.more && R.more[key]) card.appendChild(el("div", { "class": "more", text: "…and " + count(R.more[key]) + " more not shown. Deal with these first, then ask for a new report." }));
+    $("lists").appendChild(card);
+    renderers.push(render);
+  });
+  function x_trash(key) { return key === "duplicates" || key === "empty" || key === "stale"; }
+  if (!$("lists").firstChild) $("lists").appendChild(el("div", { "class": "card", style: "margin-top:12px" }, el("div", { "class": "sub", text: "Nothing to fix: no public links, no outside sharing, no duplicates, nothing stale." })));
+  $("tick-all").addEventListener("click", function () { ORDER.forEach(function (k) { (DATA[k] || []).forEach(function (x) { on[k].add(x.n); }); }); save(); update(); });
+  $("untick-all").addEventListener("click", function () { ORDER.forEach(function (k) { on[k].clear(); }); save(); update(); });
+
+  // ---- searches to reuse (not ticked: they change nothing)
+  (R.searches || []).forEach(function (q) {
+    var b = el("button", { "class": "btn small", type: "button", text: "Copy" });
+    b.addEventListener("click", function () { copy(q.query, "Search copied"); });
+    $("searches").appendChild(el("li", { "class": "item", style: "grid-template-columns: minmax(0, 1fr)" }, el("div", null,
+      el("div", { "class": "who", text: q.title }), el("div", { "class": "why", text: q.why }),
+      el("div", { "class": "row-tools query" }, el("code", { text: q.query }), b, openButton(q.link)))));
+  });
+  (R.pages || []).forEach(function (p) {
+    $("searches").appendChild(el("li", { "class": "item", style: "grid-template-columns: minmax(0, 1fr)" }, el("div", null,
+      el("div", { "class": "who", text: p.title }), el("div", { "class": "why", text: p.why }), el("div", { "class": "row-tools" }, openButton(p.link)))));
+  });
+
+  // ---- tables
+  function tableCard(title, sub, head, t, cells) {
+    if (!t || !t.rows.length) return;
+    var tb = el("tbody"), hr = el("tr");
+    head.forEach(function (h) { hr.appendChild(el("th", { text: h })); });
+    hr.appendChild(el("th", { text: "" }));
+    t.rows.forEach(function (r) {
+      var tr = el("tr");
+      cells(r).forEach(function (c, i) {
+        var td = c != null && typeof c === "object" ? c : el("td", { text: c == null ? "" : String(c) });
+        td.setAttribute("data-label", head[i]);
+        tr.appendChild(td);
+      });
+      tr.appendChild(el("td", null, openButton(r.link, "Open")));
+      tb.appendChild(tr);
+    });
+    var card = el("div", { "class": "card", style: "grid-column: 1 / -1" }, el("h2", { text: title }), el("div", { "class": "sub", text: sub }),
+      el("div", { "class": "scroll-x" }, el("table", null, el("thead", null, hr), tb)));
+    if (t.more) card.appendChild(el("div", { "class": "more", text: "…and " + count(t.more) + " more." }));
+    $("tables").appendChild(card);
+  }
+  function numCell(text) { return el("td", { "class": "num", text: text }); }
+  tableCard("Your biggest files", "The " + R.thresholds.big_rows + " largest files you own. Nothing here is offered for the Trash unless it is also in a list above.", ["Name", "Type", "Size", "Last touched", "Shared"], R.tables.biggest,
+    function (r) { return [r.name, r.kind, numCell(bytes(r.size)), numCell(r.last || "–"), r.shared ? el("td", null, el("span", { "class": "dot red" }), " " + r.shared) : ""]; });
+  tableCard("Public files other people own", "Anyone with the link can open these too, but only their owner can change that. Your assistant won't touch them.", ["Name", "Owner", "Type", "Anyone can"], R.tables.public_theirs,
+    function (r) { return [r.name, r.owner, r.kind, r.role]; });
+
+  $("trash").textContent = T.trash ? plural(T.trash, "item") + ", " + bytes(T.trash_bytes) + ". Drive deletes each one for good 30 days after it went in, and until then it still counts against your storage. " +
+    "Emptying the Trash now can't be undone, so your assistant never does it: open the Trash yourself and press Empty trash if you're sure." : "Nothing of yours is in the Trash.";
+
+  if ((R.suspicious || []).length) {
+    $("sus-card").classList.remove("hidden");
+    R.suspicious.forEach(function (s) { $("sus").tBodies[0].appendChild(el("tr", null, el("td", { text: s.where, "data-label": "Where" }), el("td", { "data-label": "Text" }, el("span", { "class": "dot red" }), " " + s.text), el("td", { text: s.why, "data-label": "Why" }))); });
+  }
+
+  $("method").textContent = "Read from " + src + ", without changing anything and without opening any file: " + count(T.listed) + " files and folders were listed, " + count(T.mine) + " of them yours. " +
+    (R.complete ? "" : "This Drive is too large to list in full, so some totals come from counts. ") +
+    "Duplicates are files of yours with the same checksum, or, where Drive gives none, the same name and size (Google Docs, Sheets and Slides are never matched that way). " +
+    "Stale means not opened and not changed in " + R.thresholds.stale_days + " days. " + (R.domain ? "Outside means an address that isn't at " + R.domain + ". " : "This is a personal account, so there is no inside and outside: sharing with anyone is listed. ") +
+    "Fixes are offered only for files you own. This page holds names, types, sizes, owners' names, dates and how many people a file is shared with: nothing from inside a file, and no addresses. It makes no network requests, and its links go only to drive.google.com (first signed-in account). " +
+    (R.script_notes || []).join(" ") + " " + (R.agent_notes || "");
+
+  // ---- approval
+  function ranges(ids) {
+    ids = ids.slice().sort(function (a, b) { return a - b; });
+    var out = [], i = 0;
+    while (i < ids.length) { var j = i; while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++; out.push(i === j ? "" + ids[i] : ids[i] + "-" + ids[j]); i = j + 1; }
+    return out.join(",") || "none";
+  }
+  function approvalText() {
+    var parts = ["DRIVE-APPROVE report=" + R.report_id];
+    ORDER.forEach(function (k) { parts.push(k + "=" + ranges(Array.from(on[k]))); });
+    var note = $("notes").value.trim();
+    return parts.join(" ") + (note ? "\nnote: " + note.replace(/\s+/g, " ") : "");
+  }
+  function update() {
+    renderers.forEach(function (r) { r(); });
+    var total = 0, cuts = 0, freed = 0;
+    ORDER.forEach(function (k) { total += on[k].size; (DATA[k] || []).forEach(function (x) { if (on[k].has(x.n)) { if (x.cuts) cuts++; if (x.action === "trash") freed += x.size || 0; } }); });
+    $("dock-sum").textContent = total + " ticked" + (total ? " · " + (cuts ? cuts + " end someone's access" : "nobody loses access") + (freed ? " · " + bytes(freed) + " to the Trash" : "") : "");
+  }
+  $("copy").addEventListener("click", function () { copy(approvalText(), "Approval copied. Paste it to your assistant."); });
+  $("toggle-notes").addEventListener("click", function () { $("notes-wrap").classList.toggle("hidden"); });
+  update();
+})();
+</script>
+</body>
+</html>
