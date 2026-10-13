@@ -55,7 +55,7 @@ def main(argv=None):
             continue
         if it["folder"] != folder:
             folder = it["folder"]
-            print("In %s:" % folder)
+            print("In %s:" % names.shown(folder, 300))
         # A name that reads like instructions is not repeated here: its id is all that's needed to list it as suspicious
         name = "(name not shown)" if str(it.get("flag", "")).startswith("its name") else names.shown(it["name"])
         print("#%-4d %s   [%s, changed %s, %s]" % (it["id"], name, human(it["bytes"]), it.get("modified"), it["why"]))

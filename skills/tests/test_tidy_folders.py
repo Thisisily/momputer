@@ -45,6 +45,49 @@ pycache_before = os.path.isdir(os.path.join(S, "__pycache__"))
 T = work_folder(opts.scratch, "tidy-folders-test", MARK)
 
 try:
+    # ------------------------------------------------------------ a launcher's file can't send the survey to another PC
+    # Steam's own folder can be written by every account on a PC. A library it names on a share must
+    # never be asked about: asking would sign in to that share as the person running the survey.
+    sys.path.insert(0, S)
+    import survey as tidy_survey  # noqa: E402  (the skill's own script)
+    steam = os.path.join(T, "launchers", "Steam")
+    here_lib = os.path.join(T, "launchers", "Library here")
+    write(os.path.join(here_lib, "steamapps", "appmanifest_1.acf"), '"name" "Lanternfall Quest"\n"installdir" "Lanternfall Quest"\n"SizeOnDisk" "123"\n')
+    write(os.path.join(here_lib, "steamapps", "appmanifest_2.acf"), '"name" "Climber"\n"installdir" "..\\..\\..\\Windows"\n')
+    write(os.path.join(steam, "steamapps", "libraryfolders.vdf"),
+          '"libraryfolders"\n{\n "0" { "path" "%s" }\n "1" { "path" "\\\\\\\\files.example\\\\share\\\\SteamLibrary" }\n "2" { "path" "relative\\\\lib" }\n}\n'
+          % here_lib.replace("\\", "\\\\"))
+    asked = []
+    real_isdir, real_values, real_subkeys = os.path.isdir, tidy_survey.reg_values, tidy_survey.reg_subkeys
+
+    def isdir_noting(p):
+        asked.append(str(p))
+        return False if str(p).startswith("\\\\") else real_isdir(p)  # noted, and never passed on: this test contacts nothing
+
+    program_data = os.environ.get("ProgramData")
+    try:
+        os.path.isdir = isdir_noting
+        tidy_survey.reg_values = lambda hive, key, *a: {"SteamPath": steam} if key.endswith("Valve\\Steam") else {}
+        tidy_survey.reg_subkeys = lambda hive, key: []
+        os.environ["ProgramData"] = os.path.join(T, "launchers", "ProgramData")  # so no real launcher's files are read
+        found = tidy_survey.launchers([])
+    finally:
+        if program_data is None:
+            os.environ.pop("ProgramData", None)
+        else:
+            os.environ["ProgramData"] = program_data
+        os.path.isdir, tidy_survey.reg_values, tidy_survey.reg_subkeys = real_isdir, real_values, real_subkeys
+    steam_found = next((f for f in found if f["name"] == "Steam"), {"libraries": [], "games": []})
+    check("a game library on a share, or not a full path, is never asked about; one on this PC is read",
+          not any(p.startswith("\\\\") or "files.example" in p or p.startswith("relative") for p in asked)
+          and sorted(os.path.basename(l) for l in steam_found["libraries"]) == ["Library here", "Steam"]
+          and [g["name"] for g in steam_found["games"]] == ["Lanternfall Quest"], (asked, steam_found))
+    check("on_this_pc: only a full path on a disk in this PC",
+          tidy_survey.on_this_pc(T) and not any(tidy_survey.on_this_pc(p) for p in (
+              "\\\\files.example\\share\\x", "\\\\?\\UNC\\files.example\\share", "relative\\x", "C:", "", None, 7, "Q:relative")))
+    sys.path.remove(S)
+    shutil.rmtree(os.path.join(T, "launchers"))  # this test's own fixture, inside its own work folder
+
     root = os.path.join(T, "profile")
     for d in ("Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music"):
         os.makedirs(os.path.join(root, d))

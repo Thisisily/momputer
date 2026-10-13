@@ -50,6 +50,7 @@ ZIP_DOCS = {"docx": ("word/document.xml", "docProps/core.xml", "</w:p>"), "odt":
 TEXT_PEEK = 4096                 # bytes of a plain text file
 ZIP_MEMBER_CAP = 256 * 1024      # bytes read from one member of a .docx or .odt
 ZIP_FILE_MAX = 20 * 1024 ** 2    # bigger "documents" are not opened
+PDF_TEXT_MATCHES = 2000          # pieces of drawn text looked at in one PDF, at most
 PDF_HEAD, PDF_TAIL = 256 * 1024, 64 * 1024
 SNIPPET = 300                    # characters of text kept per file
 MAX_DEPTH = 4
@@ -89,14 +90,16 @@ MAKERS = [
 ]
 
 
-# Account, card and ID numbers, phone numbers, IBANs: eleven or more digits in a row (spaces
-# between them or not), groups of four, or a country code and check digits followed by more.
-LONG_NUMBER_RX = re.compile(r"(?<![\w-])\d(?: ?\d){10,}(?![\w-])|\b(?:\d{4}[- ]){2,}\d{2,4}\b|\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b")
+# A bank account written the international way: a country code, two check digits, then groups of
+# four. (Only blanked when it is mostly digits, so "UK22 YEAR PLAN 2024" stays.)
+IBAN_RX = re.compile(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b")
 
 
 def without_long_numbers(text):
-    """`text` with every long number blanked: a name is never built from one, so none is passed on."""
-    return LONG_NUMBER_RX.sub("[a long number]", text)
+    """`text` with every long number blanked (account, card, ID and phone numbers): a name is never
+    built from one, so none is passed on."""
+    text = names.LONG_DIGITS_RX.sub("[a long number]", text)
+    return IBAN_RX.sub(lambda m: "[a long number]" if sum(ch.isdigit() for ch in m.group(0)) >= 8 else m.group(0), text)
 
 
 def maker(text):
@@ -165,17 +168,23 @@ def peek_zip_doc(path, ext):
     with zipfile.ZipFile(safe_apply.xp(path)) as z:
         def member(name):
             try:
-                with z.open(z.getinfo(name)) as f:
-                    return f.read(ZIP_MEMBER_CAP).decode("utf-8", "replace")
+                inside = z.getinfo(name)
             except KeyError:
                 return ""
+            # Only the two usual ways of packing. Python stops reading those where it is told to; the
+            # others (bzip2, LZMA) it unpacks in one go, and a few hundred bytes can unpack to gigabytes.
+            if inside.compress_type not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+                raise ValueError("packed in a way that can't be read a little at a time")
+            with z.open(inside) as f:
+                return f.read(ZIP_MEMBER_CAP).decode("utf-8", "replace")
         xml = member(body)
-        out["text"] = tidy(html.unescape(re.sub(r"<[^>]*>", " ", xml.replace(para_end, " \n "))))
+        # "<[^<>]*>": each "<" is looked at once, however many there are and whether or not one is ever closed
+        out["text"] = tidy(html.unescape(re.sub(r"<[^<>]*>", " ", xml.replace(para_end, " \n "))))
         info = member(meta)
     m = re.search(r"<dc:title>([^<]{1,300})</dc:title>", info)
     if m:
         out["title"] = tidy(html.unescape(m.group(1)), 150)
-    m = re.search(r"<(?:dcterms:created|meta:creation-date)[^>]*>(\d{4}-\d{2}-\d{2})", info)
+    m = re.search(r"<(?:dcterms:created|meta:creation-date)[^<>]{0,200}>(\d{4}-\d{2}-\d{2})", info)
     if m:
         out["written"] = m.group(1)
     return out
@@ -215,7 +224,7 @@ def peek_pdf(path, size):
 
     title = info(b"Title")
     if not title:
-        m = re.search(rb"<dc:title>.{0,200}?<rdf:li[^>]*>([^<]{1,300})</rdf:li>", data, re.S)
+        m = re.search(rb"<dc:title>.{0,200}?<rdf:li[^<>]{0,100}>([^<]{1,300})</rdf:li>", data, re.S)
         title = tidy(html.unescape(m.group(1).decode("utf-8", "replace")), 150) if m else ""
     if title and not names.says_nothing(title + ".pdf") and not re.match(r"(?i)microsoft word - |untitled", title):
         out["title"] = title
@@ -228,13 +237,16 @@ def peek_pdf(path, size):
     if reads_like_instructions(*said):
         out["odd"] = True  # what it says made it reads like instructions: see peek()
     # Text drawn with Tj / TJ, where the page's content happens to be stored uncompressed
-    pieces = []
+    pieces, read, seen = [], 0, 0
     for m in re.finditer(rb"\(((?:\\.|[^\\()]){1,300})\)\s*(?:Tj|'|\")|\[((?:[^\[\]\\]|\\.){1,600})\]\s*TJ", data):
         if m.group(1) is not None:
             pieces.append(pdf_string(m.group(1)))
         else:
             pieces.append("".join(pdf_string(p) for p in re.findall(rb"\(((?:\\.|[^\\()])*)\)", m.group(2))))
-        if sum(len(p) for p in pieces) > SNIPPET * 2:
+        read += len(pieces[-1])
+        seen += 1
+        # Enough to name it by, or enough looked at: a file can hold any number of empty pieces
+        if read > SNIPPET * 2 or seen >= PDF_TEXT_MATCHES:
             break
     text = tidy(" ".join(pieces))
     if len(re.findall(r"[A-Za-z]{3,}", text)) >= 2:
@@ -304,7 +316,7 @@ def peek(path, ext, size, cloud):
             out = peek_pdf(path, size)
         else:
             return {"how": "none", "note": "Nothing is read from this kind of file. Look at it to name it."}
-    except (OSError, zipfile.BadZipFile, KeyError, RuntimeError, ValueError, EOFError, NotImplementedError):
+    except Exception:  # a peek is a best-effort look: a damaged or odd file is one that couldn't be read, nothing more
         return {"how": "none", "note": "Couldn't be read (damaged, locked or password-protected)."}
     if out.pop("odd", False) or reads_like_instructions(*(v for v in out.values() if isinstance(v, str))):
         # It talks to the reader instead of being about something. Withheld, so nobody is tempted to do what it says.
@@ -359,7 +371,17 @@ def survey(args):
             except OSError:
                 entry["left"].append({"path": plain_place(folder), "why": "couldn't be listed"})
                 continue
+            unwritable = False
             for e in entries:
+                # A name that can't be written down (Windows allows half a character in one) is
+                # passed over before it is recorded anywhere: it can't go into the report.
+                try:
+                    e.name.encode("utf-8")
+                except UnicodeEncodeError:
+                    if not unwritable:
+                        unwritable = True
+                        entry["left"].append({"path": plain_place(folder), "why": "holds a name that can't be written down"})
+                    continue
                 path = os.path.join(folder, e.name)
                 try:
                     st = e.stat(follow_symlinks=False)
@@ -387,11 +409,6 @@ def survey(args):
                 entry["documents"] += 1
                 odd = names.says_nothing(e.name)
                 if not odd and not args.all:
-                    continue
-                try:
-                    e.name.encode("utf-8")
-                except UnicodeEncodeError:
-                    entry["left"].append({"path": folder, "why": "holds a name that can't be written down"})
                     continue
                 if len(items) >= args.max_files:
                     entry["truncated"] = True
@@ -458,8 +475,11 @@ def main(argv=None):
     if not os.path.isdir(os.path.dirname(out)):
         sys.exit("Output folder does not exist: %s (this script creates no folders)" % os.path.dirname(out))
     report = survey(args)
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=1)
+    # Made whole before the file is opened, and in plain ASCII: whatever a name holds, the report
+    # is either written complete or not at all.
+    text = json.dumps(report, ensure_ascii=True, indent=1)
+    with open(out, "w", encoding="ascii") as f:
+        f.write(text)
     c = report["counts"]
     skipped = ["%s (%s)" % (f["path"], f["skipped"]) for f in report["folders"] if f["skipped"]]
     print("rename survey: %d of %d documents have names that say nothing %s; looked inside %d, read something in %d, %d suspicious%s -> %s" % (

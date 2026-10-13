@@ -107,6 +107,11 @@ def shown(text, limit=150):
     return "".join("\\u%04x" % ord(ch) if unseen(cut, i) else ch for i, ch in enumerate(cut)) + ("..." if len(text) > limit else "")
 
 
+# Eleven or more digits in a row (single spaces between them or not), or three and more groups of
+# four: an account, card, ID or phone number. Such a number has no place in a file name.
+LONG_DIGITS_RX = re.compile(r"(?<![\w-])\d(?: ?\d){10,}(?![\w-])|\b(?:\d{4}[- ]){2,}\d{2,4}\b")
+
+
 def why_bad(old_name, new_name, folder=None):
     """None if `new_name` may replace `old_name` in the same folder, else why not."""
     if not isinstance(old_name, str) or not isinstance(new_name, str):
@@ -124,6 +129,8 @@ def why_bad(old_name, new_name, folder=None):
         return "starts or ends with a space or a dot"
     if not new_name[0].isalnum():
         return "doesn't start with a letter or a digit"
+    if LONG_DIGITS_RX.search(new_name):
+        return "has a long number in it (an account, card or ID number doesn't belong in a file name)"
     if new_name.split(".")[0].rstrip(" ").lower() in RESERVED:
         return "a name Windows keeps for a device (%s)" % new_name.split(".")[0].rstrip(" ").upper()
     old_stem, old_ext = os.path.splitext(old_name)

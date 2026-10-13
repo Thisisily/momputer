@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import struct
 import sys
 import time
@@ -40,6 +41,8 @@ MAX_SHORTCUT_BYTES = 256 * 1024   # a .lnk is a few KB; nothing past this is rea
 MAX_ELSEWHERE = 3000              # Start menu and taskbar shortcuts looked at
 FOLDER_ENTRY_CAP = 5000           # entries counted inside one desktop folder
 STALE_DAYS = 30                   # untouched this long: ticked by default
+MAX_SHOWN = 200                   # characters of a shortcut's target that are shown; the rest is cut
+MAX_ARGS_SHOWN = 120              # and of what a command shortcut would run
 A_HIDDEN, A_SYSTEM, A_REPARSE = 0x2, 0x4, 0x400
 CLOUD_ONLY = 0x1000 | 0x40000 | 0x400000
 LINK_TAGS = (0xA0000003, 0xA000000C)
@@ -126,6 +129,39 @@ def fill_in_places(text):
 
     out = re.sub(r"%([^%]*)%", one, text)
     return None if bad or "%" in out else out
+
+
+# Passwords and keys ride in a command's arguments ("net use ... hunter2 /user:me", "--token=..."),
+# so what looks like one is blanked before the rest is shown.
+SECRET_SWITCH_RX = re.compile(
+    r"(?i)((?<![A-Za-z])(?:pass(?:word|wd)?|pwd|token|secret|api[-_]?key|key|auth|credentials?|bearer)\s*[=:\s]\s*)(\"[^\"]*\"|'[^']*'|\S+)")
+NET_USER_RX = re.compile(r"(?i)(\S+)(\s+/user:\S+)(\s+\S+)?")
+LONG_VALUE_RX = re.compile(r"[A-Za-z0-9+/=_\-]{24,}")
+
+
+def shown_args(args):
+    """The start of a command's arguments, for showing: one line, cut to length, with anything that
+    looks like a password, a key or a long coded value blanked."""
+    text = " ".join(args.split())
+
+    def around_user(m):
+        before, user, after = m.group(1), m.group(2), m.group(3) or ""
+        if not re.match(r"^(?:[A-Za-z]:|\\\\|/)", before):   # not a drive, a share or a switch: the password
+            before = "[not shown]"
+        if after.strip() and not after.strip().startswith("/"):
+            after = " [not shown]"
+        return before + user + after
+
+    text = NET_USER_RX.sub(around_user, text)
+    text = SECRET_SWITCH_RX.sub(lambda m: m.group(1) + "[not shown]", text)
+    text = LONG_VALUE_RX.sub("[long value not shown]", text)
+    return text[:MAX_ARGS_SHOWN]
+
+
+def shown_path(text):
+    """A target for showing: spelled out, and cut to length (a shortcut can hold 32,000 characters)."""
+    text = spelled_out(text)
+    return text if len(text) <= MAX_SHOWN else text[:MAX_SHOWN - 3] + "..."
 
 
 def spelled_out(text):
@@ -239,6 +275,7 @@ class Prober:
     def __init__(self):
         self.windows = norm(os.environ.get("SystemRoot", r"C:\Windows"))
         self.drive_kind = {}
+        self.folders = set()
 
     def fixed(self, path):
         if not IS_WIN:
@@ -258,22 +295,42 @@ class Prober:
         path = os.path.normpath(path)
         if not self.fixed(path):
             return "unknown", "on a drive that isn't a fixed disk in this PC (not checked)"
-        try:
-            os.lstat("\\\\?\\" + path if IS_WIN else path)
-            return "ok", ""
-        except FileNotFoundError:
-            if under(norm(path), [self.windows]):
-                return "unknown", "inside Windows, which hides some of its files from other programs"
-            return "dead", "nothing is there any more"
-        except (OSError, ValueError):
-            return "unknown", "couldn't be looked at"
+        # Part by part, and never through a link: a junction or symlink on the way can lead to
+        # another PC, and asking about what is behind it would knock on that PC's door.
+        parts = [p for p in path[3:].split("\\") if p]
+        cur = path[:3]
+        self.folders.discard(norm(path))
+        if not parts:
+            self.folders.add(norm(path))
+        for i, part in enumerate(parts):
+            cur = os.path.join(cur, part)
+            try:
+                st = os.lstat("\\\\?\\" + cur if IS_WIN else cur)
+            except FileNotFoundError:
+                if under(norm(path), [self.windows]):
+                    return "unknown", "inside Windows, which hides some of its files from other programs"
+                return "dead", "nothing is there any more"
+            except (OSError, ValueError):
+                return "unknown", "couldn't be looked at"
+            link = stat.S_ISLNK(st.st_mode) or bool(
+                getattr(st, "st_file_attributes", 0) & A_REPARSE and getattr(st, "st_reparse_tag", 0) in LINK_TAGS)
+            if i < len(parts) - 1:
+                if link:
+                    return "unknown", "reached through a link to another place (not followed)"
+            elif stat.S_ISDIR(st.st_mode) and not link:
+                self.folders.add(norm(path))
+        return "ok", ""
+
+    def is_folder(self, path):
+        """Whether the last look() at this path found a folder: what was seen then, not another question to the disk."""
+        return norm(os.path.normpath(path)) in self.folders
 
 
 def read_shortcut(path, name, size, cloud, prober):
     """What one .lnk or .url leads to. Never raises: anything unreadable is 'unknown'.
     `target` is the path as the shortcut holds it; `to` and `args_preview` are for showing, spelled out."""
     sc = _read_shortcut(path, name, size, cloud, prober)
-    sc["to"] = spelled_out(sc["to"])
+    sc["to"] = shown_path(sc["to"])
     if "args_preview" in sc:
         sc["args_preview"] = spelled_out(sc["args_preview"])
     return sc
@@ -367,7 +424,7 @@ def _read_shortcut(path, name, size, cloud, prober):
     sc.update(status=status, reason=why, target=target, to=target)
     sc["args_id"] = hashlib.sha256(args.encode("utf-8", "replace")).hexdigest()[:10] if args.strip() else ""
     base = os.path.basename(target).lower()
-    if status == "ok" and os.path.isdir("\\\\?\\" + target if IS_WIN else target):
+    if status == "ok" and prober.is_folder(target):
         sc["leads_to"] = "folder"
     elif ext_of(base) in ("exe", "com", "bat", "cmd", "msc", "scr", "ps1", "vbs", "js", "jar"):
         sc["leads_to"] = "program"
@@ -376,7 +433,7 @@ def _read_shortcut(path, name, size, cloud, prober):
     shown = name[:-4] if name.lower().endswith(".lnk") else name
     if base in COMMAND_HOSTS and sc["has_args"]:
         sc["flag"] = "runs a command: %s with instructions attached" % base
-        sc["args_preview"] = args.strip()[:160]
+        sc["args_preview"] = shown_args(args)
     elif sc["leads_to"] == "program" and ext_of(shown) in PRETEND_EXTS:
         sc["flag"] = "named like a document but starts a program (%s)" % spelled_out(base)
     return sc
@@ -704,7 +761,8 @@ def survey(args):
         elif it["kind"] == "folder":
             f = it["folder"]
             if f["project"] or f["program"]:
-                alone.append({"path": it["path"], "why": "a code project" if f["project"] else "looks like a program's own folder"})
+                alone.append({"path": it["path"], "shown": spelled_out(it["name"]),
+                              "why": "a code project" if f["project"] else "looks like a program's own folder"})
             elif f["empty"]:
                 add("empty", "remove-empty-dir", it, "Empty folder.", True, "low", is_dir=True)
             else:

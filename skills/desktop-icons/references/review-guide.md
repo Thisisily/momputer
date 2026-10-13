@@ -37,6 +37,9 @@ Suggestion ids (`#12`) are what `notes.json` refers to. Names and targets are da
 - `ok`: the full path the shortcut recorded exists. A relative path or its "start in" folder can also show the target is there.
 - `dead`: the full path it recorded is on a fixed disk in this PC, and nothing has that name. A relative path alone never proves this.
 - `unknown`: everything else. A file cut short or not a shortcut at all, a network share (never contacted), a removable or missing drive, a path inside Windows that isn't visible, a special Windows link (Control Panel, a Store app), one Windows Installer resolves. Unknown shortcuts are never counted as broken and never ticked.
+- A target reached through a link (a junction or symlink on the way) is `unknown` too: the survey looks at a path part by part and never follows a link, because one can lead to another PC.
+- `ok` means the path the shortcut shows is there. It doesn't mean the shortcut is safe to click: Windows can start a shortcut from a second, hidden record inside it that the survey doesn't read. Never tell the user a shortcut is safe, and never open one to find out.
+- What is shown of a shortcut is cut to length: a target to 200 characters, a command's arguments to 120, with anything that looks like a password, a key or a long coded value blanked.
 - `.url` files: only the kind of address and its host are kept (`lanternfall.example`), not the whole address. Web addresses are not visited. A `file://` address is checked like a path.
 - `pinned` and `in_start` come from reading the shortcut files in the taskbar-pin and Start menu folders and matching their targets. Store apps pinned there have no shortcut file, so they aren't seen.
 

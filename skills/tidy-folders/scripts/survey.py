@@ -307,6 +307,22 @@ def drive_list(only=None, include_removable=False):
     return drives
 
 
+_DRIVE_KINDS = {}
+
+
+def on_this_pc(path):
+    """True only for a full path on a disk in this PC (built in, or plugged in). Anything else is
+    never asked about: a path a registry value or a launcher's file names could be a share on
+    another PC, and asking whether it exists would sign in to that PC as the user."""
+    if not isinstance(path, str) or not re.match(r"^[A-Za-z]:\\", path) or not IS_WIN:
+        return False
+    root = path[:3].upper()
+    if root not in _DRIVE_KINDS:
+        import ctypes
+        _DRIVE_KINDS[root] = ctypes.windll.kernel32.GetDriveTypeW(root)
+    return _DRIVE_KINDS[root] in (2, 3)  # removable, fixed. Not a network drive, not unknown
+
+
 def installed_programs(never=()):
     """InstallLocation of every registered program (read from the registry).
 
@@ -322,7 +338,7 @@ def installed_programs(never=()):
         for sub in reg_subkeys(hive, base):
             v = reg_values(hive, base + "\\" + sub)
             loc = expand(v.get("InstallLocation"))
-            if (loc and len(loc) > 3 and os.path.isdir(loc) and os.path.dirname(norm(loc)) != norm(loc)
+            if (loc and len(loc) > 3 and on_this_pc(loc) and os.path.isdir(loc) and os.path.dirname(norm(loc)) != norm(loc)
                     and not any(under(n, [norm(loc)]) for n in never_n)):
                 progs.append({"name": v.get("DisplayName") or sub, "path": loc,
                               "publisher": v.get("Publisher") or "",
@@ -351,13 +367,14 @@ def launchers(drives):
     steam = None
     if IS_WIN:
         steam = expand((reg_values(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", False) or {}).get("SteamPath"))
-    if steam and os.path.isdir(steam):
+    if steam and on_this_pc(steam) and os.path.isdir(steam):
         libs = {norm(steam): steam}
         for vdf in (os.path.join(steam, "steamapps", "libraryfolders.vdf"),
                     os.path.join(steam, "config", "libraryfolders.vdf")):
             for m in re.finditer(r'"path"\s+"([^"]+)"', read_text(vdf)):
                 p = os.path.normpath(m.group(1).replace("\\\\", "\\"))
-                libs.setdefault(norm(p), p)
+                if on_this_pc(p):  # the file is one other accounts on the PC can write: a library it names on a share is never visited
+                    libs.setdefault(norm(p), p)
         games, roots = [], []
         for lib in libs.values():
             sa = os.path.join(lib, "steamapps")
@@ -373,8 +390,8 @@ def launchers(drives):
                     t = read_text(os.path.join(sa, n), 200_000)
                     g = {k: (re.search(r'"%s"\s+"([^"]*)"' % k, t) or [None, None])[1]
                          for k in ("name", "installdir", "SizeOnDisk")}
-                    if g["installdir"]:
-                        games.append({"name": g["name"] or g["installdir"],
+                    if g["installdir"] and not re.search(r'[\\/:*?"<>|]', g["installdir"]):
+                        games.append({"name": (g["name"] or g["installdir"])[:120],
                                       "path": os.path.join(sa, "common", g["installdir"]),
                                       "bytes": int(g["SizeOnDisk"]) if (g["SizeOnDisk"] or "").isdigit() else None})
         found.append({"name": "Steam", "libraries": roots, "games": games})
@@ -389,8 +406,8 @@ def launchers(drives):
                     j = json.loads(read_text(os.path.join(epic_dir, n), 2_000_000))
                 except ValueError:
                     continue
-                if j.get("InstallLocation"):
-                    games.append({"name": j.get("DisplayName") or n, "path": os.path.normpath(j["InstallLocation"]),
+                if isinstance(j, dict) and on_this_pc(j.get("InstallLocation")):
+                    games.append({"name": str(j.get("DisplayName") or n)[:120], "path": os.path.normpath(j["InstallLocation"]),
                                   "bytes": j.get("InstallSize") if isinstance(j.get("InstallSize"), int) else None})
         found.append({"name": "Epic Games", "libraries": sorted({os.path.dirname(g["path"]) for g in games}), "games": games})
 
@@ -402,7 +419,7 @@ def launchers(drives):
             for sub in reg_subkeys(winreg.HKEY_LOCAL_MACHINE, key):
                 v = reg_values(winreg.HKEY_LOCAL_MACHINE, key + "\\" + sub)
                 p = expand(v.get(pathk))
-                if p and os.path.isdir(p):
+                if p and on_this_pc(p) and os.path.isdir(p):
                     games.append({"name": v.get(namek) if namek else os.path.basename(p.rstrip("\\/")),
                                   "path": p, "bytes": None})
             if games:

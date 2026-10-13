@@ -44,7 +44,8 @@ c = Checks()
 check, note = c.check, c.note
 pycache_before = os.path.isdir(os.path.join(S, "__pycache__"))
 T = work_folder(opts.scratch, "desktop-icons-test", MARK)
-links = []
+links = []        # links on the made-up Desktop
+other_links = []  # links elsewhere in the work folder
 
 try:
     # ------------------------------------------------------------ a made-up desktop
@@ -63,6 +64,10 @@ try:
     cmd = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe")
     gone = os.path.join(targets, "Copperline", "notes.exe")
     url = "[InternetShortcut]\r\nURL=%s\r\n"
+    through = junction(os.path.join(targets, "Linked"), os.path.join(targets, "Lanternfall"))
+    if through:
+        other_links.append(os.path.join(targets, "Linked"))
+    far_away = "C:\\" + "\\".join("mom-desktop-test-no-such-folder-%02d" % i for i in range(20)) + "\\gone.exe"
     shortcuts = {
         "Lanternfall Editor.lnk": make_lnk(editor),
         "Lanternfall Editor - Copy.lnk": make_lnk(editor),
@@ -85,6 +90,10 @@ try:
         "Share.lnk": make_lnk("\\\\evil.example\\share\\x.exe"),
         "Net.lnk": make_lnk(network=True),
         "Invoice.pdf.lnk": make_lnk(cmd, args="/c echo pwned > \"%TEMP%\\mom-desktop-test-should-never-exist.txt\""),
+        "Net use.lnk": make_lnk(cmd, args="/c net use Z: \\\\files.example\\share Hunter2-PASSWORD-77 /user:lanternfall & tool.exe "
+                                          "--token=TOKEN-VALUE-5521 -ApiKey \"KEY VALUE 3310\" -enc " + "QUJD" * 12),
+        "Long target.lnk": make_lnk(far_away, wide=True),
+        "Through a link.lnk": make_lnk(os.path.join(targets, "Linked" if through else "Lanternfall-not-there", "editor.exe")),
         "Photo.jpg.lnk": make_lnk(editor),
         "Pinned App.lnk": make_lnk(pinned_exe),
         "Start App.lnk": make_lnk(start_exe),
@@ -159,7 +168,8 @@ try:
           all(status(n) == "dead" for n in ("Copperline Notes.lnk", "Old \u2019Game\u2019 & $(x).lnk", "Dead file.url", "Env gone.lnk"))
           and status("Dead Public.lnk", "public") == "dead")
     unknown = ("Truncated.lnk", "Not a link.lnk", "Empty.lnk", "Hostile target.lnk", "Share.lnk", "Net.lnk", "Broken.url", "Share.url",
-               "Stale relative.lnk", "Env secret.lnk", "Env secret in a path.lnk", "Env secret that is a path.lnk")
+               "Stale relative.lnk", "Env secret.lnk", "Env secret in a path.lnk", "Env secret that is a path.lnk") + (
+        ("Through a link.lnk",) if through else ())
     check("anything that can't be read or checked is 'unknown', never 'dead' (cut short, not a link, empty, hostile target, network, "
           "only a relative path)",
           all(status(n) == "unknown" for n in unknown), [(n, status(n)) for n in unknown])
@@ -173,7 +183,20 @@ try:
     flagged = {it["name"]: it["shortcut"].get("flag", "") for it in sv["items"] if it.get("shortcut", {}).get("flag")}
     check("a shortcut that runs a command, one named like a document, and a link to a share are flagged",
           "runs a command" in flagged.get("Invoice.pdf.lnk", "") and "named like a document" in flagged.get("Photo.jpg.lnk", "")
-          and "network share" in flagged.get("Share.url", "") and len(flagged) == 3, flagged)
+          and "network share" in flagged.get("Share.url", "") and "runs a command" in flagged.get("Net use.lnk", "") and len(flagged) == 4, flagged)
+    if through:
+        check("a target reached through a link is not followed: 'unknown', and nobody asks what is behind the link",
+              "through a link" in by_name[("desktop", "Through a link.lnk")]["shortcut"]["reason"], by_name[("desktop", "Through a link.lnk")]["shortcut"])
+    else:
+        note("no junction could be made here: the shortcut-through-a-link check was not run")
+    far = by_name[("desktop", "Long target.lnk")]["shortcut"]
+    check("a very long target is cut for showing (%d characters recorded, %d shown)" % (len(far["target"]), len(far["to"])),
+          len(far["target"]) > 600 and len(far["to"]) <= 200 and far["status"] == "dead"
+          and all(len(s.get("why", "")) < 400 for s in sv["suggestions"]), far["to"])
+    cmdline = by_name[("desktop", "Net use.lnk")]["shortcut"].get("args_preview", "")
+    check("what a command shortcut would run is shown without what looks like a password, a key or a long coded value",
+          "net use" in cmdline and "/user:lanternfall" in cmdline and len(cmdline) <= 120
+          and not any(s in raw for s in ("Hunter2-PASSWORD-77", "TOKEN-VALUE-5521", "KEY VALUE 3310", "QUJDQUJDQUJD")), cmdline)
     check("the same program in two places is reported as perhaps installed twice",
           len(sv["twice"]) == 1 and sv["twice"][0]["program"] == "samename.exe" and len(sv["twice"][0]["places"]) == 2, sv["twice"])
     check("a dead shortcut on the Public Desktop is 'for you to do'", len(sv["for_you"]) == 1 and sv["for_you"][0]["name"] == "Dead Public.lnk", sv["for_you"])
@@ -190,6 +213,9 @@ try:
             "Twice A.lnk": ("shortcuts", False), "Steam Game.url": ("shortcuts", False), "New folder": ("empty", True),
             "Holiday photos": ("folders", False), "notes.txt": ("files", False), "tool.exe": ("files", False)}
     want.update({n: ("shortcuts", False) for n in unknown if n != "Share.url"})
+    want.update({"Net use.lnk": ("check", False), "Long target.lnk": ("dead", True)})
+    if not through:
+        want["Through a link.lnk"] = ("dead", True)
     want.update({n: ("files", True) for n in stale})
     want.update({backwards: ("check", False), "Report" + RLO + "fdp.lnk": ("check", False)})
     got = {n: (sug[n]["group"], sug[n]["default"]) for n in want if n in sug}
@@ -446,7 +472,7 @@ try:
             check("the page passes every browser check", r.returncode == 0, r.stdout[-600:] + r.stderr[-300:])
     check("no __pycache__ left in the skill folder", pycache_before or not os.path.isdir(os.path.join(S, "__pycache__")))
 finally:
-    for link in links:
+    for link in links + other_links:
         try:
             os.rmdir(link)  # the link itself, never what it points at
         except OSError:

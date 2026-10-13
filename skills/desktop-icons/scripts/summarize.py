@@ -84,7 +84,7 @@ def main(argv=None):
             print("  %s: %s" % (f["name"], sh(f["why"])))
     la = s.get("left_alone") or {}
     print("\nLeft alone: %s; folders: %s" % (json.dumps(la.get("mine", {})), ", ".join(
-        "%s (%s)" % (os.path.basename(f["path"]), f["why"]) for f in la.get("folders", [])) or "none"))
+        "%s (%s)" % (f.get("shown") or os.path.basename(f["path"]), f["why"]) for f in la.get("folders", [])) or "none"))
 
 
 if __name__ == "__main__":
