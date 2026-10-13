@@ -105,6 +105,28 @@ pub fn is_elevated() -> bool {
 ///
 /// What's inside `target` is removed without following links (see trash::walk), so the target
 /// itself may be anyone's.
+/// Is this a real folder or file (not a link) that the person running mom owns? Places anyone on
+/// the PC can write to (the top of a second drive, say) hold other people's things too, and
+/// links that lead elsewhere. Anything mom can't tell counts as no.
+pub fn owned_by_me(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if !m.is_symlink() => {}
+        _ => return false,
+    }
+    #[cfg(windows)]
+    {
+        static ME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        match (ME.get_or_init(acl::me), acl::owner(path)) {
+            (Some(me), Some(owner)) => *me == owner,
+            _ => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
 pub fn admin_may_delete(target: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -273,6 +295,48 @@ mod acl {
         Some(s)
     }
 
+    /// Who owns `path`, as a SID string.
+    pub fn owner(path: &Path) -> Option<String> {
+        let w: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
+        let mut owner: PSID = std::ptr::null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: `w` is NUL-terminated; the out pointers are ours; `sd` is freed below.
+        let rc = unsafe {
+            GetNamedSecurityInfoW(w.as_ptr(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &mut owner, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), &mut sd)
+        };
+        if rc != 0 || sd.is_null() {
+            return None;
+        }
+        let sid = if owner.is_null() { None } else { sid_string(owner) };
+        // SAFETY: allocated by GetNamedSecurityInfoW.
+        unsafe { LocalFree(sd) };
+        sid
+    }
+
+    /// The person running mom, as a SID string.
+    pub fn me() -> Option<String> {
+        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        // SAFETY: plain Win32 calls with a buffer we own; the token handle is closed before returning,
+        // and the SID is read while the buffer is alive.
+        unsafe {
+            let mut token: HANDLE = std::ptr::null_mut();
+            if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                return None;
+            }
+            let mut buf = vec![0u64; 128]; // 1 KB, 8-byte aligned for TOKEN_USER
+            let mut len = 0u32;
+            let ok = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), (buf.len() * 8) as u32, &mut len);
+            CloseHandle(token);
+            if ok == 0 {
+                return None;
+            }
+            let user = &*(buf.as_ptr() as *const TOKEN_USER);
+            sid_string(user.User.Sid)
+        }
+    }
+
     /// Is `path` owned by someone trusted, with no one else allowed any of `rights` on it?
     /// Anything mom can't read counts as no.
     pub fn only_trusted(path: &Path, rights: u32) -> bool {
@@ -386,6 +450,28 @@ pub fn split_command(cmd: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_what_you_made_is_yours() {
+        let dir = std::env::temp_dir().join(format!("mom-mine-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("project")).unwrap();
+        std::fs::write(dir.join("project").join("file.txt"), "x").unwrap();
+        assert!(owned_by_me(&dir.join("project")));
+        assert!(owned_by_me(&dir.join("project").join("file.txt")));
+        assert!(!owned_by_me(&dir.join("not-there")), "what can't be looked at isn't yours");
+        #[cfg(windows)]
+        {
+            let windows = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| r"C:\Windows".into());
+            assert!(!owned_by_me(&windows), "Windows' own folder belongs to Windows");
+            // A link to your own folder is still a link: where it leads can change.
+            let link = dir.join("link");
+            if std::process::Command::new("cmd").args(["/c", "mklink", "/J"]).arg(&link).arg(dir.join("project")).output().is_ok_and(|o| o.status.success()) {
+                assert!(!owned_by_me(&link));
+                let _ = std::fs::remove_dir(&link);
+            }
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn uninstall_commands_split_the_way_windows_runs_them() {

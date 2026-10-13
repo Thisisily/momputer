@@ -1810,6 +1810,17 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         // As you: what's in folders anyone can change is yours to clean anyway. The rest waits
         // for the administrator run.
         each(&|c: &Cand| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_err() && remove_without_following(t)))
+    } else if id == "old-build-folders" {
+        // Projects can sit outside your own folders, where other people on this PC can write
+        // (the top of a second drive). There: one at a time, never following a link, even one
+        // swapped in while mom works, and only what's still yours at that moment.
+        each(&|c: &Cand| {
+            if c.targets.iter().all(|t| t.starts_with(&ctx.paths.home)) {
+                remove_all(&c.targets, live).into_iter().all(|gone| gone)
+            } else {
+                c.targets.iter().all(|t| crate::elevate::owned_by_me(t) && remove_without_following(t))
+            }
+        })
     } else {
         // In batches: a big folder on its own, small things many at a time.
         let mut out: Vec<Option<bool>> = Vec::with_capacity(chosen.len());

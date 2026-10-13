@@ -59,10 +59,14 @@ pub(super) fn default_roots(paths: &Paths, rooms: &[PathBuf]) -> Vec<PathBuf> {
         v.push(paths.home.join(rel));
     }
     // And the same names at the top of every drive that's built in: code often lives on a second
-    // disk (D:\Workspace, E:\Projects). Only those names: a whole drive is never walked.
+    // disk (D:\Workspace, E:\Projects). Only those names: a whole drive is never walked. And only
+    // if the folder is yours: the top of a drive is a place anyone on the PC can make folders in.
     for drive in crate::util::fixed_drives() {
         for name in DRIVE_ROOTS {
-            v.push(Path::new(&drive).join(name));
+            let dir = Path::new(&drive).join(name);
+            if crate::elevate::owned_by_me(&dir) {
+                v.push(dir);
+            }
         }
     }
     let mut seen = HashSet::new();
@@ -100,7 +104,8 @@ fn walk(dir: &Path, rel: &str, depth: usize, inherited: u64, seen: &mut HashSet<
     let rust = dir.join("Cargo.toml").is_file();
     let project = js || rust;
     let active = if project || dir.join(".git").exists() { newest_activity(dir, project).max(inherited) } else { inherited };
-    if project {
+    // Only your own projects: under a shared folder, someone else's can sit next to yours.
+    if project && crate::elevate::owned_by_me(dir) {
         let name = if rel.is_empty() { name_of(dir) } else { rel.to_string() };
         out.push(Project { dir: dir.to_path_buf(), name, active, js, rust });
     }
@@ -142,8 +147,9 @@ fn build_dirs(p: &Project) -> Vec<PathBuf> {
     if p.rust {
         v.push(p.dir.join("target"));
     }
+    // A real folder (never a link to one), and yours.
     v.into_iter()
-        .filter(|d| std::fs::symlink_metadata(d).map(|m| m.is_dir()).unwrap_or(false))
+        .filter(|d| std::fs::symlink_metadata(d).map(|m| m.is_dir()).unwrap_or(false) && crate::elevate::owned_by_me(d))
         .collect()
 }
 
