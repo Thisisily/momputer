@@ -29,8 +29,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-      # No build cache here: what gets signed is built from scratch.
-      #
+      # What gets signed is built from scratch: no build cache then. A draft that won't be signed
+      # may reuse what earlier release builds compiled of the libraries momputer is built from
+      # (they rarely change, and compiling them is half of a build); momputer's own code is
+      # compiled afresh every time either way.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: env.SIGN != 'true'
+        with:
+          prefix-key: release
+
       # The Tauri CLI (it only puts the installers together) is Tauri's own ready-made build,
       # checked against the fingerprint written here. Compiling it from source took ten minutes
       # of every run. For a newer one, change the version and the fingerprint together: both
@@ -49,9 +56,6 @@ jobs:
           Expand-Archive $zip -DestinationPath $bin -Force
           cargo tauri --version
           if ($LASTEXITCODE -ne 0) { throw 'The Tauri CLI is not where cargo looks for it.' }
-
-      - name: Test
-        run: cargo test -p mom-core -p mom-cli
 
       - name: Version
         id: version
@@ -155,6 +159,35 @@ jobs:
         run: |
           Write-Host "::warning::SignPath isn't set up (see docs/signing.md), so this release is unsigned."
           Copy-Item dist/installers dist/release -Recurse
+
+      # The tests run in the ci workflow for every commit on main. This waits for that run of this
+      # very commit instead of running them a second time, and drafts nothing unless they passed.
+      # (For a commit ci never ran for, they run here.)
+      - name: The tests passed for this commit
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $run = $null
+          $until = (Get-Date).AddMinutes(25)
+          do {
+            $runs = gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$env:GITHUB_SHA&per_page=10" | ConvertFrom-Json
+            $run = $runs.workflow_runs | Sort-Object created_at -Descending | Select-Object -First 1
+            if ($null -eq $run -or $run.status -eq 'completed') { break }
+            Write-Host "ci is still running for this commit; waiting for it."
+            Start-Sleep -Seconds 15
+          } while ((Get-Date) -lt $until)
+          if ($null -eq $run) {
+            Write-Host 'ci never ran for this commit, so the tests run here.'
+            cargo test -p mom-core -p mom-cli
+            if ($LASTEXITCODE -ne 0) { throw 'The tests failed.' }
+          } elseif ($run.status -ne 'completed') {
+            throw "ci is still running for this commit after 25 minutes: $($run.html_url)"
+          } elseif ($run.conclusion -ne 'success') {
+            throw "The tests didn't pass for this commit ($($run.conclusion)), so no release is drafted: $($run.html_url)"
+          } else {
+            Write-Host "The tests passed: $($run.html_url)"
+          }
 
       - name: Draft the release
         shell: pwsh

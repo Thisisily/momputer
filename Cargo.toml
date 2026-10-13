@@ -4,7 +4,7 @@ members = ["crates/mom-core", "crates/mom-cli", "app/src-tauri"]
 default-members = ["crates/mom-core", "crates/mom-cli"]
 
 [workspace.package]
-version = "0.2.9"
+version = "0.2.10"
 edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 authors = ["momputer contributors"]
@@ -62,8 +62,10 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# No link-time optimisation across crates: it made the last step of every build (linking
+# momputer.exe) take four minutes of the six a rebuild took, for a slightly smaller file.
 [profile.release]
 opt-level = 3
-lto = "thin"
-codegen-units = 4
+lto = false
+codegen-units = 16
 strip = true
