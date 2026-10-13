@@ -311,12 +311,23 @@ fn url_has_secret(url: &str) -> bool {
         || extras.split(['?', '&', ';']).filter_map(|pair| pair.split_once('=')).any(|(name, value)| secret_name(name) || secret_value(value))
 }
 
-/// Where the word at the start of `text` ends. In a settings file (`quoted`) a quoted stretch
-/// is part of the word, spaces and all, the way a shell reads it: `--password "two words"` is a
-/// flag and one value, not a flag and two. A quote with no partner is just a character.
+/// Where the word at the start of `text` ends. In a settings file (`quoted`) it's read the way
+/// a shell reads a command: a quoted stretch is part of the word, spaces and all (`--password
+/// "two words"` is a flag and one value), and so is whatever a backslash is put in front of. A
+/// quote with no partner is just a character. Where shells differ, the longer word is taken:
+/// a word that's too long is still read through, a word cut short can leave half a key behind.
 fn word_end(text: &str, quoted: bool) -> usize {
     let mut open: Option<char> = None;
+    let mut escaped = false;
     for (i, c) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if quoted && c == '\\' {
+            escaped = true;
+            continue;
+        }
         match open {
             Some(q) if c == q => open = None,
             Some(_) => {}
@@ -328,24 +339,60 @@ fn word_end(text: &str, quoted: bool) -> usize {
     text.len()
 }
 
+/// A word that says the next one is a key by being what it is: "Bearer abc", "token abc".
+fn scheme(word: &str) -> bool {
+    matches!(word.trim().trim_end_matches([':', '=']).to_ascii_lowercase().as_str(), "bearer" | "basic" | "token" | "apikey")
+}
+
+/// `name=value` pairs strung together (what follows a question mark in an address, written with
+/// or without the address's start): each value whose name or shape is a key's is blanked.
+fn blank_pairs(word: &str) -> Option<String> {
+    if !word.contains('=') || !word.contains(['?', '&', ';']) {
+        return None;
+    }
+    let mut out = String::with_capacity(word.len());
+    let mut changed = false;
+    let mut start = 0;
+    let ends = word.char_indices().filter(|(_, c)| matches!(c, '?' | '&' | ';')).map(|(i, c)| (i, c.len_utf8())).chain([(word.len(), 0)]);
+    for (i, len) in ends {
+        let part = &word[start..i];
+        match part.split_once('=') {
+            Some((name, value)) if !value.is_empty() && (secret_name(name.rsplit(['/', '\\']).next().unwrap_or(name)) || secret_value(value)) => {
+                out.push_str(name);
+                out.push('=');
+                out.push_str(BLANK);
+                changed = true;
+            }
+            _ => out.push_str(part),
+        }
+        out.push_str(&word[i..i + len]);
+        start = i + len;
+    }
+    changed.then_some(out)
+}
+
 /// Blanks what's secret in a run of words (a command line, a header's value, a line of notes),
 /// leaving every space where it was. Always: a word that looks like a key, `NAME=value` where
 /// the name is a secret's, an address that carries a key. `strict` (it's from a settings file):
 /// also whatever follows a flag or a word that announces a key ("--token x", "Bearer x",
-/// "password: x"), quoted values whole, and everything after the question mark in any address.
-/// In notes, what follows such a word goes only if it looks like a value (it has a digit in it,
-/// or it's long): "the token: is described here" stays as it is.
+/// "password: x", "password:x"), quoted values whole, a password in "name:password@place", and
+/// everything after the question mark in any address. In notes, what follows such a word goes
+/// only if it looks like a value (it has a digit in it, or it's long): "the token: is described
+/// here" stays as it is.
 fn blank_words(text: &str, strict: bool) -> (String, usize) {
-    blank_run(text, strict, strict)
+    let (shown, hidden, _) = blank_run(text, strict, strict, false);
+    (shown, hidden)
 }
 
-/// `blank_words`, with whether a quoted stretch counts as one word (`quoted`). What's inside
-/// such a stretch is read again without that, so it's always read word by word in the end.
-fn blank_run(text: &str, strict: bool, quoted: bool) -> (String, usize) {
+/// `blank_words`, with whether a quoted stretch counts as one word (`quoted`), and whether the
+/// word before this text announced a key (`pending`). Also says whether the last word here
+/// announces one, for whatever comes next. What's inside a quoted stretch is read again without
+/// `quoted`, so everything is read word by word in the end.
+fn blank_run(text: &str, strict: bool, quoted: bool, pending: bool) -> (String, usize, bool) {
     const AROUND: &str = "\"'`()[]{}<>,;";
     let mut out = String::with_capacity(text.len());
     let mut hidden = 0;
-    let mut blank_next = false;
+    let mut blank_next = pending;
     let mut rest = text;
     while !rest.is_empty() {
         let space = rest.len() - rest.trim_start().len();
@@ -366,18 +413,25 @@ fn blank_run(text: &str, strict: bool, quoted: bool) -> (String, usize) {
             continue;
         }
         let plain = core.trim_end_matches([':', '=']).trim_start_matches('-').to_ascii_lowercase();
-        let scheme = matches!(plain.as_str(), "bearer" | "basic" | "token" | "apikey");
         let mut put = |shown: &str| {
             out.push_str(open);
             out.push_str(shown);
             out.push_str(close);
         };
-        if blank_next && !scheme {
+        if blank_next && !scheme(core) {
             blank_next = false;
             // In notes, only what looks like a value: prose goes on after "the token:".
             if strict || core.chars().any(|c| c.is_ascii_digit()) || core.len() >= 16 {
                 hidden += 1;
                 put(BLANK);
+                continue;
+            }
+        }
+        // Several name=value pairs in one word (what follows a question mark).
+        if strict && !core.contains("://") && !core.contains(char::is_whitespace) {
+            if let Some(shown) = blank_pairs(core) {
+                hidden += 1;
+                put(&shown);
                 continue;
             }
         }
@@ -391,11 +445,13 @@ fn blank_run(text: &str, strict: bool, quoted: bool) -> (String, usize) {
                 continue;
             }
         }
-        // A quoted stretch of several words: read what's inside it the same way.
+        // A quoted stretch of several words: read what's inside it the same way, and what its
+        // last word announces holds for the word after the stretch.
         if core.contains(char::is_whitespace) {
-            let (inside, n) = blank_run(core, strict, false);
+            let (inside, n, announced) = blank_run(core, strict, false, false);
             hidden += n;
             put(&inside);
+            blank_next = announced;
             continue;
         }
         if secret_value(core) {
@@ -408,10 +464,28 @@ fn blank_run(text: &str, strict: bool, quoted: bool) -> (String, usize) {
             put(&plain_url(core));
             continue;
         }
-        blank_next = scheme || ((core.starts_with('-') || core.ends_with(':') || core.ends_with('=')) && secret_name(&plain));
+        if strict {
+            // name:value with no space ("X-Api-Key:abc"). Not a drive letter, a time or an address.
+            let pair = core.split_once(':').filter(|(n, v)| n.len() > 1 && !v.is_empty() && !n.contains(['/', '\\']) && !v.starts_with(['/', '\\']));
+            if let Some((name, value)) = pair.filter(|(n, _)| secret_name(n.trim_matches(|c| c == '"' || c == '\''))) {
+                hidden += 1;
+                put(&format!("{name}:{BLANK}"));
+                blank_next = scheme(value); // "Authorization:Bearer", and the key comes next
+                continue;
+            }
+            // name:password@place, written without the start of an address.
+            if let Some((who, place)) = core.rsplit_once('@').filter(|(w, p)| !p.is_empty() && !w.contains(['/', '\\'])) {
+                if let Some((user, _)) = who.split_once(':').filter(|(u, pw)| !u.is_empty() && !pw.is_empty()) {
+                    hidden += 1;
+                    put(&format!("{user}:{BLANK}@{place}"));
+                    continue;
+                }
+            }
+        }
+        blank_next = scheme(core) || ((core.starts_with('-') || core.ends_with(':') || core.ends_with('=')) && secret_name(&plain));
         out.push_str(word);
     }
-    (out, hidden)
+    (out, hidden, blank_next)
 }
 
 /// Environment variables and `~` in a path from a settings file, filled in. `root`: what a
@@ -1096,20 +1170,29 @@ fn blank_json(v: &mut Value, name: &str, inside_secrets: bool) -> usize {
             hidden
         }
         Value::Array(a) => {
-            // A key given as an argument: the word after "--token".
+            // A list is often a command's arguments: what one item announces ("--token",
+            // "Authorization:", "Bearer") holds for the next, which goes whole, spaces and all.
             let mut hidden = 0;
-            let mut after_flag = false;
+            let mut pending = false;
             for x in a.iter_mut() {
-                let word = x.as_str().map(str::to_string);
-                match word {
-                    Some(w) if after_flag && !w.starts_with('-') => {
-                        *x = Value::String(BLANK.to_string());
-                        hidden += 1;
-                        after_flag = false;
+                match x {
+                    Value::String(s) if !s.is_empty() && !inside_secrets && !secret_name(name) => {
+                        if pending && !scheme(s) {
+                            *s = BLANK.to_string();
+                            hidden += 1;
+                            pending = false;
+                        } else {
+                            let (shown, n, announced) = blank_run(s, true, true, false);
+                            if n > 0 {
+                                *s = shown;
+                            }
+                            hidden += n;
+                            pending = announced;
+                        }
                     }
-                    _ => {
-                        after_flag = word.is_some_and(|w| w.starts_with('-') && !w.contains('=') && secret_name(w.trim_start_matches('-')));
-                        hidden += blank_json(x, name, inside_secrets);
+                    other => {
+                        pending = false;
+                        hidden += blank_json(other, name, inside_secrets);
                     }
                 }
             }
@@ -1457,6 +1540,26 @@ mod tests {
         // What follows a semicolon in an address is as good a place for a key as what follows a question mark.
         assert_eq!(strict("open https://x.example/mcp;token=abc123/sse"), ("open https://x.example/mcp".to_string(), 1));
         assert_eq!(plain_url("https://sam:pw@x.example\\hook\\abcdef0123456789abcdef0123"), format!("https://x.example/hook/{BLANK}"));
+        // An escaped quote doesn't end the stretch, and neither does an escaped space end the word.
+        assert_eq!(strict("login --password \"a \\\" b\" --user sam"), (format!("login --password \"{BLANK}\" --user sam"), 1));
+        assert_eq!(strict("login --password=two\\ words --user sam"), (format!("login --password={BLANK} --user sam"), 1));
+        // What a quoted stretch ends on holds for the word after it.
+        assert_eq!(strict("send \"Authorization: Bearer\" abc123 now"), (format!("send \"Authorization: Bearer\" {BLANK} now"), 1));
+        // A name and its value with nothing between them but a colon.
+        assert_eq!(strict("curl -H X-Api-Key:abc123 -H Authorization:Bearer abc123 at 12:30 on C:\\tools"), (format!("curl -H X-Api-Key:{BLANK} -H Authorization:{BLANK} {BLANK} at 12:30 on C:\\tools"), 3));
+        // Pairs after a question mark, with or without the start of the address, and a password before an @.
+        assert_eq!(strict("get x.example/a?page=2&access_token=abc123&sort=up"), (format!("get x.example/a?page=2&access_token={BLANK}&sort=up"), 1));
+        assert_eq!(strict("clone sam:hunter2@git.example:org/repo as git@git.example:org/repo"), (format!("clone sam:{BLANK}@git.example:org/repo as git@git.example:org/repo"), 1));
+        // Run as a list, what one item announces holds for the next, and that one goes whole.
+        let list = |items: &[&str]| {
+            let mut v = Value::Array(items.iter().map(|i| Value::String(i.to_string())).collect());
+            let hidden = blank_json(&mut v, "args", false);
+            (v.as_array().unwrap().iter().map(|x| x.as_str().unwrap().to_string()).collect::<Vec<_>>(), hidden)
+        };
+        assert_eq!(list(&["-H", "Authorization:", "Bearer", "abc123", "--user", "sam"]), (vec!["-H".into(), "Authorization:".into(), "Bearer".into(), BLANK.into(), "--user".into(), "sam".into()], 1));
+        assert_eq!(list(&["--header", "Authorization: Bearer", "abc123"]).0[2], BLANK);
+        assert_eq!(list(&["--password", "my pass phrase", "next"]), (vec!["--password".into(), BLANK.into(), "next".into()], 1));
+        assert_eq!(list(&["token", "abc123", "plain"]).0, ["token", BLANK, "plain"]);
         // Run as a list, the argument after the flag goes whole.
         assert_eq!(show_command("login.exe", &["--password".into(), "my pass phrase".into(), "--user".into(), "sam".into()]), format!("login.exe --password {BLANK} --user sam"));
         // Every space stays where it was, and what isn't a key isn't touched.

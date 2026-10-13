@@ -4370,5 +4370,8 @@ button.row-name:hover {
 }
 
 .skill-read {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
   padding: 10px 2px 0;
 }

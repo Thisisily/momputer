@@ -3009,6 +3009,9 @@ in ${x.cwd}`)}">
     const has = s.has || [];
     const say = (p) => `<div class="say-row"><span class="say">&ldquo;${esc(p)}&rdquo;</span>
         <button class="link-btn" data-act="copy-say" data-text="${esc(p)}" title="Copy it, then paste it to your agent">Copy</button></div>`;
+    // The copy an agent here has, to read in BIG MODE (it's one of the files in that agent's set-up).
+    const files = (state.agents || []).flatMap((a) => a.docs);
+    const mine = (s.copies || []).map((c) => files.find((d) => d.path.toLowerCase() === `${c.path}\\SKILL.md`.toLowerCase())).filter(Boolean).map((d) => d.id)[0];
     // A copy that's older than the newest mom knows: who has it, and which version.
     const late = (s.copies || []).filter((c) => c.behind);
     const behind = late.length
@@ -3022,7 +3025,12 @@ in ${x.cwd}`)}">
       ${behind}
       <p class="skill-what">${esc(s.what)}${open ? ` ${esc(s.more)}` : ""} <button class="more-btn" data-act="more" data-key="${esc(key)}" aria-expanded="${open}">${open ? "Less" : "More"}</button></p>
       ${(open ? s.prompts : s.prompts.slice(0, 1)).map(say).join("")}
-      ${open ? `<div class="skill-read"><button class="link-btn" data-act="open-uri" data-url="${esc(s.page)}">Read the skill${ICON.out}</button></div>` : ""}
+      ${
+        open
+          ? `<div class="skill-read">${mine ? `<button class="link-btn" data-act="open-doc" data-id="${esc(mine)}" data-title="${esc(s.title)}">Read your copy</button>` : ""}
+              <button class="link-btn" data-act="open-uri" data-url="${esc(s.page)}">${mine ? "On GitHub" : "Read the skill"}${ICON.out}</button></div>`
+          : ""
+      }
     </div>`;
   }
 
