@@ -3,6 +3,7 @@
 Nothing here touches anything outside the work folder a test makes for itself.
 """
 import ctypes
+import hashlib
 import os
 import shutil
 import struct
@@ -102,8 +103,78 @@ def tree(root):
     return sorted(out)
 
 
+def hashes(root):
+    """{relative path: SHA-256} of every file under root, to show that nothing in a folder was changed."""
+    out = {}
+    for d, _dirs, files in os.walk(root):
+        for name in files:
+            p = os.path.join(d, name)
+            with open(p, "rb") as f:
+                out[os.path.relpath(p, root)] = hashlib.sha256(f.read()).hexdigest()
+    return out
+
+
+def ranges(ids):
+    """[1, 2, 3, 7] as "1-3,7": how a page writes the ticked numbers in its approval line. Nothing ticked is "none"."""
+    ids, out, i = sorted(ids), [], 0
+    while i < len(ids):
+        j = i
+        while j + 1 < len(ids) and ids[j + 1] == ids[j] + 1:
+            j += 1
+        out.append(str(ids[i]) if i == j else "%d-%d" % (ids[i], ids[j]))
+        i = j + 1
+    return ",".join(out) or "none"
+
+
 def junction(link, target):
-    return subprocess.run(["cmd", "/c", "mklink", "/J", link, target], capture_output=True, text=True).returncode == 0
+    """Make a junction at `link` that points to the folder `target`. True if it was made.
+    Windows is asked directly: no command line is built from the two paths."""
+    existed = os.path.lexists(link)
+    try:
+        import _winapi  # Windows only
+        _winapi.CreateJunction(target, link)
+    except (ImportError, AttributeError, OSError):
+        if not existed:
+            try:
+                os.rmdir(link)  # a half-made link is an empty folder (or the link itself): never what it points at
+            except OSError:
+                pass
+        return False
+    return True
+
+
+def streams(path):
+    """The named data streams hung on one file or folder, e.g. [":hidden.html:$DATA"]. A file's own
+    contents ("::$DATA") are left out, so an ordinary file gives []. Windows is asked directly."""
+    class Found(ctypes.Structure):  # WIN32_FIND_STREAM_DATA
+        _fields_ = [("size", ctypes.c_int64), ("name", ctypes.c_wchar * 296)]
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.FindFirstStreamW.restype = ctypes.c_void_p
+    k.FindFirstStreamW.argtypes = [ctypes.c_wchar_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    k.FindNextStreamW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    k.FindClose.argtypes = [ctypes.c_void_p]
+    found, out = Found(), []
+    h = k.FindFirstStreamW(X + path, 0, ctypes.byref(found), 0)
+    if h in (None, ctypes.c_void_p(-1).value):
+        return out  # none at all (a folder), or a disk that has no streams
+    try:
+        while True:
+            if found.name != "::$DATA":
+                out.append(found.name)
+            if not k.FindNextStreamW(h, ctypes.byref(found)):
+                break
+    finally:
+        k.FindClose(h)
+    return out
+
+
+def hidden_streams(folder):
+    """["name:stream:$DATA", ...] for the folder itself and everything directly in it: what `dir /r` shows."""
+    out = [os.path.basename(folder) + s for s in streams(folder)]
+    for name in sorted(os.listdir(folder)):
+        out += [name + s for s in streams(os.path.join(folder, name))]
+    return out
 
 
 def write(path, data=b"x"):

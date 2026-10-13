@@ -39,6 +39,12 @@ def main(argv=None):
             jobs.append(("test_%s" % name, ["test_%s.py" % name, scratch] + extra))
     if os.path.isdir(os.path.join(SKILLS, "inbox-cleanup")):
         jobs.append(("test_inbox_queries", ["test_inbox_queries.py", scratch] + keep))
+    # two skills that move no files: one test end to end (with the page in a browser), and one for each careful part
+    for name, parts in (("subscription_audit", ("reader", "detect")), ("bookmark_cleanup", ("links",))):
+        if os.path.isdir(os.path.join(SKILLS, name.replace("_", "-"))):
+            jobs.append(("test_%s" % name, ["test_%s.py" % name, scratch] + extra))
+            for part in parts:
+                jobs.append(("test_%s_%s" % (name, part), ["test_%s_%s.py" % (name, part), scratch] + keep))
     results = []
     for label, cmd in jobs:
         print("\n" + "=" * 100 + "\n" + label + "\n" + "=" * 100, flush=True)

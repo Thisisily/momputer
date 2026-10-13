@@ -10,20 +10,23 @@ light and dark both apply, ticks are remembered.
 The browser gets a throwaway profile folder inside <scratch folder>; this script stops the
 browser it started (only that one) and deletes the profile. With --shots it saves screenshots
 there. Exit code 2 means the browser couldn't be found or started, so nothing was checked.
-Python 3.8+, standard library only (it speaks the browser's debugging protocol itself).
+Python 3.8+, standard library only. It speaks the browser's debugging protocol itself, over a
+pipe handed to the browser when it starts: no debugging port is opened on the PC.
+
+The Browser class is also imported by the tests of pages with another approval line
+(test_subscription_audit.py, test_bookmark_cleanup.py), through _report_page.py.
 """
 import argparse
 import base64
 import json
 import os
+import queue
 import shutil
-import socket
-import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
-import urllib.request
 from urllib.parse import unquote
 
 sys.dont_write_bytecode = True
@@ -31,84 +34,121 @@ BROWSERS = [r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", r"C
             r"C:\Program Files\Google\Chrome\Application\chrome.exe", r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"]
 
 
-class Socket:
-    """Just enough WebSocket (RFC 6455) to talk to a local browser: text messages, one at a time."""
+class Pipe:
+    """The browser's debugging pipe: two anonymous pipes instead of a debugging port.
 
-    def __init__(self, url):
-        assert url.startswith("ws://")
-        host, _, path = url[5:].partition("/")
-        name, _, port = host.partition(":")
-        self.s = socket.create_connection((name, int(port or 80)), timeout=20)
-        key = base64.b64encode(os.urandom(16)).decode()
-        self.s.sendall(("GET /%s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                        "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n" % (path, host, key)).encode())
-        self.buf = b""
-        while b"\r\n\r\n" not in self.buf:
-            self.buf += self._more()
-        head, _, self.buf = self.buf.partition(b"\r\n\r\n")
-        if b" 101 " not in head.split(b"\r\n")[0]:
-            raise OSError("the browser refused the connection: %r" % head[:80])
+    A port (--remote-debugging-port) is a listener on 127.0.0.1 that any program or user on the PC
+    could connect to while a check runs. A pipe has no address: the browser is handed its two
+    ends by handle when it is started, and only those two handles are inherited. The messages are
+    the same JSON as on a port, each ended by a NUL byte. A thread reads what the browser
+    writes, so recv() can wait with a time limit.
+    """
 
-    def _more(self):
-        chunk = self.s.recv(65536)
-        if not chunk:
-            raise OSError("the browser closed the connection")
-        return chunk
+    def __init__(self):
+        import msvcrt  # Windows only, like the browser paths above
+        theirs_read, self.to_browser = os.pipe()     # we write commands, the browser reads them
+        self.from_browser, theirs_write = os.pipe()  # the browser writes answers and events, we read them
+        self.theirs = [theirs_read, theirs_write]
+        for fd in (self.to_browser, self.from_browser):
+            msvcrt.setmode(fd, os.O_BINARY)
+        handles = [msvcrt.get_osfhandle(fd) for fd in self.theirs]
+        for h in handles:
+            os.set_handle_inheritable(h, True)
+        self.switches = ["--remote-debugging-pipe", "--remote-debugging-io-pipes=%d,%d" % tuple(handles)]  # read handle, write handle
+        self.startupinfo = subprocess.STARTUPINFO(lpAttributeList={"handle_list": handles})  # the browser inherits these two, nothing else of ours
+        self.inbox, self.reader = queue.Queue(), None
 
-    def _take(self, n):
-        while len(self.buf) < n:
-            self.buf += self._more()
-        out, self.buf = self.buf[:n], self.buf[n:]
-        return out
+    def started(self):
+        """The browser has its own copies of its ends now: close ours, and start reading."""
+        self._close(self.theirs)
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
 
-    def send(self, text):
-        data = text.encode("utf-8")
-        mask = os.urandom(4)
-        n = len(data)
-        head = b"\x81" + (bytes([0x80 | n]) if n < 126 else b"\xfe" + struct.pack(">H", n) if n < 65536 else b"\xff" + struct.pack(">Q", n))
-        self.s.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
-
-    def recv(self, timeout=20):
-        self.s.settimeout(timeout)
-        message = b""
-        while True:
-            b1, b2 = self._take(2)
-            n = b2 & 0x7F
-            if n == 126:
-                n = struct.unpack(">H", self._take(2))[0]
-            elif n == 127:
-                n = struct.unpack(">Q", self._take(8))[0]
-            data = self._take(n)
-            op = b1 & 0x0F
-            if op == 8:
-                raise OSError("the browser closed the connection")
-            if op in (9, 10):
-                continue  # ping, pong
-            message += data
-            if b1 & 0x80:
-                return message.decode("utf-8", "replace")
-
-    def close(self):
+    def _read(self):
+        buf = b""
         try:
-            self.s.close()
+            while True:
+                chunk = os.read(self.from_browser, 65536)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\0" in buf:
+                    message, buf = buf.split(b"\0", 1)
+                    self.inbox.put(message.decode("utf-8", "replace"))
         except OSError:
             pass
+        self.inbox.put(None)  # the browser closed its end
+
+    @staticmethod
+    def _close(fds):
+        while fds:
+            try:
+                os.close(fds.pop())
+            except OSError:
+                pass
+
+    def send(self, text):
+        if self.to_browser is None:
+            raise OSError("the pipe to the browser is closed")
+        data = text.encode("utf-8") + b"\0"
+        while data:
+            data = data[os.write(self.to_browser, data):]
+
+    def recv(self, timeout=20):
+        try:
+            text = self.inbox.get(timeout=timeout)
+        except queue.Empty:
+            raise TimeoutError("no answer from the browser in %s seconds" % timeout)
+        if text is None:
+            self.inbox.put(None)  # whoever asks next gets the same answer
+            raise OSError("the browser closed the connection")
+        return text
+
+    def hang_up(self):
+        """Close our end of the pipe the browser reads. A browser whose debugging pipe closes quits."""
+        if self.to_browser is not None:
+            self._close([self.to_browser])
+            self.to_browser = None
+
+    def close(self):
+        """Call when the browser has gone: the reader has then seen the end, and the last handle can be closed."""
+        self.hang_up()
+        self._close(self.theirs)
+        if self.reader:
+            self.reader.join(timeout=5)
+        if self.from_browser is not None and not (self.reader and self.reader.is_alive()):
+            self._close([self.from_browser])
+            self.from_browser = None
 
 
 class Page:
-    def __init__(self, ws):
-        self.ws, self.n, self.events = ws, 0, []
+    """One page of the browser. `session` is how the browser tells its pages apart on the one pipe."""
+    patience = 20  # seconds to wait for an answer
+
+    def __init__(self, pipe, dismiss_dialogs=False, session=None):
+        self.pipe, self.n, self.events, self.dismiss_dialogs, self.session = pipe, 0, [], dismiss_dialogs, session
+
+    def _send(self, message):
+        if self.session:
+            message["sessionId"] = self.session
+        self.pipe.send(json.dumps(message))
+
+    def _keep(self, m):
+        self.events.append(m)
+        if self.dismiss_dialogs and m.get("method") == "Page.javascriptDialogOpening":
+            # An alert() ran. It stays in events for the caller to find; closing it lets the page carry on.
+            self._send({"id": 999998, "method": "Page.handleJavaScriptDialog", "params": {"accept": True}})
 
     def call(self, method, **params):
         self.n += 1
-        self.ws.send(json.dumps({"id": self.n, "method": method, "params": params}))
+        self._send({"id": self.n, "method": method, "params": params})
         while True:
-            m = json.loads(self.ws.recv())
+            m = json.loads(self.pipe.recv(self.patience))
             if m.get("id") == self.n:
                 if "error" in m:
                     raise RuntimeError("%s: %s" % (method, m["error"]))
                 return m.get("result", {})
-            self.events.append(m)
+            self._keep(m)
 
     def js(self, expression):
         r = self.call("Runtime.evaluate", expression=expression, returnByValue=True, awaitPromise=True)
@@ -120,9 +160,92 @@ class Page:
         end = time.time() + seconds
         while time.time() < end:
             try:
-                self.events.append(json.loads(self.ws.recv(timeout=0.1)))
-            except socket.timeout:
+                self._keep(json.loads(self.pipe.recv(timeout=0.1)))
+            except TimeoutError:
                 pass
+
+
+class NoBrowser(Exception):
+    """No Edge or Chrome was found, or it didn't start: nothing can be checked."""
+
+
+class Browser:
+    """A headless Edge or Chrome started for one check, with a throwaway profile folder inside <scratch>.
+
+    It is driven over a pipe (see Pipe): no debugging port is opened. .page is a Page with the
+    Page, Runtime, Network and Log events switched on. close() stops the browser that was
+    started here (only that one) and deletes the profile; .profile still exists afterwards only
+    if something would not let go of it. With dismiss_dialogs, an alert() on the page is noted
+    and closed instead of holding everything up.
+    """
+
+    def __init__(self, scratch, browser=None, dismiss_dialogs=False):
+        browser = browser or next((b for b in BROWSERS if os.path.isfile(b)), None)
+        if not browser:
+            raise NoBrowser("no Edge or Chrome found")
+        self.pipe = self.page = self.proc = None
+        self.profile = tempfile.mkdtemp(prefix="page-check-profile-", dir=os.path.abspath(scratch))
+        try:
+            self.pipe = Pipe()
+            self.proc = subprocess.Popen([browser, "--headless=new"] + self.pipe.switches + ["--user-data-dir=" + self.profile, "--no-first-run",
+                                          "--no-default-browser-check", "--disable-extensions", "--disable-gpu", "--disable-sync",
+                                          "--disable-background-networking", "--disable-component-update", "--disable-background-mode",
+                                          "--disable-breakpad", "--window-size=1280,900", "about:blank"],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=self.pipe.startupinfo)
+            self.pipe.started()
+            whole = Page(self.pipe)  # the browser itself, to ask which pages it has
+            whole.patience = 30
+            targets = []
+            try:
+                for _ in range(50):
+                    targets = [t for t in whole.call("Target.getTargets").get("targetInfos", []) if t.get("type") == "page"]
+                    if targets:
+                        break
+                    time.sleep(0.2)
+            except OSError:  # it went away, or never answered on the pipe (a browser too old to know the pipe switches)
+                raise NoBrowser("the browser didn't start")
+            if not targets:
+                raise NoBrowser("the browser opened no page")
+            session = whole.call("Target.attachToTarget", targetId=targets[0]["targetId"], flatten=True)["sessionId"]
+            self.page = Page(self.pipe, dismiss_dialogs, session)
+            for domain in ("Page", "Runtime", "Network", "Log"):
+                self.page.call(domain + ".enable")
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self):
+        """Stop the browser started here, and only that one: ask it to close (it then lets go of its
+        files), end its process tree, and end anything still naming this throwaway profile."""
+        pipe, proc, self.pipe, self.proc = self.pipe, self.proc, None, None
+        if pipe:
+            try:
+                pipe.send(json.dumps({"id": 999999, "method": "Browser.close"}))
+            except OSError:
+                pass
+            pipe.hang_up()
+        if proc:
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                pass
+        if pipe:
+            pipe.close()
+        for attempt in range(150):  # a busy PC can take a while to let go of the profile's files
+            shutil.rmtree(self.profile, ignore_errors=True)
+            if not os.path.exists(self.profile):
+                break
+            if attempt in (10, 60):
+                subprocess.run(["powershell", "-NoProfile", "-Command",
+                                "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:PAGE_CHECK_PROFILE) } "
+                                "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
+                               env=dict(os.environ, PAGE_CHECK_PROFILE=self.profile), capture_output=True)
+            time.sleep(0.3)
 
 
 def main(argv=None):
@@ -150,32 +273,14 @@ def main(argv=None):
         if not ok:
             fails.append(name)
 
-    profile = tempfile.mkdtemp(prefix="page-check-profile-", dir=os.path.abspath(args.scratch))
-    proc = subprocess.Popen([browser, "--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + profile, "--no-first-run",
-                             "--no-default-browser-check", "--disable-extensions", "--disable-gpu", "--disable-sync",
-                             "--disable-background-networking", "--disable-component-update", "--disable-background-mode",
-                             "--disable-breakpad", "--window-size=1280,900", "about:blank"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    ws = None
     try:
-        port_file, deadline = os.path.join(profile, "DevToolsActivePort"), time.time() + 30
-        while not os.path.isfile(port_file) and time.time() < deadline and proc.poll() is None:
-            time.sleep(0.2)
-        if not os.path.isfile(port_file):
-            print("not run: the browser didn't start")
-            sys.exit(2)
-        port = int(open(port_file).read().split()[0])
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # straight to this PC, never through a proxy
-        targets = []
-        for _ in range(50):
-            targets = [t for t in json.load(opener.open("http://127.0.0.1:%d/json/list" % port, timeout=10)) if t.get("type") == "page"]
-            if targets:
-                break
-            time.sleep(0.2)
-        ws = Socket(targets[0]["webSocketDebuggerUrl"])
-        p = Page(ws)
-        for domain in ("Page", "Runtime", "Network", "Log"):
-            p.call(domain + ".enable")
+        started = Browser(args.scratch, browser)
+    except NoBrowser as e:
+        print("not run: %s" % e)
+        sys.exit(2)
+    profile = started.profile
+    try:
+        p = started.page
         url = "file:///" + page_path.replace("\\", "/").replace("%", "%25").replace("#", "%23").replace("?", "%3F").replace(" ", "%20")
 
         def load(width, height=900, scheme=None):
@@ -302,33 +407,7 @@ def main(argv=None):
         check("no network requests: the page is one self-contained file", not requests, requests[:5])
         check("no pop-ups", not dialogs, dialogs)
     finally:
-        # Stop the browser started here, and only that one: ask it to close (it then lets go of its
-        # files), end its process tree, and end anything still naming this throwaway profile.
-        if ws:
-            try:
-                ws.send(json.dumps({"id": 999999, "method": "Browser.close"}))
-            except OSError:
-                pass
-            ws.close()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            pass
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
-        try:
-            proc.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            pass
-        for attempt in range(150):  # a busy PC can take a while to let go of the profile's files
-            shutil.rmtree(profile, ignore_errors=True)
-            if not os.path.exists(profile):
-                break
-            if attempt in (10, 60):
-                subprocess.run(["powershell", "-NoProfile", "-Command",
-                                "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:PAGE_CHECK_PROFILE) } "
-                                "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
-                               env=dict(os.environ, PAGE_CHECK_PROFILE=profile), capture_output=True)
-            time.sleep(0.3)
+        started.close()
     print("\n%s: %d checks on %s%s" % ("ALL PASSED" if not fails else "%d FAILED" % len(fails), count[0], os.path.basename(page_path),
                                        "" if not fails else ": %s" % fails))
     if os.path.exists(profile):
