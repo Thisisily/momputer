@@ -181,6 +181,38 @@ pub fn admin_may_delete(target: &Path) -> Result<(), String> {
     }
 }
 
+/// May mom run `program` for you? Only a whole path to a real file (not a link) that you or
+/// Windows own, in a folder you or Windows own, and neither of them open to change by just
+/// anybody on this PC (Everyone, Users, whoever is signed in). A program found by its name on
+/// the PATH could otherwise be something another account dropped into a folder everyone can
+/// write to, waiting to be run as you.
+///
+/// An account or group that was let in by name is fine: that was set up on purpose (a coding
+/// agent's sandbox account, in the profile it works in), and it's the same program your own
+/// terminal runs.
+pub fn safe_to_run(program: &Path) -> bool {
+    if !program.is_absolute() || program.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        match std::fs::symlink_metadata(program) {
+            Ok(m) if m.is_file() && m.file_attributes() & 0x400 == 0 => {}
+            _ => return false,
+        }
+        let Some(dir) = program.parent() else { return false };
+        // Write, append, DELETE, WRITE_DAC, WRITE_OWNER, GENERIC_WRITE, GENERIC_ALL; and in the
+        // folder, deleting what's there (so it can't be swapped for something else).
+        const CHANGE: u32 = 0x2 | 0x4 | 0x0001_0000 | 0x0004_0000 | 0x0008_0000 | 0x4000_0000 | 0x1000_0000;
+        acl::yours(program, CHANGE) && acl::yours(dir, CHANGE | 0x40)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::symlink_metadata(program).map(|m| m.is_file()).unwrap_or(false)
+    }
+}
+
 /// What to do when mom won't ask for an administrator from where she is.
 pub const INSTALL_FOR_EVERYONE: &str =
     "Install momputer for all users (the installer puts it in Program Files), then mom can clean this as administrator.";
@@ -379,9 +411,30 @@ mod acl {
         out
     }
 
+    /// One account or group this PC (or its domain) knows by name, rather than a crowd: not
+    /// Everyone, Users or whoever is signed in, and not the groups every account is put in
+    /// (the guest, "None" or Domain Users, Domain Guests, Domain Computers).
+    pub fn named(sid: &str) -> bool {
+        sid.starts_with("S-1-5-21-") && !["-501", "-513", "-514", "-515"].iter().any(|crowd| sid.ends_with(crowd))
+    }
+
     /// Is `path` owned by someone trusted, with no one else allowed any of `rights` on it?
     /// Anything mom can't read counts as no.
     pub fn only_trusted(path: &Path, rights: u32) -> bool {
+        only(path, rights, &trusted, &trusted)
+    }
+
+    /// Is `path` owned by the person running mom (or someone trusted), with none of `rights` on
+    /// it for a crowd? Accounts let in by name may have them.
+    pub fn yours(path: &Path, rights: u32) -> bool {
+        let me = me();
+        let mine = |sid: &str| trusted(sid) || me.iter().any(|m| m == sid);
+        !me.is_empty() && only(path, rights, &mine, &|sid| mine(sid) || named(sid))
+    }
+
+    /// Is `path` owned by an account `owner` passes, with any of `rights` on it only for
+    /// accounts `allowed` passes? (Both are asked with a SID string.)
+    fn only(path: &Path, rights: u32, owner_ok: &dyn Fn(&str) -> bool, allowed: &dyn Fn(&str) -> bool) -> bool {
         let w: Vec<u16> = path.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
         let mut owner: PSID = std::ptr::null_mut();
         let mut dacl: *mut ACL = std::ptr::null_mut();
@@ -403,7 +456,7 @@ mod acl {
             return false;
         }
         let ok = (|| {
-            if owner.is_null() || !sid_string(owner).is_some_and(|s| trusted(&s)) {
+            if owner.is_null() || !sid_string(owner).is_some_and(|s| owner_ok(&s)) {
                 return false;
             }
             if dacl.is_null() {
@@ -425,7 +478,7 @@ mod acl {
                 }
                 // SAFETY: the SID starts at SidStart, inside the ACE.
                 let sid = unsafe { std::ptr::addr_of!((*a).SidStart) } as PSID;
-                if !sid_string(sid).is_some_and(|s| trusted(&s)) {
+                if !sid_string(sid).is_some_and(|s| allowed(&s)) {
                     return false;
                 }
             }
@@ -492,6 +545,59 @@ pub fn split_command(cmd: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_program_is_run_only_where_not_just_anybody_could_have_put_it() {
+        let root = std::env::temp_dir().join(format!("mom-run-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // A folder of its own, whoever the temp folder lets in: only the person running the tests.
+        #[cfg(windows)]
+        let icacls = |path: &Path, args: &[&str]| {
+            let mut all = vec![path.to_str().unwrap()];
+            all.extend(args);
+            crate::util::run("icacls", &all, std::time::Duration::from_secs(20)).map(|o| o.ok()).unwrap_or(false)
+        };
+        #[cfg(windows)]
+        assert!(icacls(&root, &["/inheritance:r", "/grant:r", &format!("*{}:(OI)(CI)F", acl::me()[0])]));
+        std::fs::create_dir_all(root.join("bin")).unwrap();
+        let exe = root.join("bin").join("claude.exe");
+        std::fs::write(&exe, b"x").unwrap();
+        assert!(safe_to_run(&exe), "one you made, in a folder of your own");
+        // Not a whole path, a path with "..", a folder, and something that isn't there: no.
+        assert!(!safe_to_run(Path::new("claude.exe")));
+        assert!(!safe_to_run(&root.join("bin").join("..").join("bin").join("claude.exe")));
+        assert!(!safe_to_run(&root.join("bin")));
+        assert!(!safe_to_run(&root.join("bin").join("nothing.exe")));
+        #[cfg(windows)]
+        {
+            // A folder everyone on the PC may put things in, and what's in it: could be anybody's.
+            for (name, crowd) in [("everyone", "S-1-1-0"), ("users", "S-1-5-32-545"), ("signed-in", "S-1-5-11")] {
+                let open = root.join(name);
+                std::fs::create_dir_all(&open).unwrap();
+                assert!(icacls(&open, &["/grant", &format!("*{crowd}:(OI)(CI)M")]), "{name}");
+                let theirs = open.join("claude.exe");
+                std::fs::write(&theirs, b"x").unwrap();
+                assert!(!safe_to_run(&theirs), "a program in a folder {name} can change");
+            }
+            // Your own folder, but the program itself is open to everyone: no.
+            let loose = root.join("bin").join("loose.exe");
+            std::fs::write(&loose, b"x").unwrap();
+            assert!(icacls(&loose, &["/grant", "*S-1-1-0:M"]));
+            assert!(!safe_to_run(&loose));
+            // Reading and running it is all a crowd may do: still yours.
+            let shown = root.join("bin").join("shown.exe");
+            std::fs::write(&shown, b"x").unwrap();
+            assert!(icacls(&shown, &["/grant", "*S-1-5-32-545:RX"]));
+            assert!(safe_to_run(&shown));
+            // One account or group let in by name isn't a crowd; the groups everyone is in are.
+            assert!(acl::named("S-1-5-21-1111-2222-3333-1004"));
+            for crowd in ["S-1-1-0", "S-1-5-11", "S-1-5-32-545", "S-1-5-4", "S-1-15-2-1", "S-1-5-21-1111-2222-3333-513", "S-1-5-21-1111-2222-3333-501"] {
+                assert!(!acl::named(crowd), "{crowd}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn only_what_you_made_is_yours() {

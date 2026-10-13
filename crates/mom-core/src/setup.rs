@@ -67,6 +67,10 @@ pub struct Server {
     pub fix: Option<Fix>,
     /// The file that sets it up (`Doc.id`).
     pub doc: Option<String>,
+    /// Its warning is about how it's called (over plain http, say), not whether it answers: it
+    /// stands whatever a check says.
+    #[serde(skip)]
+    standing: bool,
 }
 
 /// One hook: something the agent runs by itself when a thing happens.
@@ -776,12 +780,14 @@ fn server(agent: &str, name: &str, v: &Value, from: &str, doc: Option<&Doc>, pat
         let local = ["http://localhost", "http://127.0.0.1", "http://[::1]"].iter().any(|l| url.starts_with(l));
         if url.starts_with("http://") && !local {
             s.level = "warn".into();
+            s.standing = true;
             s.problem = Some("It's called over plain http, so what your agent sends it can be read on the way.".into());
             s.fix = ask_agent(format!(
                 "My {agent} MCP server `{name}` (set up in `{where_}`) is called over plain http, not https. Check whether the service has an https address and, if it does, show me the change before you make it."
             ));
         } else if !url.starts_with("https://") && !local {
             s.level = "warn".into();
+            s.standing = true;
             s.problem = Some("Its address isn't a web address, so it can't be reached.".into());
             s.fix = ask_agent(format!("My {agent} MCP server `{name}` (set up in `{where_}`) has an address that isn't http or https. Look at the entry and tell me what it should be."));
         }
@@ -1082,15 +1088,16 @@ fn claude(paths: &Paths) -> Option<AgentSetup> {
     };
     if let Some(waiting) = small(&dir.join("mcp-needs-auth-cache.json")).and_then(|t| json(&t)) {
         for key in waiting.as_object().into_iter().flatten().map(|(k, _)| k).take(MAX_LIST) {
-            a.servers.iter_mut().filter(|s| &s.id == key && s.level != "off").for_each(sign_in);
+            a.servers.iter_mut().filter(|s| &s.id == key && s.level != "off" && !s.standing).for_each(sign_in);
         }
     }
     // What Claude Code itself found when mom last asked it to check (`ask_claude`): that's the
     // word on each server it listed, over anything guessed from files.
-    a.can_check = claude_program(paths).is_some();
+    a.can_check = !crate::elevate::is_elevated() && claude_program(paths).is_ok();
     if let Some((at, found)) = live(paths, "claude") {
         a.checked = Some(at);
-        for s in a.servers.iter_mut().filter(|s| s.level != "off") {
+        // (A warning about how a server is called stands: that it answers doesn't make plain http safe.)
+        for s in a.servers.iter_mut().filter(|s| s.level != "off" && !s.standing) {
             match found.iter().find(|(id, _)| id == &s.id).map(|(_, state)| state.as_str()) {
                 Some("ok") => {
                     s.level = "ok".into();
@@ -1248,12 +1255,20 @@ fn simple(paths: &Paths, (id, agent, dir, servers_file, servers_key, memory_file
 
 // ------------------------------------------------------------------ asking the agent itself
 
-/// Where Claude Code's command is, if it's installed: on the PATH, or where its installer puts it.
-fn claude_program(paths: &Paths) -> Option<PathBuf> {
-    crate::util::on_path("claude").or_else(|| {
+/// Where Claude Code's command is: on the PATH, or where its installer puts it. Only one mom may
+/// run (`elevate::safe_to_run`): a whole path to a real file that not just anybody on this PC
+/// could have put there or changed. The first `claude` on the PATH is as far as she looks, since
+/// that's the one that would run. Otherwise, why not.
+fn claude_program(paths: &Paths) -> Result<PathBuf, &'static str> {
+    let found = crate::util::on_path("claude").or_else(|| {
         let local = paths.home.join(".local").join("bin");
-        ["claude.exe", "claude.cmd", "claude"].iter().map(|n| local.join(n)).find(|p| p.is_file())
-    })
+        ["claude.exe", "claude.cmd"].iter().map(|n| local.join(n)).find(|p| p.is_file())
+    });
+    match found {
+        None => Err("Claude Code's command isn't on this PC's PATH, so mom can't ask it."),
+        Some(p) if !crate::elevate::safe_to_run(&p) => Err("Claude Code's command is where anybody on this PC could change it, so mom won't run it."),
+        Some(p) => Ok(p),
+    }
 }
 
 fn live_file(paths: &Paths) -> PathBuf {
@@ -1297,7 +1312,12 @@ fn claude_line(line: &str) -> Option<(String, &'static str)> {
 /// on the web; mom starts nothing herself and only reads the list it prints. Run from your home
 /// folder, so servers set up for one project elsewhere aren't in it.
 pub fn ask_claude(paths: &Paths) -> Result<usize, String> {
-    let program = claude_program(paths).ok_or("Claude Code's command isn't on this PC's PATH, so mom can't ask it.")?;
+    // Whoever asks (the widget or `mom agents --check`): never as administrator. Claude Code
+    // starts every server it has, and they'd all run as administrator too.
+    if crate::elevate::is_elevated() {
+        return Err("Mom won't start other programs while she's running as administrator. Ask again from the ordinary widget.".into());
+    }
+    let program = claude_program(paths)?;
     let out = crate::util::run_in(&program.to_string_lossy(), &["mcp", "list"], Some(&paths.home), std::time::Duration::from_secs(120)).map_err(|e| format!("Claude Code didn't start: {e}"))?;
     if out.timed_out {
         return Err("Claude Code took too long to check its servers.".into());
@@ -1736,7 +1756,8 @@ mod tests {
         let dir = paths.claude_dir();
         put(
             &paths.home.join(".claude.json"),
-            r#"{"mcpServers":{"notes":{"command":"node","args":[]},"shop":{"type":"http","url":"https://mcp.copperline.example/mcp"},"maps":{"type":"http","url":"https://mcp.atlas.example/mcp"},"quiet":{"type":"http","url":"https://mcp.nimbus.example/mcp"}}}"#,
+            r#"{"mcpServers":{"notes":{"command":"node","args":[]},"shop":{"type":"http","url":"https://mcp.copperline.example/mcp"},"maps":{"type":"http","url":"https://mcp.atlas.example/mcp"},"quiet":{"type":"http","url":"https://mcp.nimbus.example/mcp"},
+                              "bare":{"type":"http","url":"http://mcp.nimbus.example/mcp"},"barer":{"type":"sse","url":"http://mcp.atlas.example/sse"}}}"#,
         );
         // A plugin that keeps its servers in a file plugin.json names, one that writes them out
         // in plugin.json itself, and one that points outside its own folder (not read).
@@ -1753,12 +1774,23 @@ mod tests {
             &format!(r#"{{"plugins":{{"base@shop":[{{"installPath":"{}"}}],"inline@shop":[{{"installPath":"{}"}}],"sneaky@shop":[{{"installPath":"{}"}}]}}}}"#, js(&base), js(&inline), js(&sneaky)),
         );
         // Claude Code's own note of who needs a sign-in knows about one of them.
-        put(&dir.join("mcp-needs-auth-cache.json"), r#"{"plugin:base:base":{"timestamp":1},"shop":{"timestamp":1}}"#);
+        put(&dir.join("mcp-needs-auth-cache.json"), r#"{"plugin:base:base":{"timestamp":1},"shop":{"timestamp":1},"barer":{"timestamp":1}}"#);
 
         let levels = |paths: &Paths| -> Vec<(String, String)> { check(paths)[0].servers.iter().map(|s| (s.id.clone(), s.level.clone())).collect() };
         let pair = |id: &str, level: &str| (id.to_string(), level.to_string());
         // Before anyone has checked: a red light for the ones on that note, no light for the rest.
-        assert_eq!(levels(&paths), [pair("notes", "unknown"), pair("shop", "warn"), pair("maps", "unknown"), pair("quiet", "unknown"), pair("plugin:base:base", "warn"), pair("plugin:inline:inline", "unknown")]);
+        assert_eq!(levels(&paths), [
+            pair("notes", "unknown"),
+            pair("shop", "warn"),
+            pair("maps", "unknown"),
+            pair("quiet", "unknown"),
+            pair("bare", "warn"),
+            pair("barer", "warn"),
+            pair("plugin:base:base", "warn"),
+            pair("plugin:inline:inline", "unknown")
+        ]);
+        let plain = |paths: &Paths| -> Vec<bool> { check(paths)[0].servers.iter().filter(|s| s.id.starts_with("bare")).map(|s| s.level == "warn" && s.problem.as_deref().is_some_and(|p| p.contains("plain http"))).collect() };
+        assert_eq!(plain(&paths), [true, true], "a note that it needs a sign-in doesn't replace the warning about plain http");
         assert!(check(&paths)[0].checked.is_none());
 
         // What Claude Code prints, read line by line.
@@ -1773,11 +1805,22 @@ mod tests {
         // After it has: its word on each one it listed. The sign-in it noted for "shop" is out of
         // date (it connects now); "quiet" wasn't in its list, so it's still unknown.
         let now = crate::util::now_secs();
-        let found = |at: u64| format!(r#"{{"claude":{{"at":{at},"servers":{{"notes":"ok","shop":"ok","maps":"failed","plugin:base:base":"auth","plugin:inline:inline":"ok"}}}}}}"#);
+        let found = |at: u64| format!(r#"{{"claude":{{"at":{at},"servers":{{"notes":"ok","shop":"ok","maps":"failed","bare":"ok","barer":"auth","plugin:base:base":"auth","plugin:inline:inline":"ok"}}}}}}"#);
         put(&live_file(&paths), &found(now - 60));
-        assert_eq!(levels(&paths), [pair("notes", "ok"), pair("shop", "ok"), pair("maps", "warn"), pair("quiet", "unknown"), pair("plugin:base:base", "warn"), pair("plugin:inline:inline", "ok")]);
+        assert_eq!(levels(&paths), [
+            pair("notes", "ok"),
+            pair("shop", "ok"),
+            pair("maps", "warn"),
+            pair("quiet", "unknown"),
+            pair("bare", "warn"),
+            pair("barer", "warn"),
+            pair("plugin:base:base", "warn"),
+            pair("plugin:inline:inline", "ok")
+        ]);
+        // That a server answers doesn't make plain http safe: its warning stands, whatever was found.
+        assert_eq!(plain(&paths), [true, true]);
         let a = &check(&paths)[0];
-        assert_eq!((a.checked, a.problems), (Some(now - 60), 2));
+        assert_eq!((a.checked, a.problems), (Some(now - 60), 4));
         let maps = a.servers.iter().find(|s| s.id == "maps").unwrap();
         assert!(maps.problem.as_deref().unwrap().contains("couldn't reach it") && maps.fix.as_ref().unwrap().text.contains("`maps`"));
         assert!(a.servers.iter().find(|s| s.id == "shop").unwrap().problem.is_none());
