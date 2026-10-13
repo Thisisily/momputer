@@ -127,6 +127,25 @@ pub fn owned_by_me(path: &Path) -> bool {
     }
 }
 
+/// The same question as `owned_by_me`, asked of a folder or file that is already open: the answer
+/// is about that very thing, whatever happens to its path afterwards.
+pub fn open_and_mine(file: &std::fs::File) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        static ME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+        match (ME.get_or_init(acl::me), acl::owner_of(file.as_raw_handle() as _)) {
+            (Some(me), Some(owner)) => *me == owner,
+            _ => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = file;
+        true
+    }
+}
+
 pub fn admin_may_delete(target: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -309,6 +328,22 @@ mod acl {
         }
         let sid = if owner.is_null() { None } else { sid_string(owner) };
         // SAFETY: allocated by GetNamedSecurityInfoW.
+        unsafe { LocalFree(sd) };
+        sid
+    }
+
+    /// Who owns what this open handle is to, as a SID string.
+    pub fn owner_of(handle: windows_sys::Win32::Foundation::HANDLE) -> Option<String> {
+        use windows_sys::Win32::Security::Authorization::GetSecurityInfo;
+        let mut owner: PSID = std::ptr::null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: `handle` is open for the length of the call; the out pointers are ours; `sd` is freed below.
+        let rc = unsafe { GetSecurityInfo(handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &mut owner, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), &mut sd) };
+        if rc != 0 || sd.is_null() {
+            return None;
+        }
+        let sid = if owner.is_null() { None } else { sid_string(owner) };
+        // SAFETY: allocated by GetSecurityInfo.
         unsafe { LocalFree(sd) };
         sid
     }

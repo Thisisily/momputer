@@ -19,7 +19,7 @@ use crate::config::{Config, TrashConfig};
 use crate::paths::Paths;
 use crate::procs::ProcTable;
 use crate::util::{human_age_long, human_bytes, mtime_secs, norm_path, now_secs, plural};
-use walk::{remove_all, remove_without_following, tally, tally_many, Tally};
+use walk::{remove_all, remove_owned, remove_without_following, tally, tally_many, Tally};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -1813,10 +1813,10 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     } else if id == "old-build-folders" {
         // Projects can sit outside your own folders, where other people on this PC can write
         // (the top of a second drive), and a folder in your profile can be a link to such a
-        // place. So these always go the careful way: one at a time, by the method that never
-        // follows a link (even one swapped in while mom works), and only what is yours at that
-        // moment. Slower than the many-at-once way, and there is no check-then-delete gap.
-        each(&|c: &Cand| c.targets.iter().all(|t| crate::elevate::owned_by_me(t)) && c.targets.iter().all(|t| remove_without_following(t)))
+        // place. So each is held open while mom checks it's a real folder of yours and empties
+        // it: the check and the delete are about the same folder, with no moment between them
+        // for anyone to swap it. Slower than the many-at-once way.
+        each(&|c: &Cand| c.targets.iter().all(|t| remove_owned(t)))
     } else {
         // In batches: a big folder on its own, small things many at a time.
         let mut out: Vec<Option<bool>> = Vec::with_capacity(chosen.len());

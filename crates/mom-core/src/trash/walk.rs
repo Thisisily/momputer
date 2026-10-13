@@ -259,6 +259,41 @@ pub(super) fn remove_without_following(p: &Path) -> bool {
     std::fs::symlink_metadata(p).is_err()
 }
 
+/// Deletes a folder that sits where other people on this PC may be able to write, and only if
+/// it's yours. The check and the delete are about the same folder, with nothing in between:
+/// mom opens it and keeps it open in a way that stops anyone renaming, replacing or deleting it
+/// (or any folder above it) while she works. She asks the open folder itself whether it's a
+/// real folder and whose it is, empties it without following a link, lets go, and removes the
+/// then-empty folder. If someone swaps something in at that last instant, all that can go is an
+/// empty folder or a link, never what a link points to.
+#[cfg(windows)]
+pub(super) fn remove_owned(p: &Path) -> bool {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2; // not delete: that is what holds it in place
+    const BACKUP_SEMANTICS: u32 = 0x0200_0000; // lets a folder be opened at all
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000; // a link is opened as the link, not followed
+    const REPARSE_POINT: u32 = 0x400;
+    let Ok(held) = std::fs::OpenOptions::new().read(true).share_mode(SHARE_READ_WRITE).custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT).open(p) else {
+        return false;
+    };
+    let Ok(meta) = held.metadata() else { return false };
+    if !meta.is_dir() || meta.file_attributes() & REPARSE_POINT != 0 || !crate::elevate::open_and_mine(&held) {
+        return false;
+    }
+    let Ok(inside) = std::fs::read_dir(p) else { return false };
+    for entry in inside.flatten() {
+        remove_without_following(&entry.path());
+    }
+    drop(held);
+    let _ = std::fs::remove_dir(p);
+    std::fs::symlink_metadata(p).is_err()
+}
+
+#[cfg(not(windows))]
+pub(super) fn remove_owned(p: &Path) -> bool {
+    remove_without_following(p)
+}
+
 fn remove_file(p: &Path) {
     if std::fs::remove_file(p).is_ok() {
         return;
