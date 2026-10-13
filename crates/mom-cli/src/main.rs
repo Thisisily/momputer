@@ -94,6 +94,10 @@ enum Cmd {
         action: Option<AgentsCmd>,
         #[arg(long, global = true)]
         json: bool,
+        /// First ask Claude Code to try each of its MCP servers (`claude mcp list`: it starts each
+        /// one for a moment), so the list says which answer and which are waiting for a sign-in.
+        #[arg(long)]
+        check: bool,
     },
     /// A checkup for the whole machine: disks, memory, restarts, startup apps.
     Health {
@@ -478,7 +482,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Health { .. })
         | Some(Cmd::Update { .. })
         | Some(Cmd::Skills { .. })
-        | Some(Cmd::Agents { .. })
+        | Some(Cmd::Agents { check: false, .. })
         | Some(Cmd::Speed { .. })
         | Some(Cmd::Programs { .. })
         | Some(Cmd::Pc { .. })
@@ -489,6 +493,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Settings { action: None, .. }) => true,
         Some(Cmd::Settings { action: Some(SettingsCmd::Fix { id, elevated: true, .. }), .. }) => winsettings::is_admin_fix(id),
         Some(Cmd::Settings { action: Some(SettingsCmd::Fix { .. } | SettingsCmd::Undo { .. }), .. }) => false,
+        Some(Cmd::Agents { check: true, .. }) => false, // it starts programs: not as administrator
         Some(Cmd::Stop { dry_run, .. }) => *dry_run,
         Some(Cmd::Tidy { apply, .. }) => !*apply,
         Some(Cmd::Rules { action }) => matches!(action, None | Some(RulesCmd::Show)),
@@ -869,7 +874,14 @@ fn run(cli: Cli) -> Result<i32> {
                 println!("{}", st.dim(&format!("Anywhere else, copy a folder from {}", mom_core::skills::PAGE)));
             }
         }
-        Some(Cmd::Agents { action, json }) => {
+        Some(Cmd::Agents { action, json, check }) => {
+            if check {
+                match mom_core::setup::ask_claude(&paths) {
+                    Ok(n) if !json => eprintln!("{}", st.dim(&format!("Claude Code tried {n} of its servers."))),
+                    Ok(_) => {}
+                    Err(why) => eprintln!("mom: {why}"),
+                }
+            }
             let agents = mom_core::setup::check(&paths);
             match action {
                 Some(AgentsCmd::Read { id }) => {
@@ -898,14 +910,20 @@ fn run(cli: Cli) -> Result<i32> {
                         let light = |level: &str| match level {
                             "warn" => st.red("●"),
                             "note" => st.yellow("●"),
-                            "off" => st.dim("○"),
+                            "off" | "unknown" => st.dim("○"),
                             _ => st.green("●"),
                         };
                         for f in &a.settings {
                             println!("  {} {}  {}", light(&f.level), f.title, st.dim(&f.detail));
                         }
                         if !a.servers.is_empty() {
-                            println!("  {}", st.dim(&format!("MCP servers ({})", a.servers.len())));
+                            let unchecked = a.servers.iter().filter(|s| s.level == "unknown").count();
+                            let said = match (a.checked, a.can_check) {
+                                (Some(at), _) => format!(", as Claude Code found them {} ago", human_age(mom_core::util::now_secs().saturating_sub(at))),
+                                (None, true) if unchecked > 0 => ", not checked yet: `mom agents --check` asks Claude Code to try them".to_string(),
+                                _ => String::new(),
+                            };
+                            println!("  {}", st.dim(&format!("MCP servers ({}{said})", a.servers.len())));
                         }
                         for s in &a.servers {
                             println!("  {} {}  {}", light(&s.level), pad(&s.name, 22), st.dim(&format!("{} · {}", s.what, s.from)));

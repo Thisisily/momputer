@@ -40,12 +40,18 @@ pub struct AgentSetup {
     pub docs: Vec<Doc>,
     /// How many things are worth a look (a red light each).
     pub problems: usize,
+    /// When the agent itself last checked its servers because mom asked (unix seconds).
+    pub checked: Option<u64>,
+    /// Mom can ask this agent to check its own servers (it has a command for that, and it's here).
+    pub can_check: bool,
 }
 
 /// One MCP server an agent is set up to use.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Server {
+    /// What the agent itself calls it ("plugin:figma:figma"), to match its own check against.
+    pub id: String,
     pub name: String,
     /// "program" (the agent starts it) or "web" (the agent calls it).
     pub kind: String,
@@ -53,7 +59,8 @@ pub struct Server {
     pub what: String,
     /// "your settings", "plugin figma", "project storefront".
     pub from: String,
-    /// "ok", "note" (worth knowing), "warn" (worth a look) or "off" (switched off).
+    /// "ok" (the agent reached it), "unknown" (its settings look fine, but nobody has checked
+    /// whether it answers), "note" (worth knowing), "warn" (worth a look) or "off" (switched off).
     pub level: String,
     /// What's the matter, in a sentence.
     pub problem: Option<String>,
@@ -743,6 +750,11 @@ fn copy(what: &str) -> Option<Fix> {
 
 /// One server from a settings file. `v` is its entry; shapes differ a little between agents.
 fn server(agent: &str, name: &str, v: &Value, from: &str, doc: Option<&Doc>, paths: &Paths, root: Option<&Path>) -> Server {
+    // A plugin's server goes by "plugin:<plugin>:<name>" in Claude Code's own lists.
+    let id = match from.strip_prefix("plugin ") {
+        Some(plugin) => format!("plugin:{plugin}:{name}"),
+        None => name.to_string(),
+    };
     let name = tame(name, 60);
     let url = ["url", "serverUrl", "httpUrl"].iter().find_map(|k| v.get(k).and_then(Value::as_str));
     // opencode writes the whole command as one list.
@@ -755,7 +767,8 @@ fn server(agent: &str, name: &str, v: &Value, from: &str, doc: Option<&Doc>, pat
         _ => (None, vec![]),
     };
     let off = v.get("enabled").and_then(Value::as_bool) == Some(false) || v.get("disabled").and_then(Value::as_bool) == Some(true);
-    let mut s = Server { name: name.clone(), from: from.to_string(), doc: doc.map(|d| d.id.clone()), level: "ok".into(), ..Default::default() };
+    // Its settings can look fine without it answering: "unknown" until its agent has checked.
+    let mut s = Server { id, name: name.clone(), from: from.to_string(), doc: doc.map(|d| d.id.clone()), level: "unknown".into(), ..Default::default() };
     let where_ = doc.map(|d| tame(&d.path, 300)).unwrap_or_default();
     if let Some(url) = url {
         s.kind = "web".into();
@@ -984,8 +997,18 @@ fn claude(paths: &Paths) -> Option<AgentSetup> {
     if let Some(st) = &state {
         a.servers.extend(servers_in(agent, st.get("mcpServers"), "your settings", servers_doc.as_ref(), paths, None));
         for (project, entry) in st.get("projects").and_then(Value::as_object).into_iter().flatten().take(2_000) {
-            let from = format!("project {}", tame(&file_name_of(project), 40));
-            a.servers.extend(servers_in(agent, entry.get("mcpServers"), &from, servers_doc.as_ref(), paths, None));
+            // Claude Code is asked from your home folder, so a server set up for that folder is
+            // in its answer under its own name. One set up for a project elsewhere isn't, and
+            // mustn't be taken for a namesake that is: it goes by its project's name as well.
+            let home = crate::util::norm_path(project) == crate::util::norm_path(&paths.home.to_string_lossy());
+            let from = if home { "your home folder".to_string() } else { format!("project {}", tame(&file_name_of(project), 40)) };
+            let mut theirs = servers_in(agent, entry.get("mcpServers"), &from, servers_doc.as_ref(), paths, None);
+            if !home {
+                for s in &mut theirs {
+                    s.id = format!("project:{project}:{}", s.id);
+                }
+            }
+            a.servers.extend(theirs);
         }
     }
 
@@ -1004,12 +1027,35 @@ fn claude(paths: &Paths) -> Option<AgentSetup> {
         on += 1;
         let plugin = tame(id.split('@').next().unwrap_or(id), 40);
         let from = format!("plugin {plugin}");
-        if let Some(d) = doc(&root.join(".mcp.json"), &format!("{plugin}: MCP servers"), "json", None) {
-            if let Some(v) = small(Path::new(&d.path)).and_then(|t| json(&t)) {
-                let map = v.get("mcpServers").unwrap_or(&v);
-                a.servers.extend(servers_in(agent, Some(map), &from, Some(&d), paths, Some(root)));
+        // Its servers: in .mcp.json, or in plugin.json, written out there or as the name of
+        // another file in the plugin (never one outside it).
+        let manifest_doc = doc(&root.join(".claude-plugin").join("plugin.json"), &format!("{plugin}: plugin.json"), "json", None);
+        let declared = manifest_doc.as_ref().and_then(|d| small(Path::new(&d.path))).and_then(|t| json(&t)).and_then(|m| m.get("mcpServers").cloned());
+        let mut files = vec![root.join(".mcp.json")];
+        let named: Vec<String> = match &declared {
+            Some(Value::String(one)) => vec![one.clone()],
+            Some(Value::Array(many)) => many.iter().filter_map(|x| x.as_str().map(str::to_string)).take(8).collect(),
+            _ => vec![],
+        };
+        for rel in named {
+            let rel = Path::new(rel.trim_start_matches("./").trim_start_matches(".\\"));
+            let inside = !rel.is_absolute() && rel.components().all(|c| matches!(c, std::path::Component::Normal(_)));
+            if inside && !files.contains(&root.join(rel)) {
+                files.push(root.join(rel));
             }
-            a.docs.push(d);
+        }
+        for file in files {
+            if let Some(d) = doc(&file, &format!("{plugin}: MCP servers"), "json", None) {
+                if let Some(v) = small(Path::new(&d.path)).and_then(|t| json(&t)) {
+                    let map = v.get("mcpServers").unwrap_or(&v);
+                    a.servers.extend(servers_in(agent, Some(map), &from, Some(&d), paths, Some(root)));
+                }
+                a.docs.push(d);
+            }
+        }
+        if let (Some(d), Some(map @ Value::Object(_))) = (&manifest_doc, &declared) {
+            a.servers.extend(servers_in(agent, Some(map), &from, Some(d), paths, Some(root)));
+            a.docs.push(d.clone());
         }
         if let Some(d) = doc(&root.join("hooks").join("hooks.json"), &format!("{plugin}: hooks"), "json", None) {
             if let Some(v) = small(Path::new(&d.path)).and_then(|t| json(&t)) {
@@ -1027,16 +1073,42 @@ fn claude(paths: &Paths) -> Option<AgentSetup> {
         a.settings.push(fact("Plugins", if on == total { format!("{total}, all switched on.") } else { format!("{total}, {on} switched on.") }, "ok", settings_doc.as_ref()));
     }
 
-    // A server waiting for you to sign in can't be used until you do.
+    // A server waiting for you to sign in can't be used until you do. Claude Code keeps a note
+    // of the ones it found that way, but only of those it happened to try: it can be out of date.
+    let sign_in = |s: &mut Server| {
+        s.level = "warn".into();
+        s.problem = Some("It's waiting for you to sign in. Type /mcp in Claude Code and pick it.".into());
+        s.fix = copy("/mcp");
+    };
     if let Some(waiting) = small(&dir.join("mcp-needs-auth-cache.json")).and_then(|t| json(&t)) {
         for key in waiting.as_object().into_iter().flatten().map(|(k, _)| k).take(MAX_LIST) {
-            // "plugin:<plugin>:<server>", or the server's own name.
-            let name = key.rsplit(':').next().unwrap_or(key);
-            let plugin = key.strip_prefix("plugin:").and_then(|r| r.split(':').next());
-            for s in a.servers.iter_mut().filter(|s| s.name == name && s.level != "off" && plugin.is_none_or(|p| s.from == format!("plugin {p}"))) {
-                s.level = "warn".into();
-                s.problem = Some("It's waiting for you to sign in. Type /mcp in Claude Code and pick it.".into());
-                s.fix = copy("/mcp");
+            a.servers.iter_mut().filter(|s| &s.id == key && s.level != "off").for_each(sign_in);
+        }
+    }
+    // What Claude Code itself found when mom last asked it to check (`ask_claude`): that's the
+    // word on each server it listed, over anything guessed from files.
+    a.can_check = claude_program(paths).is_some();
+    if let Some((at, found)) = live(paths, "claude") {
+        a.checked = Some(at);
+        for s in a.servers.iter_mut().filter(|s| s.level != "off") {
+            match found.iter().find(|(id, _)| id == &s.id).map(|(_, state)| state.as_str()) {
+                Some("ok") => {
+                    s.level = "ok".into();
+                    s.problem = None;
+                    s.fix = None;
+                }
+                Some("auth") => sign_in(s),
+                Some("failed") => {
+                    s.level = "warn".into();
+                    s.problem = Some("Claude Code couldn't reach it when it checked.".into());
+                    s.fix = ask_agent(format!(
+                        "My Claude Code MCP server `{}` (set up in `{}`) failed to connect when Claude Code checked it. Find out why and either fix it or tell me how to take the server out. Show me any change before you make it.",
+                        s.name,
+                        a.docs.iter().find(|d| Some(&d.id) == s.doc.as_ref()).map(|d| tame(&d.path, 300)).unwrap_or_default()
+                    ));
+                }
+                // Not in its list (it belongs to a project elsewhere): still nobody's checked it.
+                _ => {}
             }
         }
     }
@@ -1172,6 +1244,73 @@ fn simple(paths: &Paths, (id, agent, dir, servers_file, servers_key, memory_file
     a.docs = front;
     // A folder with nothing mom reads in it isn't a set-up.
     (!a.docs.is_empty() || !a.servers.is_empty()).then_some(a)
+}
+
+// ------------------------------------------------------------------ asking the agent itself
+
+/// Where Claude Code's command is, if it's installed: on the PATH, or where its installer puts it.
+fn claude_program(paths: &Paths) -> Option<PathBuf> {
+    crate::util::on_path("claude").or_else(|| {
+        let local = paths.home.join(".local").join("bin");
+        ["claude.exe", "claude.cmd", "claude"].iter().map(|n| local.join(n)).find(|p| p.is_file())
+    })
+}
+
+fn live_file(paths: &Paths) -> PathBuf {
+    paths.state_dir().join("agents-checked.json")
+}
+
+/// What an agent found the last time mom asked it to check its servers: (when, [(server, "ok" |
+/// "auth" | "failed")]). Kept for a day: after that it's too old to go by.
+fn live(paths: &Paths, agent: &str) -> Option<(u64, Vec<(String, String)>)> {
+    let v = small(&live_file(paths)).and_then(|t| json(&t))?;
+    let entry = v.get(agent)?;
+    let at = entry.get("at")?.as_u64()?;
+    if crate::util::now_secs().saturating_sub(at) > 86_400 {
+        return None;
+    }
+    let found = entry.get("servers")?.as_object()?.iter().take(MAX_LIST).filter_map(|(k, s)| Some((k.clone(), s.as_str()?.to_string()))).collect();
+    Some((at, found))
+}
+
+/// One line of `claude mcp list`: "plugin:figma:figma: https://... (HTTP) - ! Needs authentication".
+/// The name is what comes before the first ": ", the verdict what comes after the last " - ".
+fn claude_line(line: &str) -> Option<(String, &'static str)> {
+    let (name, rest) = line.split_once(": ")?;
+    let (_, verdict) = rest.rsplit_once(" - ")?;
+    let verdict = verdict.to_ascii_lowercase();
+    let state = if verdict.contains("needs auth") {
+        "auth"
+    } else if verdict.contains("fail") || verdict.contains("error") || verdict.contains("timed out") {
+        "failed"
+    } else if verdict.contains("connected") {
+        "ok"
+    } else {
+        return None;
+    };
+    let name = name.trim();
+    (!name.is_empty() && name.len() <= 200).then(|| (name.to_string(), state))
+}
+
+/// Asks Claude Code to check its own MCP servers (`claude mcp list`, the check its /mcp screen
+/// runs) and keeps what it says. Claude Code starts each server for a moment and calls the ones
+/// on the web; mom starts nothing herself and only reads the list it prints. Run from your home
+/// folder, so servers set up for one project elsewhere aren't in it.
+pub fn ask_claude(paths: &Paths) -> Result<usize, String> {
+    let program = claude_program(paths).ok_or("Claude Code's command isn't on this PC's PATH, so mom can't ask it.")?;
+    let out = crate::util::run_in(&program.to_string_lossy(), &["mcp", "list"], Some(&paths.home), std::time::Duration::from_secs(120)).map_err(|e| format!("Claude Code didn't start: {e}"))?;
+    if out.timed_out {
+        return Err("Claude Code took too long to check its servers.".into());
+    }
+    let found: Vec<(String, &str)> = out.text().lines().filter_map(claude_line).take(MAX_LIST).collect();
+    if found.is_empty() && out.status != Some(0) {
+        return Err("Claude Code couldn't check its servers.".into());
+    }
+    let mut all = small(&live_file(paths)).and_then(|t| json(&t)).filter(Value::is_object).unwrap_or_else(|| serde_json::json!({}));
+    let servers: serde_json::Map<String, Value> = found.iter().map(|(k, s)| (k.clone(), Value::String(s.to_string()))).collect();
+    all["claude"] = serde_json::json!({ "at": crate::util::now_secs(), "servers": servers });
+    crate::util::write_atomic(&live_file(paths), &all.to_string()).map_err(|e| format!("Mom couldn't note what it said: {e}"))?;
+    Ok(found.len())
 }
 
 /// Every agent on this PC that has a set-up, with what's in it and what's worth a look.
@@ -1428,7 +1567,9 @@ mod tests {
                                "copperline":{{"type":"http","url":"https://mcp.copperline.example/v1?key=abc123","headers":{{"Authorization":"Bearer abcdefghijklmnop0123456789"}}}},
                                "old":{{"command":"{gone}","args":[]}},
                                "plain":{{"type":"sse","url":"http://mcp.nimbus.example/sse"}}}},
-                "projects":{{"C:/Workspace/storefront":{{"mcpServers":{{"shop":{{"command":"nimbus-shop-mcp-that-is-not-installed","args":["--token","abc"]}}}}}}}}}}"#,
+                "projects":{{"C:/Workspace/storefront":{{"mcpServers":{{"shop":{{"command":"nimbus-shop-mcp-that-is-not-installed","args":["--token","abc"]}},"notes":{{"command":"node","args":[]}}}}}},
+                             "{home}":{{"mcpServers":{{"homely":{{"command":"node","args":[]}}}}}}}}}}"#,
+                home = js(&paths.home),
                 tool = js(&tool),
                 gone = js(&root.join("tools").join("old-server.exe")),
             ),
@@ -1454,12 +1595,13 @@ mod tests {
         let a = &agents[0];
         assert_eq!((a.id.as_str(), a.name.as_str()), ("claude", "Claude Code"));
         let server = |n: &str| a.servers.iter().find(|s| s.name == n).unwrap_or_else(|| panic!("no server {n} in {:#?}", a.servers));
-        // A program with its script there: fine, and its key isn't shown.
+        // A program with its script there: its settings look fine, but nobody has checked that
+        // it answers, so it isn't called fine. Its key isn't shown.
         let notes = server("notes");
-        assert_eq!((notes.kind.as_str(), notes.level.as_str(), notes.from.as_str()), ("program", "ok", "your settings"));
+        assert_eq!((notes.kind.as_str(), notes.level.as_str(), notes.from.as_str(), notes.id.as_str()), ("program", "unknown", "your settings", "notes"));
         assert!(notes.what.starts_with("node ") && notes.what.contains("notes-server.js"), "{}", notes.what);
         // A web one: the address without its key.
-        assert_eq!((server("copperline").what.as_str(), server("copperline").level.as_str()), ("https://mcp.copperline.example/v1", "ok"));
+        assert_eq!((server("copperline").what.as_str(), server("copperline").level.as_str()), ("https://mcp.copperline.example/v1", "unknown"));
         // A program that's gone: worth a look, with something to hand an agent.
         let old = server("old");
         assert_eq!(old.level, "warn");
@@ -1469,11 +1611,15 @@ mod tests {
         assert_eq!(server("plain").level, "warn");
         // A bare name mom can't find: said, but not a red light, and the token after --token is blanked.
         let shop = server("shop");
-        assert_eq!((shop.level.as_str(), shop.from.as_str()), ("note", "project storefront"));
+        assert_eq!((shop.level.as_str(), shop.from.as_str(), shop.id.as_str()), ("note", "project storefront", "project:C:/Workspace/storefront:shop"));
+        // A project's server with the same name as one of yours is another server, and one set
+        // up for your home folder goes by its own name (Claude Code is asked from there).
+        assert_eq!(a.servers.iter().filter(|s| s.name == "notes").map(|s| s.id.as_str()).collect::<Vec<_>>(), ["notes", "project:C:/Workspace/storefront:notes"]);
+        assert_eq!((server("homely").id.as_str(), server("homely").from.as_str()), ("homely", "your home folder"));
         assert!(shop.what.ends_with(&format!("--token {BLANK}")), "{}", shop.what);
         // The plugin that's on: its server waits for a sign-in. The one that's off isn't listed.
         let atlas_server = server("atlas");
-        assert_eq!((atlas_server.from.as_str(), atlas_server.level.as_str()), ("plugin atlas", "warn"));
+        assert_eq!((atlas_server.from.as_str(), atlas_server.level.as_str(), atlas_server.id.as_str()), ("plugin atlas", "warn", "plugin:atlas:atlas"));
         assert_eq!(atlas_server.fix.as_ref().unwrap().text, "/mcp");
         assert!(!a.servers.iter().any(|s| s.name == "quiet"));
 
@@ -1543,7 +1689,8 @@ mod tests {
             ("Model", "ok"),
             ("Trusted folders", "ok")
         ]);
-        assert_eq!(codex.servers.iter().map(|s| (s.name.as_str(), s.kind.as_str(), s.level.as_str())).collect::<Vec<_>>(), [("docs", "web", "ok"), ("hq", "web", "off")]);
+        assert_eq!(codex.servers.iter().map(|s| (s.name.as_str(), s.kind.as_str(), s.level.as_str())).collect::<Vec<_>>(), [("docs", "web", "unknown"), ("hq", "web", "off")]);
+        assert!(codex.checked.is_none() && !codex.can_check, "mom can only ask Claude Code");
         assert_eq!((codex.hooks[0].event.as_str(), codex.hooks[0].level.as_str()), ("notify", "note"));
         assert_eq!(codex.skills[0].from, "shared with other agents");
         assert!(!codex.docs.iter().any(|d| d.title == "AGENTS.md"), "an empty file isn't worth reading");
@@ -1580,6 +1727,63 @@ mod tests {
         for part in ask.split('`').skip(1).step_by(2) {
             assert!(!part.is_empty() && !part.contains('\n'), "{ask}");
         }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn what_claude_code_found_is_the_word_on_each_server() {
+        let (root, paths) = fixture("live");
+        let dir = paths.claude_dir();
+        put(
+            &paths.home.join(".claude.json"),
+            r#"{"mcpServers":{"notes":{"command":"node","args":[]},"shop":{"type":"http","url":"https://mcp.copperline.example/mcp"},"maps":{"type":"http","url":"https://mcp.atlas.example/mcp"},"quiet":{"type":"http","url":"https://mcp.nimbus.example/mcp"}}}"#,
+        );
+        // A plugin that keeps its servers in a file plugin.json names, one that writes them out
+        // in plugin.json itself, and one that points outside its own folder (not read).
+        let cache = dir.join("plugins").join("cache").join("shop");
+        let (base, inline, sneaky) = (cache.join("base").join("1.0.0"), cache.join("inline").join("1.0.0"), cache.join("sneaky").join("1.0.0"));
+        put(&base.join(".claude-plugin").join("plugin.json"), r#"{"name":"base","mcpServers":"./agents/claude/.mcp.json"}"#);
+        put(&base.join("agents").join("claude").join(".mcp.json"), r#"{"mcpServers":{"base":{"type":"http","url":"https://mcp.lanternfall.example/mcp"}}}"#);
+        put(&inline.join(".claude-plugin").join("plugin.json"), r#"{"name":"inline","mcpServers":{"inline":{"command":"node","args":[]}}}"#);
+        put(&sneaky.join(".claude-plugin").join("plugin.json"), r#"{"name":"sneaky","mcpServers":"../../../../../outside.json"}"#);
+        put(&dir.join("outside.json"), r#"{"mcpServers":{"outside":{"command":"node"}}}"#);
+        let js = |p: &Path| p.to_string_lossy().replace('\\', "\\\\");
+        put(
+            &dir.join("plugins").join("installed_plugins.json"),
+            &format!(r#"{{"plugins":{{"base@shop":[{{"installPath":"{}"}}],"inline@shop":[{{"installPath":"{}"}}],"sneaky@shop":[{{"installPath":"{}"}}]}}}}"#, js(&base), js(&inline), js(&sneaky)),
+        );
+        // Claude Code's own note of who needs a sign-in knows about one of them.
+        put(&dir.join("mcp-needs-auth-cache.json"), r#"{"plugin:base:base":{"timestamp":1},"shop":{"timestamp":1}}"#);
+
+        let levels = |paths: &Paths| -> Vec<(String, String)> { check(paths)[0].servers.iter().map(|s| (s.id.clone(), s.level.clone())).collect() };
+        let pair = |id: &str, level: &str| (id.to_string(), level.to_string());
+        // Before anyone has checked: a red light for the ones on that note, no light for the rest.
+        assert_eq!(levels(&paths), [pair("notes", "unknown"), pair("shop", "warn"), pair("maps", "unknown"), pair("quiet", "unknown"), pair("plugin:base:base", "warn"), pair("plugin:inline:inline", "unknown")]);
+        assert!(check(&paths)[0].checked.is_none());
+
+        // What Claude Code prints, read line by line.
+        assert_eq!(claude_line("plugin:base:base: https://mcp.lanternfall.example/mcp (HTTP) - ! Needs authentication"), Some(("plugin:base:base".to_string(), "auth")));
+        assert_eq!(claude_line("notes: node C:/tools/notes - server.js - \u{2714} Connected"), Some(("notes".to_string(), "ok")));
+        assert_eq!(claude_line("maps: https://mcp.atlas.example/mcp (HTTP) - \u{2718} Failed to connect"), Some(("maps".to_string(), "failed")));
+        assert_eq!(claude_line("claude.ai Claude Docs: https://x.example/mcp - \u{2714} Connected").unwrap().0, "claude.ai Claude Docs");
+        for not_a_server in ["Checking MCP server health\u{2026}", "", "[mcp-sdk] a note: with a colon - and a dash", "notes: node - something else"] {
+            assert_eq!(claude_line(not_a_server), None, "{not_a_server}");
+        }
+
+        // After it has: its word on each one it listed. The sign-in it noted for "shop" is out of
+        // date (it connects now); "quiet" wasn't in its list, so it's still unknown.
+        let now = crate::util::now_secs();
+        let found = |at: u64| format!(r#"{{"claude":{{"at":{at},"servers":{{"notes":"ok","shop":"ok","maps":"failed","plugin:base:base":"auth","plugin:inline:inline":"ok"}}}}}}"#);
+        put(&live_file(&paths), &found(now - 60));
+        assert_eq!(levels(&paths), [pair("notes", "ok"), pair("shop", "ok"), pair("maps", "warn"), pair("quiet", "unknown"), pair("plugin:base:base", "warn"), pair("plugin:inline:inline", "ok")]);
+        let a = &check(&paths)[0];
+        assert_eq!((a.checked, a.problems), (Some(now - 60), 2));
+        let maps = a.servers.iter().find(|s| s.id == "maps").unwrap();
+        assert!(maps.problem.as_deref().unwrap().contains("couldn't reach it") && maps.fix.as_ref().unwrap().text.contains("`maps`"));
+        assert!(a.servers.iter().find(|s| s.id == "shop").unwrap().problem.is_none());
+        // A day on, what it found is too old to go by.
+        put(&live_file(&paths), &found(now - 90_000));
+        assert!(check(&paths)[0].checked.is_none() && levels(&paths)[0] == pair("notes", "unknown"));
         std::fs::remove_dir_all(&root).ok();
     }
 

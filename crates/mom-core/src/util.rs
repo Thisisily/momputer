@@ -86,11 +86,19 @@ impl CmdOutput {
 
 /// Runs a program without flashing a console window, killing it if it takes too long.
 pub fn run(program: &str, args: &[&str], timeout: Duration) -> std::io::Result<CmdOutput> {
+    run_in(program, args, None, timeout)
+}
+
+/// `run`, started in a folder of your choosing.
+pub fn run_in(program: &str, args: &[&str], folder: Option<&std::path::Path>, timeout: Duration) -> std::io::Result<CmdOutput> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(folder) = folder {
+        cmd.current_dir(folder);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -274,6 +282,61 @@ pub fn on_path(name: &str) -> Option<PathBuf> {
     let exts: &[&str] = if cfg!(windows) { &[".exe", ".cmd", ".bat"] } else { &[""] };
     std::env::split_paths(&std::env::var_os("PATH")?)
         .find_map(|dir| exts.iter().map(|e| dir.join(format!("{name}{e}"))).find(|p| p.is_file()))
+}
+
+/// A few things to ask of a window by its handle (as a number), in screen pixels. Rectangles are
+/// (x, y, width, height).
+#[cfg(windows)]
+pub mod window {
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAK, DWMWA_EXTENDED_FRAME_BOUNDS};
+    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetClientRect, GetWindowRect, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE, SW_SHOWNOACTIVATE};
+
+    const EMPTY: RECT = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    fn shape(r: RECT) -> (i32, i32, i32, i32) {
+        (r.left, r.top, r.right - r.left, r.bottom - r.top)
+    }
+
+    /// Moves and resizes it in one go, leaving alone which window is in front.
+    pub fn place(hwnd: isize, x: i32, y: i32, width: i32, height: i32) -> bool {
+        // SAFETY (here and below): a window handle and plain numbers or a struct of ours to fill;
+        // Windows checks the handle itself.
+        unsafe { SetWindowPos(hwnd as _, 0 as _, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE) != 0 }
+    }
+
+    /// Its whole rectangle, with the unseen edge Windows keeps around a window to grab it by.
+    pub fn whole(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
+        let mut r = EMPTY;
+        (unsafe { GetWindowRect(hwnd as _, &mut r) } != 0).then(|| shape(r))
+    }
+
+    /// The part of it you can see.
+    pub fn seen(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
+        let mut r = EMPTY;
+        let size = std::mem::size_of::<RECT>() as u32;
+        (unsafe { DwmGetWindowAttribute(hwnd as _, DWMWA_EXTENDED_FRAME_BOUNDS as u32, std::ptr::addr_of_mut!(r).cast(), size) } == 0).then(|| shape(r))
+    }
+
+    /// Where its page is on the screen (what's inside its edges).
+    pub fn page(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
+        let mut r = EMPTY;
+        let mut corner = POINT { x: 0, y: 0 };
+        let ok = unsafe { GetClientRect(hwnd as _, &mut r) != 0 && ClientToScreen(hwnd as _, &mut corner) != 0 };
+        ok.then(|| (corner.x, corner.y, r.right - r.left, r.bottom - r.top))
+    }
+
+    /// Takes it off the screen without closing, hiding or leaving it (it keeps the keyboard, its
+    /// place in the taskbar and its place among the windows), or puts it back.
+    pub fn cloak(hwnd: isize, on: bool) -> bool {
+        let on = i32::from(on);
+        unsafe { DwmSetWindowAttribute(hwnd as _, DWMWA_CLOAK as u32, std::ptr::addr_of!(on).cast(), 4) == 0 }
+    }
+
+    /// Shows it without making it the window you're in, or hides it.
+    pub fn show_quietly(hwnd: isize, on: bool) {
+        unsafe { ShowWindow(hwnd as _, if on { SW_SHOWNOACTIVATE } else { SW_HIDE }) };
+    }
 }
 
 /// NUL-terminated UTF-16, for Win32 calls.

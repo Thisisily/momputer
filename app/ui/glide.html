@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>momputer</title>
+  <style>
+    /* A see-through page with two plain cards on it: stand-ins for the window while it changes
+       size. One is the shape it had, the other the shape it's getting. */
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+    }
+
+    .card {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 0;
+      height: 0;
+      border-radius: 8px;
+      box-shadow: 0 0 0 1px rgba(128, 128, 128, 0.28), 0 10px 30px rgba(0, 0, 0, 0.28);
+      will-change: transform, opacity;
+      opacity: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="card" id="was"></div>
+  <div class="card" id="will"></div>
+  <script src="glide.js"></script>
+</body>
+</html>

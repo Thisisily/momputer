@@ -87,6 +87,7 @@
     rulesTab: "rules", // House rules' two views: rules | skills
     agents: null, // how each agent is set up (get_agents); null until mom has looked
     agentsLoading: false,
+    agentsChecking: false, // Claude Code is trying its servers because "Check now" was pressed
     agentsAt: 0,
     showAllAgent: new Set(), // "<agent>:<list>": the sheet's lists shown in full
     reader: null, // the file open in BIG MODE's reader: { id, title, doc, error }
@@ -1207,12 +1208,15 @@ in ${x.cwd}`)}">
     const rows = list
       .map((a) => {
         const has = [a.servers.length && plural(a.servers.length, "MCP server"), a.hooks.length && plural(a.hooks.length, "hook"), a.skills.length && plural(a.skills.length, "skill")].filter(Boolean);
-        return `<div class="row spot-row" id="setup-${esc(a.id)}" role="button" tabindex="0" data-act="open-agent" data-id="${esc(a.id)}" data-led="${a.problems ? "red" : "green"}"
-            aria-label="${esc(`${a.name}: ${a.problems ? `${a.problems} to look at` : "all in order"}. Show details`)}">
+        // Its servers can be asked whether they answer, and nobody has yet: not "in order".
+        const unchecked = !a.problems && a.canCheck && !a.checked && a.servers.some((s) => s.level === "unknown");
+        const said = a.problems ? "to look at" : unchecked ? "not checked" : "in order";
+        return `<div class="row spot-row" id="setup-${esc(a.id)}" role="button" tabindex="0" data-act="open-agent" data-id="${esc(a.id)}" data-led="${a.problems ? "red" : unchecked ? "off" : "green"}"
+            aria-label="${esc(`${a.name}: ${a.problems ? `${a.problems} to look at` : said}. Show details`)}">
           <span class="row-name">${esc(a.name)}</span>
           <div class="row-meta"><span class="why">${esc(has.join(" · ") || "Nothing set up yet")}</span></div>
           <div class="row-nums num">${a.problems ? `<strong>${a.problems}</strong>` : ""}</div>
-          <div class="row-nums2 num">${a.problems ? "to look at" : "in order"}</div>
+          <div class="row-nums2 num">${said}</div>
           <div class="row-act">${ICON.chevron}</div>
         </div>`;
       })
@@ -1260,6 +1264,22 @@ in ${x.cwd}`)}">
       return section(`as-${key}`, title, aside || String(rows.length), (all ? rows : rows.slice(0, 6)).join("") + more);
     };
     const badge = (text) => ` <span class="badge look">${esc(text)}</span>`;
+    // Whether its servers answer: Claude Code can be asked to try them. Nobody else can yet.
+    const checking = state.agentsChecking;
+    const ago = a.checked ? ageLong(Math.max(0, Date.now() / 1000 - a.checked)) : "";
+    const unknown = a.servers.filter((s) => s.level === "unknown").length;
+    const tried = !a.servers.length
+      ? ""
+      : a.canCheck
+        ? `<div class="tried"><p>${
+            checking ? `<span class="led green blink"></span>${esc(a.name)} is trying each server…` : ago ? `${esc(a.name)} tried its servers ${esc(ago)} ago.` : `Nobody has checked whether its servers answer yet.`
+          }</p><button class="secondary" data-act="agents-check" ${checking ? "disabled" : ""}>${checking ? "Checking" : ago ? "Check again" : "Check now"}</button></div>
+          <p class="list-hint">Check asks ${esc(a.name)} to try each server, the way its /mcp screen does. Mom starts nothing herself.</p>`
+        : unknown
+          ? `<p class="list-hint">This is what its settings say. Mom can't ask ${esc(a.name)} to try its servers, so their lights stay off unless something's plainly wrong.</p>`
+          : "";
+    const answering = a.servers.filter((s) => s.level === "ok").length;
+    const serverCount = [answering && `${answering} answering`, unknown && `${unknown} not checked`].filter(Boolean).join(" · ") || String(a.servers.length);
     const servers = a.servers.map((s, i) => row(`mcp${i}`, SETUP_LED[s.level] || "", s.name, [s.level === "ok" ? "" : s.problem, s.what, s.from].filter(Boolean).join(" · "), s.doc, s.level === "off" ? badge("off") : ""));
     const hooks = a.hooks.map((h, i) =>
       row(`hook${i}`, SETUP_LED[h.level] || "", h.matcher ? `${h.event} (${h.matcher})` : h.event, [h.level === "ok" ? "" : h.problem, h.what, h.mine ? "mom's check-in" : h.from, h.count > 1 ? `${h.count} times` : ""].filter(Boolean).join(" · "), h.doc)
@@ -1270,12 +1290,15 @@ in ${x.cwd}`)}">
     const files = a.docs.filter((d) => !listed.has(d.id)).map((d, i) => row(`doc${i}`, "", d.title, d.path, d.id));
     return `<div class="sheet-head">
         <div><h2 id="sheet-title">${esc(a.name)}</h2>
-          <div class="pills"><span class="pill"><span class="led ${a.problems ? "red" : "green"}"></span>${a.problems ? `${a.problems} to look at` : "All in order"}</span>
+          <div class="pills"><span class="pill"><span class="led ${a.problems ? "red" : unknown && a.canCheck && !a.checked ? "" : "green"}"></span>${
+            a.problems ? `${a.problems} to look at` : unknown && a.canCheck && !a.checked ? "Not checked yet" : "All in order"
+          }</span>
           <span class="pill">Mom only reads</span></div></div>${acts}</div>
       <p class="sheet-what">How ${esc(a.name)} is set up on this PC. Tap a row to read the file behind it. Mom blanks what looks like a key.</p>
       ${worth.length ? section("as-worth", "Worth a look", String(worth.length), worth.map((w) => checkRow(w, "asw")).join("")) : ""}
       ${list("settings", "Settings", settings)}
-      ${list("servers", "MCP servers", servers)}
+      ${list("servers", "MCP servers", servers, serverCount)}
+      ${tried}
       ${list("hooks", "Hooks", hooks)}
       ${list("skills", "Skills", skills)}
       ${list("files", "Files", files)}`;
@@ -1818,27 +1841,45 @@ in ${x.cwd}`)}">
 
   /** BIG MODE on or off: the window grows (or shrinks back to the widget), and mom moves between
       her card and the monitor on the desk. */
+  /** A fade the browser runs by itself, at the screen's own rate (GSAP here is kept to 60 a second). */
+  const fade = (el, from, to, ms) => el.animate([{ opacity: from }, { opacity: to }], { duration: ms, easing: "ease-out", fill: "forwards" }).finished.catch(() => {});
+  const twoFrames = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+
   async function setBigMode(on) {
-    if (state.big === on) return;
-    state.big = on;
-    $(".app").classList.toggle("big-mode", on);
-    $("#btn-big").setAttribute("aria-pressed", String(on));
-    $("#big-badge").hidden = !on;
+    if (state.big === on || state.bigMoving) return;
+    // Smoothly, one go at a time, the way a window closes and opens on a well-made desktop. What's
+    // on the page fades out; the app swaps the window for a stand-in of the same shape and takes
+    // the real window off the screen; the stand-in closes and a new one opens where the window is
+    // going, while the page, unseen, is laid out for it; then the window is put back under the new
+    // shape, which dissolves into the finished page. Nothing is ever resized where you can see it.
+    state.bigMoving = true;
+    const app = $(".app");
+    const smooth = moving();
+    const fading = smooth ? fade(app, 1, 0, 90) : null;
+    let carried = false;
     try {
-      await invoke("set_big", { on });
+      carried = (await invoke("set_big", { on, smooth, bg: getComputedStyle(document.body).backgroundColor })) === true;
     } catch (e) {
       console.warn("the window stayed as it was", e);
     }
+    await fading;
+    state.big = on;
+    app.classList.toggle("big-mode", on);
+    const button = $("#btn-big");
+    button.setAttribute("aria-pressed", String(on));
+    button.title = on ? "Back to the widget" : "BIG MODE: a full window, with your PC on mom's desk";
+    button.setAttribute("aria-label", on ? "Back to the widget" : "BIG MODE");
+    $("#big-badge").hidden = !on;
     const face = $("#face");
+    let desk = null;
     if (on) {
       $("#stage-screen").appendChild(face);
       if (!state.system) loadSystem();
-      await openStage();
-      say("BIG MODE. Look at you, with a whole desk.", 3600);
+      // The desk is drawn once its parts have loaded; it fades in by itself (see .stage-3d canvas).
+      desk = openStage();
     } else {
       state.reader = null;
       state.readerWasSmall = false;
-      renderReader();
       if (stage) stage.close();
       stage = null;
       state.bigPart = null;
@@ -1847,6 +1888,23 @@ in ${x.cwd}`)}">
     }
     moveThumb(false);
     renderStage();
+    renderReader(); // a file opened from the small widget is on the page when it shows
+    if (carried) {
+      // Behind the stand-in the page is whole again: it's what the stand-in dissolves into.
+      for (const run of app.getAnimations()) run.cancel();
+      await invoke("big_arrived").catch(() => {});
+      await twoFrames(); // the page has drawn itself at its new size
+      await invoke("card_away").catch(() => {});
+    } else if (smooth) {
+      // No stand-in to be had: the window jumped, and what's on it fades back in.
+      await fade(app, 0, 1, 180);
+      for (const run of app.getAnimations()) run.cancel();
+    }
+    state.bigMoving = false;
+    if (on) {
+      await desk;
+      say("BIG MODE. Look at you, with a whole desk.", 3600);
+    }
   }
 
   function renderWindows() {
@@ -3591,6 +3649,20 @@ in ${x.cwd}`)}">
         loadAgents();
         renderSheet();
         break;
+      case "agents-check": {
+        if (state.agentsChecking) break;
+        state.agentsChecking = true;
+        renderSheet();
+        const found = await act(invoke("check_agents"), () => "That's how its servers are right now.");
+        state.agentsChecking = false;
+        if (Array.isArray(found)) {
+          state.agents = found;
+          state.agentsAt = Date.now();
+        } else await loadAgents();
+        if (state.tab === "running" && state.runningTab === "agents") render();
+        renderSheet();
+        break;
+      }
       case "toggle-agent-list":
         if (!state.showAllAgent.delete(el.dataset.key)) state.showAllAgent.add(el.dataset.key);
         renderSheet();

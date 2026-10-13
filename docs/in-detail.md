@@ -85,7 +85,7 @@ mom trash keep <path>  keep a file or folder out of every clean-up (--release le
 mom health             drives, memory, restarts, Storage Sense and startup apps
 mom update             is there a newer momputer? (asks GitHub)
 mom skills             the skills that come with momputer: what each does, what to say, whose copy is behind
-mom agents             how each agent is set up: MCP servers, hooks, settings (mom agents read <id> shows a file)
+mom agents             how each agent is set up: MCP servers, hooks, settings (--check asks Claude Code to try its servers)
 mom speed              what's slowing the PC down, and what's busy right now
 mom programs           every program running, one line each (only looks)
 mom pc                 what the PC is, and its protection, updates, hardware and registry leftovers
@@ -124,12 +124,12 @@ Codex asks you to trust new hooks once: run `/hooks` in the Codex CLI.
 
 Running > Agents ends with a row for each agent that has a set-up on this PC: Claude Code, Codex, Cursor, Gemini CLI and opencode. Tap one for everything it has.
 
-- **MCP servers**, from your settings, from each project and from plugins. One that starts a program is checked by whether that program and its script are there. One that's called over the web is checked by its address. One waiting for you to sign in says so.
+- **MCP servers**, from your settings, from each project and from plugins. Mom reads what's set up: a program that isn't there any more, or an address that can't work, gets a red light straight away. Whether a server actually answers, only its agent can say, so **Check now** asks Claude Code to try each of its own servers (the check its `/mcp` screen runs). After that each one has a light: answering, waiting for you to sign in, or not reachable. Until someone has checked, a server's light stays off rather than green.
 - **Hooks**, yours and each plugin's: when it runs, what it runs, and whether its program and script are there. Mom's own check-ins are marked.
 - **Settings that apply everywhere**: whether the agent asks before it runs commands, a settings file that can't be read, keys kept in plain text, an instructions file long enough to slow every session.
 - **Skills** and the files all of this lives in.
 
-Mom only reads. No server is started, no hook is run and nothing is asked over the network. A finding is a sentence with something to do: a command to copy, or a note for your agent.
+Mom herself only reads: she starts no server, runs no hook and asks nothing over the network. Check now is the one thing that does more, and it's Claude Code doing it, when you press the button. A finding is a sentence with something to do: a command to copy, or a note for your agent.
 
 Tap any row to read the file behind it. That switches to BIG MODE, where there's room for a page: Markdown is laid out, settings files are shown as written. What looks like a key, a token or a password is blanked before the file reaches the screen, and only files mom herself found in an agent's set-up can be opened. She goes by names and shapes (what follows `--token`, anything under `env`, a long run of letters and digits), so a short password in the middle of a note can get past her: it's your own file on your own screen, but look it over before you share it. A settings file she can't read properly isn't shown at all: she couldn't tell what in it is a key.
 

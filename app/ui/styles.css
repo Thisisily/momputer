@@ -2183,6 +2183,28 @@ button.row-name:hover {
 
 /* ---------------------------------------------------------------- how agents are set up */
 
+/* When an agent's servers were last tried, and the button that asks it to */
+.tried {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px 0;
+}
+
+.tried p {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.tried .secondary {
+  flex: none;
+}
+
 /* A row that opens the file behind it */
 .doc-row {
   cursor: pointer;
@@ -4077,10 +4099,28 @@ button.row-name:hover {
   inset: 0;
 }
 
+/* BIG MODE's button: arrows out to open it, arrows in to go back to the widget. */
+#btn-big .arrows-in,
+#btn-big[aria-pressed="true"] .arrows-out {
+  display: none;
+}
+
+#btn-big[aria-pressed="true"] .arrows-in {
+  display: block;
+}
+
 .stage-3d canvas {
   display: block;
   width: 100%;
   height: 100%;
+  /* The desk fades in once it's drawn, rather than popping into an empty card. Once. */
+  animation: stage-in 420ms ease-out both;
+}
+
+@keyframes stage-in {
+  from {
+    opacity: 0;
+  }
 }
 
 /* Mom's own element, laid onto the monitor's glass (big.js gives it the perspective). */

@@ -66,6 +66,12 @@ struct Shared {
     tray_state: Mutex<(bool, String)>,
     diary: Mutex<VecDeque<Note>>,
     placed: AtomicBool,
+    /// The stand-in card says it's drawn (BIG MODE's change of size waits for that).
+    card_ready: (Mutex<bool>, Condvar),
+    /// When the new shape has opened, while a change of size is under way.
+    morph_until: Mutex<Option<Instant>>,
+    /// The stand-in is on the screen.
+    card_up: AtomicBool,
 }
 
 type S = Arc<Shared>;
@@ -99,16 +105,157 @@ impl Shared {
 
 // ------------------------------------------------------------------ window & tray
 
+/// Where a widget of this size sits: by the tray, a little in from the corner.
+fn widget_spot(monitor: &tauri::Monitor, size: tauri::PhysicalSize<u32>) -> tauri::PhysicalPosition<i32> {
+    let area = monitor.work_area();
+    let margin = (16.0 * monitor.scale_factor()) as i32;
+    let x = area.position.x + area.size.width as i32 - size.width as i32 - margin;
+    let y = area.position.y + area.size.height as i32 - size.height as i32 - margin;
+    tauri::PhysicalPosition::new(x.max(area.position.x), y.max(area.position.y))
+}
+
 fn place_window(win: &tauri::WebviewWindow) {
-    if let Ok(Some(monitor)) = win.primary_monitor() {
-        let area = monitor.work_area();
-        if let Ok(size) = win.outer_size() {
-            let margin = (16.0 * monitor.scale_factor()) as i32;
-            let x = area.position.x + area.size.width as i32 - size.width as i32 - margin;
-            let y = area.position.y + area.size.height as i32 - size.height as i32 - margin;
-            let _ = win.set_position(tauri::PhysicalPosition::new(x.max(area.position.x), y.max(area.position.y)));
+    if let (Ok(Some(monitor)), Ok(size)) = (win.primary_monitor(), win.outer_size()) {
+        let _ = win.set_position(widget_spot(&monitor, size));
+    }
+}
+
+/// How long the change of shape takes on the stand-in: the old shape closing, the new one opening.
+const MORPH: Duration = Duration::from_millis(300);
+/// The page's content fades out before its window is swapped for the stand-in, and the stand-in
+/// dissolves once the window is back under it.
+const FADE_OUT: Duration = Duration::from_millis(90);
+const DISSOLVE: Duration = Duration::from_millis(140);
+
+/// The stand-in for BIG MODE's change of size: a see-through window that's never clicked or
+/// typed in, with two plain cards on it. Made once, a moment after mom starts, and kept hidden.
+///
+/// Why a stand-in: a real window can't be resized smoothly. Every size on the way makes its page
+/// draw itself again, a few dozen times a second at best, with scrollbars flashing by, and the
+/// page's surface lags behind the frame, which leaves scraps on the desktop. So the real window
+/// isn't resized on screen at all. A card is put exactly over it, the window is taken off the
+/// screen and sent to its new place and size unseen, the cards do what a window does when it
+/// closes and opens (the graphics card moves them, at the screen's own rate), and the window is
+/// put back under the new card, which dissolves into it.
+fn make_card(app: &AppHandle) {
+    if app.get_webview_window("glide").is_some() {
+        return;
+    }
+    let built = tauri::WebviewWindowBuilder::new(app, "glide", tauri::WebviewUrl::App("glide.html".into()))
+        .title("momputer")
+        .transparent(true)
+        .decorations(false)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .focused(false)
+        .visible(false)
+        .inner_size(320.0, 240.0)
+        .build();
+    if let Ok(card) = built {
+        let _ = card.set_ignore_cursor_events(true);
+    }
+}
+
+/// Puts the stand-in over the window, takes the window off the screen, starts the change of
+/// shape and sends the real window to its new place, unseen. False if it couldn't (no stand-in,
+/// or it didn't answer in time): then nothing has changed and the caller does it the plain way.
+/// `size`: the page's new size. `place`: where a window of that whole size goes.
+#[cfg(windows)]
+fn morph(app: &AppHandle, s: &S, win: &tauri::WebviewWindow, scale: f64, bg: &str, size: tauri::PhysicalSize<u32>, place: impl Fn(tauri::PhysicalSize<u32>) -> tauri::PhysicalPosition<i32>) -> bool {
+    use mom_core::util::window;
+    let asked = Instant::now();
+    let (Some(card), Ok(hwnd), Ok(inner)) = (app.get_webview_window("glide"), win.hwnd(), win.inner_size()) else { return false };
+    let Ok(card_hwnd) = card.hwnd() else { return false };
+    let (hwnd, card_hwnd) = (hwnd.0 as isize, card_hwnd.0 as isize);
+    let (Some(whole), Some(seen)) = (window::whole(hwnd), window::seen(hwnd)) else { return false };
+    // The unseen edge Windows keeps around a window: the same before and after.
+    let edge = (seen.0 - whole.0, seen.1 - whole.1, whole.2 - seen.2, whole.3 - seen.3);
+    let goal = tauri::PhysicalSize::new((size.width as i32 + whole.2 - inner.width as i32).max(1) as u32, (size.height as i32 + whole.3 - inner.height as i32).max(1) as u32);
+    let to = place(goal);
+    let seen_there = (to.x + edge.0, to.y + edge.1, goal.width as i32 - edge.2, goal.height as i32 - edge.3);
+    // The stand-in's window covers where the window is and where it's going, with room for a shadow.
+    const ROOM: i32 = 56;
+    let (left, top) = (seen.0.min(seen_there.0) - ROOM, seen.1.min(seen_there.1) - ROOM);
+    let (right, bottom) = ((seen.0 + seen.2).max(seen_there.0 + seen_there.2) + ROOM, (seen.1 + seen.3).max(seen_there.1 + seen_there.3) + ROOM);
+    window::place(card_hwnd, left, top, right - left, bottom - top);
+    let Some(page) = window::page(card_hwnd) else { return false };
+    // In the page's own units, measured from its corner.
+    let on_page = |r: (i32, i32, i32, i32)| serde_json::json!({ "x": f64::from(r.0 - page.0) / scale, "y": f64::from(r.1 - page.1) / scale, "w": f64::from(r.2) / scale, "h": f64::from(r.3) / scale });
+    // The colour comes from the widget's page: only what a colour is made of gets through.
+    let bg: String = bg.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '#' | '(' | ')' | ',' | '.' | ' ' | '%')).take(40).collect();
+    *s.card_ready.0.lk() = false;
+    if card.eval(format!("glide.at({}, {}, {})", on_page(seen), on_page(seen_there), serde_json::json!({ "bg": bg }))).is_err() {
+        return false;
+    }
+    // The page under it is fading its content out meanwhile: by the time that's done, the old
+    // shape is on the glass, exactly over the window and the same colour, so the swap can't be seen.
+    window::show_quietly(card_hwnd, true);
+    let _ = card.eval("glide.ack()");
+    let on_glass = {
+        let (lock, cv) = &s.card_ready;
+        let (ready, _) = cv.wait_timeout_while(lock.lk(), Duration::from_millis(300), |ready| !*ready).unwrap_or_else(|e| e.into_inner());
+        *ready
+    };
+    if !on_glass {
+        let _ = card.eval("glide.done()");
+        window::show_quietly(card_hwnd, false);
+        return false;
+    }
+    std::thread::sleep(FADE_OUT.saturating_sub(asked.elapsed()));
+    window::cloak(hwnd, true);
+    s.card_up.store(true, Ordering::SeqCst);
+    let _ = card.eval(format!("glide.go({})", MORPH.as_millis()));
+    // (A moment more than it takes: it's told to go by a message, which takes a moment too.)
+    *s.morph_until.lk() = Some(Instant::now() + MORPH + Duration::from_millis(30));
+    window::place(hwnd, to.x, to.y, goal.width as i32, goal.height as i32);
+    let _ = win.set_size(size);
+    let _ = win.set_position(to);
+    // Whatever happens to the widget's page meanwhile, the window comes back.
+    let (app, s) = (app.clone(), s.clone());
+    std::thread::spawn(move || {
+        std::thread::sleep(MORPH + Duration::from_secs(2));
+        arrive(&app, &s);
+        card_gone(&app, &s);
+    });
+    true
+}
+
+#[cfg(not(windows))]
+fn morph(_: &AppHandle, _: &S, _: &tauri::WebviewWindow, _: f64, _: &str, _: tauri::PhysicalSize<u32>, _: impl Fn(tauri::PhysicalSize<u32>) -> tauri::PhysicalPosition<i32>) -> bool {
+    false
+}
+
+/// The new shape has opened (or it's time it had): the real window is put back under it. Safe to
+/// call twice.
+fn arrive(app: &AppHandle, s: &S) {
+    let Some(until) = s.morph_until.lk().take() else { return };
+    std::thread::sleep(until.saturating_duration_since(Instant::now()));
+    #[cfg(windows)]
+    if let Some(Ok(hwnd)) = app.get_webview_window("main").map(|w| w.hwnd()) {
+        mom_core::util::window::cloak(hwnd.0 as isize, false);
+    }
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
+/// The stand-in dissolves into the window under it and is put away. Safe to call twice.
+fn card_gone(app: &AppHandle, s: &S) {
+    if !s.card_up.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    #[cfg(windows)]
+    if let Some(card) = app.get_webview_window("glide") {
+        let _ = card.eval(format!("glide.away({})", DISSOLVE.as_millis()));
+        std::thread::sleep(DISSOLVE + Duration::from_millis(20));
+        let _ = card.eval("glide.done()");
+        if let Ok(h) = card.hwnd() {
+            mom_core::util::window::show_quietly(h.0 as isize, false);
         }
     }
+    #[cfg(not(windows))]
+    let _ = app;
 }
 
 fn show_main(app: &AppHandle) {
@@ -1265,6 +1412,22 @@ fn get_agents(s: State<'_, S>) -> Vec<mom_core::setup::AgentSetup> {
     agents
 }
 
+/// Asks Claude Code to try each of its MCP servers (its own check, the one its /mcp screen
+/// runs), then looks at the set-ups again with what it said. Only when the person presses the
+/// button: Claude Code starts each server for a moment to do it.
+#[tauri::command]
+async fn check_agents(s: State<'_, S>) -> Res<Vec<mom_core::setup::AgentSetup>> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let asked = mom_core::setup::ask_claude(&s.paths);
+        let agents = mom_core::setup::check(&s.paths);
+        *s.agents.lk() = agents.clone();
+        asked.map(|_| agents)
+    })
+    .await
+    .map_err(err)?
+}
+
 /// One of the files `get_agents` listed, by its id, with keys blanked. Never a path from the
 /// widget: only what mom herself found in an agent's set-up can be read.
 #[tauri::command(async)]
@@ -1436,29 +1599,76 @@ fn reveal(path: String, app: AppHandle) -> Res<()> {
 
 /// BIG MODE: the widget becomes a normal-sized window, in the taskbar and in the middle of the
 /// screen. And back: the small widget by the tray again.
+/// `smooth`: a stand-in card carries the change (see `make_card`) while the real window moves
+/// unseen. Then this returns true, and the widget calls `big_arrived` once its page is laid out
+/// for the new size. Off for anyone who asked Windows for less motion. `bg`: the page's colour.
 #[tauri::command(async)]
-fn set_big(on: bool, app: AppHandle, s: State<'_, S>) {
-    let Some(win) = app.get_webview_window("main") else { return };
+fn set_big(on: bool, smooth: Option<bool>, bg: Option<String>, app: AppHandle, s: State<'_, S>) -> bool {
+    let Some(win) = app.get_webview_window("main") else { return false };
+    let monitor = win.primary_monitor().ok().flatten();
+    // Only on the main screen, where both the widget's spot and the middle are.
+    let here = win.current_monitor().ok().flatten().map(|m| m.position().x) == monitor.as_ref().map(|m| m.position().x);
+    let smooth = smooth.unwrap_or(false) && here && win.is_visible().unwrap_or(false);
+    let bg = bg.unwrap_or_default();
+    let mut carried = false;
     if on {
         // As big as fits, up to a comfortable size.
         let (mut w, mut h) = (1280.0_f64, 820.0_f64);
-        if let Ok(Some(monitor)) = win.primary_monitor() {
+        if let Some(monitor) = &monitor {
             let area = monitor.work_area().size.to_logical::<f64>(monitor.scale_factor());
             w = w.min(area.width - 60.0).max(960.0);
             h = h.min(area.height - 60.0).max(620.0);
         }
         let _ = win.set_always_on_top(false);
         let _ = win.set_skip_taskbar(false);
-        let _ = win.set_size(tauri::LogicalSize::new(w, h));
+        if let Some(monitor) = monitor.as_ref().filter(|_| smooth) {
+            // To the middle of the screen.
+            let area = monitor.work_area();
+            carried = morph(&app, s.inner(), &win, monitor.scale_factor(), &bg, tauri::LogicalSize::new(w, h).to_physical::<u32>(monitor.scale_factor()), |whole| {
+                tauri::PhysicalPosition::new(area.position.x + (area.size.width as i32 - whole.width as i32) / 2, area.position.y + (area.size.height as i32 - whole.height as i32) / 2)
+            });
+        }
+        if !carried {
+            let _ = win.set_size(tauri::LogicalSize::new(w, h));
+            let _ = win.center();
+        }
         let _ = win.set_min_size(Some(tauri::LogicalSize::new(960.0, 620.0)));
-        let _ = win.center();
     } else {
         let _ = win.set_min_size(Some(tauri::LogicalSize::new(360.0, 440.0)));
-        let _ = win.set_size(tauri::LogicalSize::new(420.0, 680.0));
+        if let Some(monitor) = monitor.as_ref().filter(|_| smooth) {
+            // Back to her spot by the tray.
+            carried = morph(&app, s.inner(), &win, monitor.scale_factor(), &bg, tauri::LogicalSize::new(420.0, 680.0).to_physical::<u32>(monitor.scale_factor()), |whole| widget_spot(monitor, whole));
+        }
+        if !carried {
+            let _ = win.set_size(tauri::LogicalSize::new(420.0, 680.0));
+            place_window(&win);
+        }
         let _ = win.set_skip_taskbar(true);
         let _ = win.set_always_on_top(s.cfg().ui.always_on_top);
-        place_window(&win);
     }
+    carried
+}
+
+/// The widget's page is laid out for its new size: wait for the new shape to finish opening, then
+/// put the real window back under it.
+#[tauri::command(async)]
+fn big_arrived(app: AppHandle, s: State<'_, S>) {
+    arrive(&app, s.inner());
+}
+
+/// The widget's page has drawn itself at its new size, under the stand-in: dissolve the stand-in
+/// into it and put it away.
+#[tauri::command(async)]
+fn card_away(app: AppHandle, s: State<'_, S>) {
+    card_gone(&app, s.inner());
+}
+
+/// The stand-in card's page says the card is drawn and on the glass.
+#[tauri::command(async)]
+fn glide_ready(s: State<'_, S>) {
+    let (lock, cv) = &s.card_ready;
+    *lock.lk() = true;
+    cv.notify_all();
 }
 
 #[tauri::command(async)]
@@ -1509,6 +1719,9 @@ fn main() {
         tray_state: Mutex::new((false, String::new())),
         diary: Mutex::new(VecDeque::new()),
         placed: AtomicBool::new(false),
+        card_ready: (Mutex::new(false), Condvar::new()),
+        morph_until: Mutex::new(None),
+        card_up: AtomicBool::new(false),
     });
 
     tauri::Builder::default()
@@ -1577,6 +1790,7 @@ fn main() {
             chore_prompt,
             get_rules,
             get_agents,
+            check_agents,
             read_doc,
             save_rules,
             reset_rules,
@@ -1590,6 +1804,9 @@ fn main() {
             reveal,
             hide_window,
             set_big,
+            big_arrived,
+            card_away,
+            glide_ready,
             set_paused,
         ])
         .setup(move |app| {
@@ -1628,6 +1845,13 @@ fn main() {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_always_on_top(shared.cfg().ui.always_on_top);
             }
+            // The stand-in card for BIG MODE, once mom has settled in.
+            let card_handle = handle.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(4));
+                let app = card_handle.clone();
+                let _ = card_handle.run_on_main_thread(move || make_card(&app));
+            });
             let (s, skills_handle) = (shared.clone(), handle.clone());
             std::thread::Builder::new().name("mom-skills".into()).spawn(move || skills_watch(skills_handle, s))?;
             let s = shared.clone();
@@ -1640,6 +1864,9 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() != "main" {
+                return;
+            }
             if let WindowEvent::CloseRequested { api, .. } = event {
                 // Closing the widget just tucks it into the tray. Mom never sleeps.
                 let _ = window.hide();

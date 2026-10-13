@@ -579,7 +579,7 @@
   const askAgent = (text) => ({ label: "Copy for your agent", text });
   const agentSetups = [
     {
-      id: "claude", name: "Claude Code", problems: 3,
+      id: "claude", name: "Claude Code", problems: 3, checked: null, canCheck: true,
       settings: [
         { title: "Runs everything without asking", detail: "permissions.defaultMode is bypassPermissions: commands, edits and downloads all go ahead.", level: "warn", fix: null, doc: "d-set" },
         { title: "Model", detail: "claude-opus-5-5", level: "ok", fix: null, doc: "d-set" },
@@ -587,8 +587,8 @@
         { title: "Plugins", detail: "4, 3 switched on.", level: "ok", fix: null, doc: "d-set" },
       ],
       servers: [
-        { name: "notes", kind: "program", what: "node C:\\Users\\me\\tools\\notes-server.js", from: "your settings", level: "ok", problem: null, fix: null, doc: "d-mcp" },
-        { name: "copperline", kind: "web", what: "https://mcp.copperline.example/v1", from: "your settings", level: "ok", problem: null, fix: null, doc: "d-mcp" },
+        { name: "notes", kind: "program", what: "node C:\\Users\\me\\tools\\notes-server.js", from: "your settings", level: "unknown", problem: null, fix: null, doc: "d-mcp" },
+        { name: "copperline", kind: "web", what: "https://mcp.copperline.example/v1", from: "your settings", level: "unknown", problem: null, fix: null, doc: "d-mcp" },
         { name: "old-search", kind: "program", what: "search-server.exe --index docs", from: "your settings", level: "warn", problem: "It starts search-server.exe, and that file isn't there any more.", fix: askAgent("My Claude Code MCP server `old-search` (set up in `C:\\Users\\me\\.claude.json`) may not start. It starts `search-server.exe`, and that file isn't there any more. Find out whether it still works, and either fix it or tell me how to take the server out. Show me any change before you make it."), doc: "d-mcp" },
         { name: "atlas", kind: "web", what: "https://mcp.atlas.example/mcp", from: "plugin atlas", level: "warn", problem: "It's waiting for you to sign in. Type /mcp in Claude Code and pick it.", fix: { label: "Copy /mcp", text: "/mcp" }, doc: "d-atlas" },
         { name: "shop", kind: "program", what: "nimbus-shop-mcp --token •••", from: "project storefront", level: "note", problem: "Mom can't find nimbus-shop-mcp on this PC's PATH. If it works in your agent, that's fine.", fix: null, doc: "d-mcp" },
@@ -621,13 +621,13 @@
       ],
     },
     {
-      id: "codex", name: "Codex", problems: 0,
+      id: "codex", name: "Codex", problems: 0, checked: null, canCheck: false,
       settings: [
         { title: "Asks, and keeps commands in a sandbox", detail: "The usual way.", level: "ok", fix: null, doc: "d-codex" },
         { title: "Model", detail: "gpt-5.5", level: "ok", fix: null, doc: "d-codex" },
         { title: "Trusted folders", detail: "6, where it works without asking as much.", level: "ok", fix: null, doc: "d-codex" },
       ],
-      servers: [{ name: "docs", kind: "web", what: "https://docs.copperline.example/mcp", from: "your settings", level: "ok", problem: null, fix: null, doc: "d-codex" }],
+      servers: [{ name: "docs", kind: "web", what: "https://docs.copperline.example/mcp", from: "your settings", level: "unknown", problem: null, fix: null, doc: "d-codex" }],
       hooks: [{ event: "Stop", matcher: "", what: "mom.exe hook codex stop", from: "your settings", mine: true, count: 1, level: "ok", problem: null, fix: null, doc: "d-codex-hooks" }],
       skills: [{ name: "find-skills", what: "Helps find and install agent skills", from: "shared with other agents", doc: "d-skill-find" }],
       docs: [
@@ -637,8 +637,8 @@
       ],
     },
     {
-      id: "cursor", name: "Cursor", problems: 0, settings: [], hooks: [], skills: [],
-      servers: [{ name: "motion", kind: "program", what: "npx -y motion-mcp", from: "your settings", level: "ok", problem: null, fix: null, doc: "d-cursor" }],
+      id: "cursor", name: "Cursor", problems: 0, checked: null, canCheck: false, settings: [], hooks: [], skills: [],
+      servers: [{ name: "motion", kind: "program", what: "npx -y motion-mcp", from: "your settings", level: "unknown", problem: null, fix: null, doc: "d-cursor" }],
       docs: [{ id: "d-cursor", title: "mcp.json", kind: "json", path: "C:\\Users\\me\\.cursor\\mcp.json", bytes: 300 }],
     },
   ];
@@ -705,6 +705,19 @@
     stop_leftovers: async () => (await wait(700), stop(snapshot.groups.filter((x) => x.status === "left-behind" || x.status === "orphaned").map((x) => x.id))),
     keep_group: () => null,
     get_agents: async () => (await wait(500), JSON.parse(JSON.stringify(agentSetups))),
+    // "Check now": what Claude Code would say after trying each of its servers.
+    check_agents: async () => {
+      await wait(2600);
+      const a = agentSetups[0];
+      a.checked = Date.now() / 1000;
+      const said = { notes: "ok", copperline: "auth", shop: "ok" };
+      for (const s of a.servers) {
+        if (said[s.name] === "ok") Object.assign(s, { level: "ok", problem: null, fix: null });
+        if (said[s.name] === "auth") Object.assign(s, { level: "warn", problem: "It's waiting for you to sign in. Type /mcp in Claude Code and pick it.", fix: { label: "Copy /mcp", text: "/mcp" } });
+      }
+      a.problems = a.servers.filter((s) => s.level === "warn").length + a.settings.filter((f) => f.level === "warn").length;
+      return JSON.parse(JSON.stringify(agentSetups));
+    },
     read_doc: async ({ id }) => {
       await wait(250);
       const doc = agentSetups.flatMap((a) => a.docs).find((d) => d.id === id);
@@ -997,7 +1010,9 @@
     open_url: () => null,
     reveal: () => null,
     hide_window: () => null,
-    set_big: () => null,
+    set_big: () => false,
+    big_arrived: () => null,
+    card_away: () => null,
     set_paused: () => null,
     stop_container: () => null,
     stop_wsl: () => null,
