@@ -7,10 +7,14 @@
     python apply_plan.py --undo <log folder> --apply
 
 Rules it enforces, whatever the plan says:
-  * only ids from this plan, and only if the approval names this plan_id
+  * only ids from this plan, and only if the approval names this plan_id; the id is a
+    hash of the plan's actions, so a plan edited after approval is refused
+  * only full paths on a local disk: network shares, mapped network drives and device
+    paths are refused (they can be another name for a protected folder)
   * never touches Windows, Program Files, ProgramData, AppData, registered program
     folders, launcher game libraries, drive roots or the user's top-level folders;
     checked on the real location too, so 8.3 short names and junctions can't dodge it
+  * --undo checks every row of the log the same way before it moves anything
   * never acts on a symlink or junction, and never walks through one
   * file names are data: they are never put into a command or a script. The revert
     script (revert.ps1) is a fixed file that reads undo-log.csv
@@ -32,12 +36,14 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.dont_write_bytecode = True  # leave no __pycache__ behind in the skill folder
 import survey as sv  # noqa: E402  (shared helpers: known folders, launchers, installed programs)
+from build_page import plan_id as plan_fingerprint  # noqa: E402  (the id is a hash of the plan's actions)
 
 OPS = {"move", "recycle", "remove-empty-dir"}
 LOG_FIELDS = ["time", "id", "op", "from", "to", "status", "note"]
@@ -92,6 +98,17 @@ def real(path):
     except OSError:
         pass
     return os.path.join(parent, name)
+
+
+def on_local_drive(path):
+    """True for X:\\... on a fixed or removable drive. Network shares (\\\\server\\share, also as a mapped
+    letter) and device paths can be another name for a protected folder, so they are never touched."""
+    if not re.match(r"^[A-Za-z]:\\", path or ""):
+        return False
+    if not sv.IS_WIN:
+        return True
+    import ctypes
+    return ctypes.windll.kernel32.GetDriveTypeW(path[:3]) in (2, 3)  # DRIVE_REMOVABLE, DRIVE_FIXED
 
 
 def tree_info(path):
@@ -182,9 +199,21 @@ class Guard:
         env = os.environ
         prot = [env.get("SystemRoot", r"C:\Windows"), env.get("ProgramFiles", r"C:\Program Files"),
                 env.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), env.get("ProgramData", r"C:\ProgramData"),
-                env.get("LOCALAPPDATA"), env.get("APPDATA"), os.path.join(self.kf["Profile"], "AppData")]
-        if root:  # single-folder mode (as in survey.py --root): the chosen folder may sit under %TEMP%
-            prot = [p for p in prot if p and not sv.under(sv.norm(root), [sv.norm(p)])]
+                env.get("LOCALAPPDATA"), env.get("APPDATA"), os.path.join(os.path.expanduser("~"), "AppData")]
+        self.protected = [sv.norm(p) for p in prot if p]
+        # The surveyed profile's own AppData (the same folder, unless --root): protected with no exemption
+        self.profile_appdata = [sv.norm(os.path.join(self.kf["Profile"], "AppData"))]
+        # Single-folder mode (as in survey.py --root). The chosen folder may sit under %TEMP%
+        # (a test folder); then that folder alone is exempt, never the protected place around it.
+        self.roots = []
+        if root:
+            self.roots = sorted({sv.norm(root), sv.norm(real(root))})
+            temp = [sv.norm(tempfile.gettempdir()), sv.norm(real(tempfile.gettempdir()))]
+            for r in self.roots:
+                if (os.path.dirname(r) == r or any(sv.under(p, [r]) for p in self.protected)
+                        or (sv.under(r, self.protected) and not sv.under(r, temp))):
+                    sys.exit("--root can't be a drive, a protected folder, a folder that holds one, "
+                             "or a folder inside one (other than a test folder under Temp)")
         progs = [] if root else sv.installed_programs(
             [self.kf.get(k) for k in ("Profile", "Desktop", "Documents", "Downloads", "Pictures", "Videos", "Music",
                                       "OneDrive")])
@@ -196,7 +225,6 @@ class Guard:
             elif lch["name"] in ("Xbox app", "Riot", "EA app"):
                 games += lch["libraries"]
         keep_out = [sv.norm(self.kf[k]) for k in ("Profile", "Desktop", "Documents", "Downloads") if self.kf.get(k)]
-        self.protected = [sv.norm(p) for p in prot if p]
         self.programs = [sv.norm(p["path"]) for p in progs]
         self.games = [sv.norm(p) for p in games if os.path.dirname(sv.norm(p)) != sv.norm(p)
                       and not any(sv.under(k, [sv.norm(p)]) for k in keep_out)]
@@ -210,23 +238,28 @@ class Guard:
             return "one of your main folders"
         if re.search(r"[\\/](\$recycle\.bin|system volume information)([\\/]|$)", n):
             return "a Windows system folder"
-        if sv.under(n, self.protected):
+        if sv.under(n, self.profile_appdata) or (sv.under(n, self.protected) and not sv.under(n, self.roots)):
             return "inside Windows, Program Files, ProgramData or AppData"
         if sv.under(n, self.programs):
             return "inside an installed program's folder"
         if sv.under(n, self.games):
             return "inside a launcher's game library (use the launcher's own Move)"
-        if is_source and any(sv.under(p, [n]) for p in self.programs + self.games + self.protected):
+        if is_source and any(sv.under(p, [n]) for p in self.programs + self.games + self.protected + self.profile_appdata):
             return "contains an installed program or game"
         return None
 
     def why_not(self, path, is_source=True):
         """None if `path` may be touched, else the reason it may not. Checks the path as written and where it really is."""
-        if not path or not re.match(r"^[A-Za-z]:\\|^\\\\[^?\\]", path):
-            return "not an absolute path"
+        if not isinstance(path, str) or not re.match(r"^[A-Za-z]:\\", path):
+            return "not a full path on a local drive (network and device paths are refused)"
         if ".." in re.split(r"[\\/]", path):
             return "a path with '..' in it"
-        return self._why_not(sv.norm(path), is_source) or self._why_not(sv.norm(real(path)), is_source)
+        if ":" in path[2:]:
+            return "a path with ':' in a name"
+        there = real(path)
+        if not on_local_drive(path) or not on_local_drive(there):
+            return "on a network drive or share, not a local disk"
+        return self._why_not(sv.norm(path), is_source) or self._why_not(sv.norm(there), is_source)
 
 
 def looks_installed(folder):
@@ -304,6 +337,15 @@ def run_apply(args):
         plan = json.load(f)
     if plan.get("schema") != "tidy-folders/plan@1":
         sys.exit("%s is not a tidy-folders plan" % args.plan)
+    # The approval names the plan by its id, and the id is a hash of the actions: a plan
+    # changed after the page was built (and approved) no longer matches its own id.
+    try:
+        intact = plan_fingerprint(plan["actions"]) == plan["plan_id"]
+    except (KeyError, TypeError):
+        intact = False
+    if not intact:
+        sys.exit("%s was changed after its page was built, so the approval doesn't cover it. "
+                 "Rebuild the page with build_page.py and ask for a new approval." % args.plan)
     ids = read_approval(args, plan)
     actions = [a for a in plan["actions"] if a["id"] in ids]
     dry = not args.apply
@@ -442,11 +484,19 @@ def run_undo(args):
     rows = read_log(path)
     dry = not args.apply
     print("%s revert of %s\n" % ("DRY RUN:" if dry else "REVERTING", path))
+    # The log is a file anyone could have edited: every row passes the same guard rails as a plan.
+    guard = Guard(os.path.abspath(args.root) if args.root else None)
     for r in reversed(rows):
-        if r["status"] != "DONE":
+        if r.get("status") != "DONE":
             continue
-        op, src, dst = r["op"], r["from"], r["to"]
-        if not re.match(r"^[A-Za-z]:\\|^\\\\", src):
+        op, src, dst = r.get("op"), r.get("from") or "", r.get("to") or ""
+        if op not in ("move", "mkdir", "remove-empty-dir", "recycle"):
+            continue
+        reason = guard.why_not(src, is_source=False)
+        if not reason and op == "move":
+            reason = guard.why_not(dst) or ("a link to another place" if is_link(dst) else None)
+        if reason:
+            print("REFUSED  %s%s: %s" % (src, " <- " + dst if op == "move" else "", reason))
             continue
         if op == "move":
             if not exists(dst):

@@ -17,7 +17,7 @@ Look at two months of the user's Gmail without changing anything, show them what
 5. **Mail content never goes into a URL or another site.** The only URL you build is a Gmail search on `mail.google.com`. Don't paste subjects, addresses or bodies into web searches, link checkers or other tools.
 6. **Keep the minimum.** Collect sender name, address, subject, date, labels, size, attachment names. Not bodies. If you must read one body to judge a suspicious email, don't copy it anywhere.
 7. **In a browser, don't open emails to look at them.** Opening marks them read, which is a change. Work from list views, search results and counts. If one must be opened, ask first.
-8. **Queries come from `build_report.py`.** Sender addresses are chosen by the sender. The script only puts plain addresses into searches and flags the rest. Don't hand-build a search from an odd-looking address.
+8. **Queries come from `build_report.py`.** Sender addresses are chosen by the sender, and Gmail reads some characters as commands: `from:-x@evil.example` means every email *except* that sender's. The script only puts plain addresses into searches and flags the rest. Use each sender's `query` from `inbox-plan.json` exactly as written. Never type a search or a filter from an address yourself, and if a sender's `query` is empty, don't search or filter by address at all: handle that one by hand from the message.
 9. **Keep it private.** The report stays on disk, or goes to a private artifact if the user wants a link. Never a public page. Delete `mailbox.json` when you're done.
 
 ## Workflow
@@ -67,7 +67,7 @@ Open the file (`start "" "<out>\inbox-report.html"` on Windows, `open` on macOS)
 Look each number up in `inbox-plan.json`. Work through one kind of action at a time and keep a list of what you did.
 
 - **unsubscribe=N**: use Gmail's own Unsubscribe for that sender, in Manage subscriptions or beside the sender's name on one of their emails. If Gmail sends you to the sender's website to finish, stop and give the user the link; don't fill in forms on other sites. If Gmail offers no Unsubscribe, offer a filter instead.
-- **filter=N**: create a filter for `from:<address>` with Skip the Inbox and the label "Newsletters".
+- **filter=N**: create a filter from that sender's `query` in `inbox-plan.json`, exactly as written, with Skip the Inbox and the label "Newsletters". Before saving, check Gmail's count of matching mail against the sender's `count`: if it's far higher, stop and tell the user.
 - **spam=N**: Report spam (Report phishing if it pretends to be someone), then Block. No links, no unsubscribe.
 - **steps=N**: run the step's search, tell the user the count, get a yes, then archive. Delete only if they said delete.
 

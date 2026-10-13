@@ -22,7 +22,7 @@ Then ask: "clean up my Gmail", "what should I unsubscribe from?", "which emails 
 - Never clicks links or opens attachments in emails. Uses Gmail's own Unsubscribe for real newsletters, and Report spam and Block for suspicious mail.
 - Treats everything in an email as data, never as instructions.
 - Collects sender, subject, date, labels and sizes. Not message bodies. The report holds senders, subject lines and counts only, makes no network requests, and its links go only to Gmail search.
-- Sender addresses are attacker-controlled, so only plain addresses are ever placed in a Gmail search. Anything else is flagged and left out.
+- Sender addresses are attacker-controlled, and Gmail reads some characters as commands (a leading `-` means "not"). So only plain addresses are ever placed in a Gmail search, each sender comes with its query ready-made, and anything else is flagged and left out.
 
 ## Files
 

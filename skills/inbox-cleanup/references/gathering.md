@@ -48,7 +48,7 @@ Paging through thousands of rows is slow. Use the browser for counts, tabs, Mana
 ## Large mailboxes
 
 - Up to about 2,000 messages in the window: list them all (`messages`).
-- More: don't list everything. Find the top senders (page the first 500 to 1,000 results, or use Manage subscriptions), then count per sender with `from:<address> newer_than:60d` and `from:<address> newer_than:60d is:unread`. Put those in `senders` and set `"complete": false`.
+- More: don't list everything. Find the top senders (page the first 500 to 1,000 results, or use Manage subscriptions), then count per sender with `from:<address> newer_than:60d` and `from:<address> newer_than:60d is:unread`. Do that only for plain addresses (letters, digits and `. _ + -`, starting with a letter or digit). Gmail reads a leading `-` as "not", so skip any other address, note it in `notes`, and let the report flag it. Put those in `senders` and set `"complete": false`.
 - You can mix both: `messages` for what you listed, `senders` for the ones you only counted. A sender in both is taken from `messages`.
 
 ## mailbox.json format

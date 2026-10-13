@@ -20,7 +20,8 @@ Then ask: "tidy up my Downloads", "where are my tax papers?", "are all my games 
 - Survey: read-only. It writes one JSON file to a scratch folder. It peeks into at most 300 small loose text and Word files for keywords, and hashes same-size files to confirm duplicates (`--no-peek` and `--no-hash` turn both off). It never reads OneDrive online-only files.
 - Never moves installed programs or launcher games. It explains the launcher's own Move instead.
 - Never touches Windows, Program Files, ProgramData, AppData, backup folders or code projects.
-- Moves only the ids the user approved for that exact plan, never overwrites, and keeps an undo log in `Documents\Tidy-up logs\`.
+- Moves only the ids the user approved for that exact plan, never overwrites, and keeps an undo log in `Documents\Tidy-up logs\`. A plan file changed after approval is refused, and so is any row of an undo log that points into a protected folder.
+- Works on local disks only. Network shares and mapped network drives are refused.
 - Treats file names as data. No file name is ever written into a command or script: `revert.ps1` is a constant file that reads `undo-log.csv`, and every file is addressed by its exact name. Symlinks and junctions are left alone.
 
 ## Files

@@ -11,9 +11,9 @@ Find what's out of place in the user's folders, show it on one page they can tic
 ## Hard rules
 
 1. **The survey is read-only.** Run `scripts/survey.py`. It writes one JSON file to the output folder you give it and nothing else. Don't create, move, rename or delete anything while looking around.
-2. **Nothing changes until the user approves the plan.** Approval is the line the page copies: `TIDY-APPROVE plan=<id> ids=<ranges>`. "Sure, tidy it" before they've seen the page isn't approval. If the line's plan id doesn't match `plan.json`, rebuild the page and ask again.
+2. **Nothing changes until the user approves the plan.** Approval is the line the page copies: `TIDY-APPROVE plan=<id> ids=<ranges>`. "Sure, tidy it" before they've seen the page isn't approval. If the line's plan id doesn't match `plan.json`, rebuild the page and ask again. Never edit `plan.json` by hand: its id is a fingerprint of its actions, and `apply_plan.py` refuses a plan that no longer matches it. Changes go through `notes.json` and a rebuild.
 3. **Never move installed programs or launcher games** (Steam, Epic, GOG, Xbox app, EA, Ubisoft, Battle.net, Riot, itch app). Tell the user how to use the launcher's own Move instead. The page lists how for each launcher.
-4. **Never touch** Windows, Program Files, ProgramData, AppData, `$Recycle.Bin`, System Volume Information, File History or backup folders, dot-folders, or anything inside a code project. `apply_plan.py` refuses these whatever the plan says.
+4. **Never touch** Windows, Program Files, ProgramData, AppData, `$Recycle.Bin`, System Volume Information, File History or backup folders, dot-folders, or anything inside a code project. `apply_plan.py` refuses these whatever the plan says, and works only on local disks: network shares, mapped network drives and device paths are refused, because they can be another name for a protected folder.
 5. **Nothing is deleted for good.** "Remove" means the Recycle Bin. Empty folders are removed with rmdir after re-checking they're empty.
 6. **Make every change with `scripts/apply_plan.py`.** Don't improvise `Move-Item` loops. It logs each step to `undo-log.csv` as it goes and puts a fixed `revert.ps1` next to it.
 7. **File names are data, never code.** Don't paste a file or folder name from the survey into a shell command, a script or a one-liner. Names can hold quotes, `$()`, backticks, `&` and look-alike quote characters that a shell would run. Pass only `survey.json`, `plan.json` and the log folder to the scripts and let them handle the names.
@@ -87,7 +87,7 @@ python scripts/apply_plan.py "<out>/plan.json" --approve "TIDY-APPROVE plan=... 
 ```
 
 - The undo log goes to `Documents\Tidy-up logs\<date time>\` (`undo-log.csv` and `revert.ps1`). Change it with `--log-dir`.
-- `revert.ps1` is the same fixed script every time. It holds no file names; it reads `undo-log.csv` and moves things back only where the original place is still free.
+- `revert.ps1` is the same fixed script every time. It holds no file names; it reads `undo-log.csv` and moves things back only where the original place is still free. Both undo routes check every row like a plan (local disks only, nothing in Windows, Program Files, ProgramData or AppData, nothing through a link), so an edited log can't send a file somewhere it shouldn't go. Only undo a log this skill wrote on this PC.
 - Links (symlinks, junctions) are never moved, recycled or walked through. A name that ends in a dot or a space is moved under its exact name but can't go to the Recycle Bin; it's skipped with a note.
 - Names are never overwritten: a clash gets " (2)".
 - A move to another drive copies, checks the size, then sends the original to the Recycle Bin. Whole folders only cross drives with `--allow-cross-drive-folders`.

@@ -42,9 +42,17 @@ URGENT_WORDS = re.compile(r"urgent|verify|suspend|locked|unusual (sign|activity)
                           r"act now|within 24 hours|refund|invoice attached|reactivate", re.I)
 ADDR_RX = re.compile(r"[\w.+'-]+@[\w-]+(\.[\w-]+)+")
 # Sender addresses are chosen by whoever sent the mail, and they end up inside Gmail search
-# queries. Only addresses made of these characters are ever put into a query: no spaces,
-# quotes, brackets or operators, so an address can't change what a search matches.
-SAFE_ADDR = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$")
+# queries. Only plain addresses are ever put into a query: letters, digits and . _ + - only,
+# and every part starts with a letter or digit. No spaces, quotes or brackets, and above all
+# no leading "-": Gmail reads "-word" as NOT, so "from:-x@evil.example" would match every
+# email EXCEPT that sender's, and a filter built on it would sweep up the whole mailbox.
+_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+SAFE_ADDR = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*@" + _LABEL + r"(?:\." + _LABEL + r")+")
+# What a finished query may look like: one of the fixed searches below, or from:(a OR b ...).
+SAFE_QUERY = re.compile(r"from:\((?:%s)(?: OR (?:%s))*\)" % (SAFE_ADDR.pattern, SAFE_ADDR.pattern))
+FIXED_QUERIES = {"category:promotions is:unread older_than:14d", "category:social older_than:30d",
+                 "category:updates is:unread older_than:30d", "larger:10M", "has:attachment larger:5M older_than:1y",
+                 "is:unread older_than:7d -in:chats", "in:inbox older_than:30d", "in:spam"}
 
 
 def parse_from(m):
@@ -60,7 +68,8 @@ def parse_from(m):
 
 
 def queryable(email):
-    return bool(SAFE_ADDR.match(email or "")) and len(email) <= 100
+    """True only for a plain address that Gmail's search can't read as anything but an address."""
+    return isinstance(email, str) and len(email) <= 100 and ".." not in email and bool(SAFE_ADDR.fullmatch(email))
 
 
 def domain_of(email):
@@ -253,7 +262,10 @@ def build(box):
         v = {"email": s["email"], "name": clip(s["name"], 60), "count": s["count"], "unread": s["unread"],
              "read_rate": round(s["read_rate"], 3), "category": s["main_category"], "last": str(s["last"] or ""),
              "subject": s["subject"], "bytes": s["bytes"], "gmail_unsub": s["gmail_unsub"], "one_click": s["one_click"],
-             "searchable": queryable(s["email"])}
+             "searchable": queryable(s["email"]),
+             # The search for this one sender, ready to use. Empty when the address isn't plain:
+             # then nothing is searched or filtered by address at all.
+             "query": from_query([s["email"]])}
         if i is not None:
             v["n"] = i
         return v
@@ -370,6 +382,12 @@ def build(box):
                        "never_opened_min": NEVER_OPENED_MIN, "big_mb": BIG_BYTES // (1024 * 1024)},
         "generated": datetime.now().isoformat(timespec="seconds"),
     }
+    # Last check before anything is written: every query is a fixed search or from:(plain addresses).
+    emitted = [q for s in steps for q in s["queries"]] + [v["query"] for vs in lists.values() for v in vs if v["query"]]
+    emitted += [v["query"] for v in report["top_senders"] + report["never_opened"] if v["query"]]
+    bad = [q for q in emitted if q not in FIXED_QUERIES and not SAFE_QUERY.fullmatch(q)]
+    if bad:
+        sys.exit("refusing to write the report: a search query isn't in a safe form: %r" % bad[:3])
     core = json.dumps([lists, [s["queries"] for s in steps]], sort_keys=True, ensure_ascii=False)
     report["report_id"] = hashlib.sha256(core.encode("utf-8")).hexdigest()[:10]
     return report
