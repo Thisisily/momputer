@@ -1812,28 +1812,11 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         each(&|c: &Cand| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_err() && remove_without_following(t)))
     } else if id == "old-build-folders" {
         // Projects can sit outside your own folders, where other people on this PC can write
-        // (the top of a second drive). There: one at a time, never following a link, even one
-        // swapped in while mom works, and only what's still yours at that moment.
-        // The fast way (many at once, by path) is only for a path nobody else can change under
-        // mom's feet: really inside your profile, and written exactly as it really is, so there
-        // is no link anywhere on the way that someone could point elsewhere between the check
-        // and the delete. Everything else goes the careful way.
-        let home = std::fs::canonicalize(&ctx.paths.home).ok();
-        let spelled = |p: &Path| p.to_string_lossy().trim_start_matches(r"\\?\").to_ascii_lowercase();
-        let at_home = |t: &Path| match (&home, std::fs::canonicalize(t)) {
-            (Some(home), Ok(real)) => real.starts_with(home) && spelled(&real) == spelled(t),
-            _ => false,
-        };
-        each(&|c: &Cand| {
-            if !c.targets.iter().all(|t| crate::elevate::owned_by_me(t)) {
-                return false;
-            }
-            if c.targets.iter().all(|t| at_home(t)) {
-                remove_all(&c.targets, live).into_iter().all(|gone| gone)
-            } else {
-                c.targets.iter().all(|t| remove_without_following(t))
-            }
-        })
+        // (the top of a second drive), and a folder in your profile can be a link to such a
+        // place. So these always go the careful way: one at a time, by the method that never
+        // follows a link (even one swapped in while mom works), and only what is yours at that
+        // moment. Slower than the many-at-once way, and there is no check-then-delete gap.
+        each(&|c: &Cand| c.targets.iter().all(|t| crate::elevate::owned_by_me(t)) && c.targets.iter().all(|t| remove_without_following(t)))
     } else {
         // In batches: a big folder on its own, small things many at a time.
         let mut out: Vec<Option<bool>> = Vec::with_capacity(chosen.len());
