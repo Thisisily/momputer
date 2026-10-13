@@ -263,21 +263,15 @@ pub(super) fn remove_without_following(p: &Path) -> bool {
 /// it's yours. The check and the delete are about the same folder, with nothing in between:
 /// mom opens it and keeps it open in a way that stops anyone renaming, replacing or deleting it
 /// (or any folder above it) while she works. She asks the open folder itself whether it's a
-/// real folder and whose it is, empties it without following a link, lets go, and removes the
-/// then-empty folder. If someone swaps something in at that last instant, all that can go is an
-/// empty folder or a link, never what a link points to.
+/// real folder and whose it is, then empties it on many threads at once, each folder inside
+/// held the same way while its own contents go (see `Held`), never following a link. Then she
+/// lets go and removes the then-empty folder. If someone swaps something in at that last
+/// instant, all that can go is an empty folder or a link, never what a link points to.
+/// Counts each file to `live` as it goes, and goes no deeper once `live` is told to stop.
 #[cfg(windows)]
-pub(super) fn remove_owned(p: &Path) -> bool {
-    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-    const SHARE_READ_WRITE: u32 = 0x1 | 0x2; // not delete: that is what holds it in place
-    const BACKUP_SEMANTICS: u32 = 0x0200_0000; // lets a folder be opened at all
-    const OPEN_REPARSE_POINT: u32 = 0x0020_0000; // a link is opened as the link, not followed
-    const REPARSE_POINT: u32 = 0x400;
-    let Ok(held) = std::fs::OpenOptions::new().read(true).share_mode(SHARE_READ_WRITE).custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT).open(p) else {
-        return false;
-    };
-    let Ok(meta) = held.metadata() else { return false };
-    if !meta.is_dir() || meta.file_attributes() & REPARSE_POINT != 0 || !crate::elevate::open_and_mine(&held) {
+pub(super) fn remove_owned(p: &Path, live: Option<&super::Live>) -> bool {
+    let Some(held) = hold(p) else { return false };
+    if !crate::elevate::open_and_mine(&held) {
         return false;
     }
     // And it must be the very folder that was found, not another one the same path leads to now:
@@ -288,13 +282,97 @@ pub(super) fn remove_owned(p: &Path) -> bool {
     if !opened_as_written(&held, p) {
         return false;
     }
-    let Ok(inside) = std::fs::read_dir(p) else { return false };
-    for entry in inside.flatten() {
-        remove_without_following(&entry.path());
+    let top = std::sync::Arc::new(Held { open: Some(held), path: p.to_path_buf(), above: None, stays: true });
+    // The top folder is read here; every folder below it is a job for the pool.
+    let mut first = Vec::new();
+    empty(&top, live, &mut first);
+    let _: Vec<()> = pooled(first, |_: &mut (), (above, dir): (std::sync::Arc<Held>, PathBuf), more: &mut Vec<(std::sync::Arc<Held>, PathBuf)>| {
+        if live.is_some_and(super::Live::stopped) {
+            return;
+        }
+        match hold(&dir) {
+            Some(open) => empty(&std::sync::Arc::new(Held { open: Some(open), path: dir, above: Some(above), stays: false }), live, more),
+            // Not a real folder any more (a link now: the link goes, not what it leads to), or it
+            // can't be held (something else has it open its own way): one at a time, the way
+            // that never follows a link either.
+            None => {
+                remove_without_following(&dir);
+            }
+        }
+    });
+    // Every folder below has let go by now. One that wasn't quite empty when it tried to remove
+    // itself (Windows finishes deleting a file only when the antivirus lets go of it) is still
+    // there: those go now, one at a time, the way that never follows a link either.
+    if !live.is_some_and(super::Live::stopped) {
+        for left in std::fs::read_dir(p).into_iter().flatten().flatten() {
+            remove_without_following(&left.path());
+        }
     }
-    drop(held);
+    drop(top); // and this lets go of the folder that was checked
     let _ = std::fs::remove_dir(p);
     std::fs::symlink_metadata(p).is_err()
+}
+
+/// A folder being emptied, held open so that neither it nor any folder above it can be renamed,
+/// replaced or deleted meanwhile. Everything waiting to be done inside it keeps it alive; when
+/// the last of that is done it lets go and, now empty, removes itself (unless something in it
+/// was in use: then it stays). Only after that is the folder above let go of.
+#[cfg(windows)]
+struct Held {
+    open: Option<std::fs::File>,
+    path: PathBuf,
+    /// Never read: it keeps the folder above held for as long as this one is.
+    #[allow(dead_code)]
+    above: Option<std::sync::Arc<Held>>,
+    /// The folder the clean-up started from: its caller removes it.
+    stays: bool,
+}
+
+#[cfg(windows)]
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.open.take(); // let go first: Windows won't remove a folder that is held
+        if !self.stays {
+            // If someone swaps it for a link at this instant, the link goes, not what it leads to.
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
+}
+
+/// Opens a folder as itself (a link by that name is opened as the link, never followed), for
+/// reading and shared for reading and writing but not deleting, which is what keeps it in place.
+/// None unless it is a real folder: not a link, not a file, not something that can't be opened.
+#[cfg(windows)]
+fn hold(p: &Path) -> Option<std::fs::File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    const SHARE_READ_WRITE: u32 = 0x1 | 0x2; // not delete: that is what holds it in place
+    const BACKUP_SEMANTICS: u32 = 0x0200_0000; // lets a folder be opened at all
+    const OPEN_REPARSE_POINT: u32 = 0x0020_0000; // a link is opened as the link, not followed
+    const REPARSE_POINT: u32 = 0x400;
+    let open = std::fs::OpenOptions::new().read(true).share_mode(SHARE_READ_WRITE).custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT).open(p).ok()?;
+    let meta = open.metadata().ok()?;
+    (meta.is_dir() && meta.file_attributes() & REPARSE_POINT == 0).then_some(open)
+}
+
+/// Deletes the files and links in a held folder, and hands its folders on as jobs that keep it
+/// held until they are done. What the listing calls a folder is opened and checked again by
+/// whoever takes the job; a file that became a link since the listing is removed as the link.
+#[cfg(windows)]
+fn empty(dir: &std::sync::Arc<Held>, live: Option<&super::Live>, more: &mut Vec<(std::sync::Arc<Held>, PathBuf)>) {
+    let Ok(rd) = std::fs::read_dir(&dir.path) else { return };
+    for e in rd.flatten() {
+        let Ok(kind) = e.file_type() else { continue };
+        if kind.is_dir() {
+            more.push((dir.clone(), e.path()));
+        } else if kind.is_symlink() {
+            remove_link(&e.path());
+        } else {
+            remove_file(&e.path());
+            if let Some(l) = live {
+                l.file_gone();
+            }
+        }
+    }
 }
 
 /// Does this open folder really live at `path`, spelled that way (but for capitals)?
@@ -314,7 +392,8 @@ fn opened_as_written(held: &std::fs::File, path: &Path) -> bool {
 }
 
 #[cfg(not(windows))]
-pub(super) fn remove_owned(p: &Path) -> bool {
+pub(super) fn remove_owned(p: &Path, live: Option<&super::Live>) -> bool {
+    let _ = live;
     remove_without_following(p)
 }
 
@@ -350,11 +429,22 @@ where
     S: Default + Send,
     F: Fn(&mut S, usize, &Path, &mut Vec<(usize, PathBuf)>) + Sync,
 {
+    pooled(start, |mine: &mut S, (tag, dir): (usize, PathBuf), more: &mut Vec<(usize, PathBuf)>| visit(mine, tag, &dir, more))
+}
+
+/// Runs `work` on every job, starting from `start`, on WALKERS threads. `work` gets its thread's
+/// own state, a job, and a list to push the jobs that one leads to. Returns every thread's state.
+fn pooled<J, S, F>(start: Vec<J>, work: F) -> Vec<S>
+where
+    J: Send,
+    S: Default + Send,
+    F: Fn(&mut S, J, &mut Vec<J>) + Sync,
+{
     if start.is_empty() {
         return Vec::new();
     }
-    // Folders waiting to be read, and how many are being read right now.
-    let queue: Mutex<(Vec<(usize, PathBuf)>, usize)> = Mutex::new((start, 0));
+    // Jobs waiting to be done, and how many are being done right now.
+    let queue: Mutex<(Vec<J>, usize)> = Mutex::new((start, 0));
     let wake = Condvar::new();
     let worker = || {
         let mut mine = S::default();
@@ -372,12 +462,12 @@ where
                     q = wake.wait(q).unwrap_or_else(|e| e.into_inner());
                 }
             };
-            let Some((tag, dir)) = job else {
+            let Some(job) = job else {
                 wake.notify_all();
                 return mine;
             };
             let mut more = Vec::new();
-            visit(&mut mine, tag, &dir, &mut more);
+            work(&mut mine, job, &mut more);
             let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
             q.0.extend(more);
             q.1 -= 1;
@@ -423,6 +513,59 @@ mod tests {
         assert_eq!(gone, vec![true, true, true]);
         assert!(made, "couldn't make a link to test with");
         assert!(root.join("keep").join("precious.txt").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_careful_delete_empties_a_folder_on_many_threads_and_follows_no_link() {
+        let root = fixture("owned");
+        std::fs::create_dir_all(&root).unwrap();
+        // Spelled as it really is: the careful delete refuses a folder that isn't where its path says.
+        let root = crate::util::real_path(&root).unwrap();
+        let tree = root.join("node_modules");
+        let mut files = 0;
+        for pkg in 0..40 {
+            for (sub, n) in [("", 3), ("lib", 4), ("lib/deep/deeper", 2)] {
+                for f in 0..n {
+                    write(&tree.join(format!("pkg{pkg}")).join(sub).join(format!("f{f}.js")), 10, 1);
+                    files += 1;
+                }
+            }
+        }
+        std::fs::create_dir_all(tree.join("empty").join("emptier")).unwrap();
+        let ro = tree.join("pkg0").join("readonly.txt");
+        write(&ro, 5, 1);
+        files += 1;
+        let mut perms = std::fs::metadata(&ro).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&ro, perms).unwrap();
+        // A junction deep inside, to a folder that must survive with what's in it.
+        write(&root.join("keep").join("precious.txt"), 9, 1);
+        let link = tree.join("pkg1").join("lib").join("linked");
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J", &link.to_string_lossy(), &root.join("keep").to_string_lossy()])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert!(made, "couldn't make a link to test with");
+        let live = crate::trash::Live::default();
+        assert!(remove_owned(&tree, Some(&live)), "the whole tree went");
+        assert!(!tree.exists() && root.join("keep").join("precious.txt").exists(), "and nothing a link led to");
+        assert_eq!(live.now(0).files, files, "every file was counted as it went");
+        // A link is not a folder of yours, however it is spelled; nor is a file, or something that isn't there.
+        let again = root.join("again");
+        write(&again.join("a.txt"), 1, 1);
+        let alias = root.join("alias");
+        assert!(std::process::Command::new("cmd").args(["/c", "mklink", "/J", &alias.to_string_lossy(), &again.to_string_lossy()]).output().is_ok_and(|o| o.status.success()));
+        assert!(!remove_owned(&alias, None) && !remove_owned(&alias.join("a.txt"), None) && !remove_owned(&root.join("missing"), None));
+        assert!(again.join("a.txt").exists(), "what the link leads to is untouched");
+        // Told to stop, it goes no deeper: what was there stays.
+        let stopped = crate::trash::Live::default();
+        stopped.stop();
+        write(&root.join("later").join("deep").join("x.txt"), 1, 1);
+        assert!(!remove_owned(&root.join("later"), Some(&stopped)) && root.join("later").join("deep").join("x.txt").exists());
+        let _ = std::fs::remove_dir(&alias);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

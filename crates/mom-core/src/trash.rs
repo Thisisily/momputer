@@ -1813,8 +1813,9 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         }
         told.borrow_mut().insert(i, freed);
     };
-    // One at a time, for the ways that can't go many at once.
-    let each = |remove: &dyn Fn(&Cand) -> bool| -> Vec<Option<bool>> {
+    // One item at a time, for the ways that can't take many items at once. `counted`: the way
+    // counts each file to `live` itself as it goes.
+    let each = |counted: bool, remove: &dyn Fn(&Cand) -> bool| -> Vec<Option<bool>> {
         chosen
             .iter()
             .enumerate()
@@ -1826,7 +1827,7 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
                     l.working_on(c);
                 }
                 let ok = remove(c);
-                settle(i, ok, true);
+                settle(i, ok, !counted);
                 Some(ok)
             })
             .collect()
@@ -1834,24 +1835,25 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     // What was too big for the Recycle Bin, and so stayed.
     let mut big = vec![false; chosen.len()];
     let gone: Vec<Option<bool>> = if def.action == "recycle" {
-        each(&|c: &Cand| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok()))
+        each(false, &|c: &Cand| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok()))
     } else if recycle {
         recycle_chosen(&chosen, live, &mut big)
     } else if elevated {
         // As administrator: only where nobody else could have swapped a folder for a link, and
         // one at a time, never following one.
-        each(&|c: &Cand| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_ok() && remove_without_following(t)))
+        each(false, &|c: &Cand| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_ok() && remove_without_following(t)))
     } else if needs_admin(id) {
         // As you: what's in folders anyone can change is yours to clean anyway. The rest waits
         // for the administrator run.
-        each(&|c: &Cand| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_err() && remove_without_following(t)))
+        each(false, &|c: &Cand| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_err() && remove_without_following(t)))
     } else if id == "old-build-folders" {
         // Projects can sit outside your own folders, where other people on this PC can write
         // (the top of a second drive), and a folder in your profile can be a link to such a
         // place. So each is held open while mom checks it's a real folder of yours and empties
         // it: the check and the delete are about the same folder, with no moment between them
-        // for anyone to swap it. Slower than the many-at-once way.
-        each(&|c: &Cand| c.targets.iter().all(|t| remove_owned(t)))
+        // for anyone to swap it. One project at a time, but everything inside it at once, each
+        // folder in it held the same way while its own contents go.
+        each(true, &|c: &Cand| c.targets.iter().all(|t| remove_owned(t, live)))
     } else {
         // In batches: a big folder on its own, small things many at a time.
         let mut out: Vec<Option<bool>> = Vec::with_capacity(chosen.len());
