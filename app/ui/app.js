@@ -1272,7 +1272,7 @@ in ${x.cwd}`)}">
         <div><h2 id="sheet-title">${esc(a.name)}</h2>
           <div class="pills"><span class="pill"><span class="led ${a.problems ? "red" : "green"}"></span>${a.problems ? `${a.problems} to look at` : "All in order"}</span>
           <span class="pill">Mom only reads</span></div></div>${acts}</div>
-      <p class="sheet-what">How ${esc(a.name)} is set up on this PC. Tap a row to read the file behind it. Keys are never shown.</p>
+      <p class="sheet-what">How ${esc(a.name)} is set up on this PC. Tap a row to read the file behind it. Mom blanks what looks like a key.</p>
       ${worth.length ? section("as-worth", "Worth a look", String(worth.length), worth.map((w) => checkRow(w, "asw")).join("")) : ""}
       ${list("settings", "Settings", settings)}
       ${list("servers", "MCP servers", servers)}
@@ -1321,7 +1321,7 @@ in ${x.cwd}`)}">
     }
     const d = r.doc;
     const notes = [];
-    if (d && d.hidden) notes.push(`${plural(d.hidden, "key")} blanked. Mom doesn't show keys.`);
+    if (d && d.hidden) notes.push(`Mom blanked ${plural(d.hidden, "thing")} that looked like ${d.hidden === 1 ? "a key" : "keys"}. Look it over before you share your screen.`);
     if (d && d.cut) notes.push("The rest is longer than mom shows.");
     const body = r.error
       ? `<p class="empty">${esc(r.error)}</p>`
