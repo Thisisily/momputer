@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tidy plan</title>
+<meta name="description" content="What a read-only survey found in this computer's folders, and a tidy-up plan to approve item by item.">
+<style>
+:root {
+  --bg: #f5f5f3; --card: #ffffff; --ink: #0b0b0b; --ink-2: #4a4a4a; --muted: #8a8a8a; --line: #e2e2de;
+  --bar: #0b0b0b; --bar-2: #bdbdb8; --red: #d71921; --green: #1e9e57; --focus: #0b0b0b;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+    --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+  --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+body { padding: 0 16px 140px; }
+main { max-width: 1080px; margin: 0 auto; }
+a { color: inherit; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.label { font: 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); vertical-align: middle; }
+.dot.red { background: var(--red); } .dot.green { background: var(--green); }
+header.top { padding: 40px 0 20px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between; }
+h1 { font: 600 34px/1.1 var(--sans); letter-spacing: -.02em; margin: 6px 0 0; }
+h2 { font: 600 19px/1.3 var(--sans); margin: 0; }
+h3 { font: 600 15px/1.3 var(--sans); margin: 0; }
+.sub { color: var(--ink-2); }
+section { margin-top: 28px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+.grid { display: grid; gap: 12px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.tile .num { font: 500 30px/1.1 var(--mono); letter-spacing: -.02em; margin-top: 8px; }
+.tile .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.two { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.highlights { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
+.headline { font-size: 17px; margin: 0; }
+/* bars */
+.bars { display: grid; gap: 8px; margin-top: 14px; }
+.bar-row { display: grid; grid-template-columns: minmax(80px, 30%) 1fr minmax(64px, auto); gap: 10px; align-items: center; }
+.bar-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.bar-track { position: relative; height: 18px; }
+.bar-fill { position: absolute; left: 0; top: 3px; height: 12px; background: var(--bar); border-radius: 0 4px 4px 0; min-width: 2px; }
+.bar-fill.second { background: var(--bar-2); }
+.bar-val { font: 12px/18px var(--mono); color: var(--ink-2); white-space: nowrap; text-align: right; }
+.legend { display: flex; gap: 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+/* plan */
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px; }
+.btn:hover { border-color: var(--ink); }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.search { flex: 1 1 220px; min-width: 0; border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; }
+.group { margin-top: 12px; }
+.group-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.group-head .meta { color: var(--muted); font: 12px var(--mono); }
+.group-desc { color: var(--ink-2); font-size: 13px; margin: 6px 0 10px; }
+.items { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.item { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.item input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: var(--ink); }
+.item .path { font: 13px/1.45 var(--mono); word-break: break-all; }
+.item .to { color: var(--ink-2); }
+.item .why { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.item .size { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
+.more { margin-top: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 8px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+td.num { font-family: var(--mono); white-space: nowrap; }
+.scroll-x { overflow-x: auto; }
+.tree { font: 13px/1.7 var(--mono); white-space: pre-wrap; word-break: break-all; margin: 10px 0 0; }
+details summary { cursor: pointer; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip { font: 12px var(--mono); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--ink-2); }
+/* sticky approval bar */
+.dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 12px 16px; z-index: 5; }
+.dock-in { max-width: 1080px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.dock .sum { font: 13px var(--mono); }
+.dock textarea { width: 100%; min-height: 60px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--bg); }
+.toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 6; }
+.toast.on { opacity: 1; }
+.hidden { display: none !important; }
+@media (max-width: 560px) {
+  h1 { font-size: 28px; }
+  .item { grid-template-columns: 22px 1fr; }
+  .item .size { grid-column: 2; }
+  .bar-row { grid-template-columns: 1fr auto; gap: 2px 10px; }
+  .bar-row .bar-track { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+<main id="app">
+  <header class="top">
+    <div>
+      <div class="label"><span class="dot green"></span>&nbsp; Read-only survey · nothing has been moved</div>
+      <h1>Tidy plan</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="label" id="legend-dots"><span class="dot green"></span> safe &nbsp; <span class="dot red"></span> check first</div>
+  </header>
+
+  <section id="summary" class="card hidden">
+    <p class="headline" id="headline"></p>
+    <ul class="highlights" id="highlights"></ul>
+  </section>
+
+  <section class="grid tiles" id="tiles"></section>
+
+  <section class="grid two">
+    <div class="card"><h2>Your folders</h2><div class="sub">Space used by each of your main folders.</div><div class="bars" id="chart-space"></div></div>
+    <div class="card"><h2>Elsewhere on your drives</h2><div class="sub">Biggest folders at the top of each drive and in your profile.</div><div class="bars" id="chart-elsewhere"></div></div>
+    <div class="card"><h2>What's lying loose</h2><div class="sub">Files sitting directly on the Desktop, in Downloads, the profile folder and drive roots.</div><div class="bars" id="chart-loose"></div></div>
+    <div class="card"><h2>How old Downloads is</h2><div class="sub">Files in Downloads by last change.</div><div class="bars" id="chart-age"></div></div>
+    <div class="card"><h2>Important papers found</h2><div class="sub">By file name, or a light look inside small documents. Already-filed ones included.</div><div class="bars" id="chart-important"></div></div>
+  </section>
+
+  <section>
+    <div class="group-head"><h2>The plan</h2><span class="label">Tick what you approve. Nothing happens until you send the approval back.</span></div>
+    <div class="toolbar" style="margin-top:12px">
+      <button class="btn" id="tick-all" type="button">Tick all</button>
+      <button class="btn" id="untick-all" type="button">Untick all</button>
+      <input class="search" id="filter" type="search" placeholder="Filter by name or folder" aria-label="Filter plan items">
+    </div>
+    <div id="groups"></div>
+  </section>
+
+  <section class="card" id="games-card">
+    <h2>Games</h2>
+    <div class="sub">Games installed by a launcher are never moved by hand. Use the launcher's own move feature below.</div>
+    <div class="scroll-x"><table id="launchers"><thead><tr><th>Launcher</th><th>Games</th><th>Size</th><th>Where</th><th>How to move</th></tr></thead><tbody></tbody></table></div>
+    <h3 style="margin-top:18px">Games found outside a launcher</h3>
+    <div class="scroll-x"><table id="loose-games"><thead><tr><th>Folder</th><th>Engine</th><th>Size</th><th>In a Games folder</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="grid two">
+    <div class="card"><h2>Naming</h2><div class="sub">Patterns that make folders hard to scan.</div><div id="naming"></div><h3 style="margin-top:16px">House style</h3><ul class="highlights" id="naming-rules"></ul></div>
+    <div class="card"><h2>Where things would go</h2><div class="sub">Folders the ticked moves land in, with item counts.</div><div class="tree" id="tree"></div></div>
+  </section>
+
+  <section class="card">
+    <h2>Left alone</h2>
+    <div class="sub">The survey never touches these, and the plan never moves anything inside them.</div>
+    <div class="chips" id="protected"></div>
+    <div id="left-alone" class="sub" style="margin-top:12px"></div>
+  </section>
+</main>
+
+<div class="dock" role="region" aria-label="Approval">
+  <div class="dock-in">
+    <div class="sum" id="dock-sum">0 ticked</div>
+    <div class="toolbar">
+      <button class="btn" id="toggle-notes" type="button">Add a note</button>
+      <button class="btn" id="download" type="button">Download plan</button>
+      <button class="btn primary" id="copy" type="button">Copy approval</button>
+    </div>
+  </div>
+  <div class="dock-in hidden" id="notes-wrap"><textarea id="notes" placeholder="Anything to change? e.g. put games on D:\Games, keep the Desktop as it is"></textarea></div>
+  <div class="dock-in hidden" id="fallback-wrap"><textarea id="fallback" readonly aria-label="Approval text to copy"></textarea></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script id="tidy-data" type="application/json">__TIDY_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var D = JSON.parse(document.getElementById("tidy-data").textContent);
+  var A = D.actions, S = D.survey, PROFILE = (S.known_folders && S.known_folders.Profile) || "";
+  var GROUPS = [
+    ["important", "Important papers", "Contracts, IDs, tax, invoices and similar, filed under Documents."],
+    ["documents", "Documents", "Loose documents filed into Documents by kind."],
+    ["pictures", "Pictures", "Loose pictures into Pictures (screenshots into Pictures\\Screenshots, the rest by year)."],
+    ["videos", "Videos", "Loose videos into Videos."],
+    ["music", "Music", "Loose audio into Music."],
+    ["installers", "Old installers", "Installers and disk images in Downloads older than a month. They go to the Recycle Bin."],
+    ["archives", "Extracted archives", "Zip files in Downloads that were already extracted next to themselves. Recycle Bin."],
+    ["duplicates", "Duplicates", "Extra copies in messy places. The copy named on each line stays. Recycle Bin."],
+    ["games", "Games outside a Games folder", "Games that no launcher manages. Shortcuts and some save files may need fixing after a move."],
+    ["projects", "Code projects", "Project folders sitting on the Desktop or in Downloads."],
+    ["empty", "Empty folders", "Folders with nothing inside at any depth."],
+    ["custom", "Other suggestions", "Added by your assistant after looking at the survey."]
+  ];
+  var KEY = "tidy-plan:" + D.plan_id;
+  var on = new Set();
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { saved = null; }
+  A.forEach(function (a) { if (saved ? saved.indexOf(a.id) >= 0 : a["default"]) on.add(a.id); });
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "text") n.textContent = attrs[k];
+      else if (k === "class") n.className = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    for (var i = 2; i < arguments.length; i++) { var c = arguments[i]; if (c != null) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); }
+    return n;
+  }
+  function bytes(n) {
+    if (n == null) return "–";
+    var u = ["B", "KB", "MB", "GB", "TB"], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
+  }
+  function count(n) { return (n || 0).toLocaleString("en-US"); }
+  function short(p) {
+    if (!p) return "";
+    if (PROFILE && p.toLowerCase().indexOf(PROFILE.toLowerCase() + "\\") === 0) return "~" + p.slice(PROFILE.length);
+    return p;
+  }
+  function dirname(p) { var i = p.lastIndexOf("\\"); return i > 0 ? p.slice(0, i) : p; }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(Array.from(on))); } catch (e) { /* private window */ } }
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(function () { t.classList.remove("on"); }, 1800); }
+
+  function bars(target, rows, opts) {
+    opts = opts || {};
+    var box = $(target), max = 0;
+    rows.forEach(function (r) { max = Math.max(max, r.value + (r.value2 || 0)); });
+    if (!rows.length) { box.appendChild(el("div", { "class": "sub", text: "Nothing to show." })); return; }
+    rows.forEach(function (r) {
+      var track = el("div", { "class": "bar-track" });
+      var w = max ? (r.value / max) * 100 : 0, w2 = max && r.value2 ? (r.value2 / max) * 100 : 0;
+      track.appendChild(el("div", { "class": "bar-fill", style: "width:" + w.toFixed(2) + "%" }));
+      if (w2) track.appendChild(el("div", { "class": "bar-fill second", style: "left:" + w.toFixed(2) + "%;width:" + w2.toFixed(2) + "%;border-radius:0 4px 4px 0" }));
+      var row = el("div", { "class": "bar-row", title: r.title || (r.label + ": " + r.text) },
+        el("div", { "class": "bar-label", text: r.label }), track, el("div", { "class": "bar-val", text: r.text }));
+      box.appendChild(row);
+    });
+    if (opts.legend) box.appendChild(el("div", { "class": "legend" }, el("span", null, el("i", { style: "background:var(--bar)" }), opts.legend[0]), el("span", null, el("i", { style: "background:var(--bar-2)" }), opts.legend[1])));
+  }
+
+  // ---- header, summary, tiles
+  var b = S.budget || {};
+  $("subtitle").textContent = [S.host && S.host.computer, (S.generated || "").replace("T", " "), count(b.entries_seen) + " files and folders looked at in " + Math.round(b.seconds || 0) + " s" + (b.truncated ? " (stopped early: some folders only partly counted)" : "")].filter(Boolean).join(" · ");
+  if (D.notes && (D.notes.headline || (D.notes.highlights || []).length)) {
+    $("summary").classList.remove("hidden");
+    $("headline").textContent = D.notes.headline || "";
+    (D.notes.highlights || []).forEach(function (h) { $("highlights").appendChild(el("li", { text: h })); });
+  }
+  var areas = S.areas || [];
+  var userBytes = 0, looseFiles = 0;
+  areas.forEach(function (a) { if (a.kind === "known") userBytes += a.bytes; looseFiles += a.loose_files || 0; });
+  var recycleBytes = 0, moves = 0;
+  A.forEach(function (a) { if (a.op === "recycle") recycleBytes += a.bytes || 0; if (a.op === "move") moves++; });
+  [["Your folders", bytes(userBytes), "Desktop, Documents, Downloads, Pictures, Videos, Music"],
+   ["Lying loose", count(looseFiles), "files not inside any folder"],
+   ["Moves proposed", count(moves), "into the folder they belong in"],
+   ["Could free", bytes(recycleBytes), "if every Recycle Bin item is ticked"]].forEach(function (t) {
+    $("tiles").appendChild(el("div", { "class": "card tile" }, el("div", { "class": "label", text: t[0] }), el("div", { "class": "num", text: t[1] }), el("div", { "class": "note", text: t[2] })));
+  });
+
+  // ---- charts
+  function spaceRow(a) { return { label: a.kind === "known" ? a.key : short(a.path), value: a.bytes, text: bytes(a.bytes) + (a.truncated ? "+" : ""), title: a.path + " · " + count(a.files) + " files" + (a.truncated ? " (partly counted)" : "") }; }
+  function bySize(x, y) { return y.bytes - x.bytes; }
+  bars("chart-space", areas.filter(function (a) { return a.kind === "known"; }).sort(bySize).map(spaceRow));
+  bars("chart-elsewhere", areas.filter(function (a) { return a.bytes > 0 && (a.kind === "drive-top" || a.kind === "profile"); }).sort(bySize).slice(0, 12).map(spaceRow));
+  var looseAreas = areas.filter(function (a) { return a.loose_files > 0 && (a.kind === "drive-root" || a.kind === "profile-root" || a.key === "Desktop" || a.key === "Downloads"); });
+  bars("chart-loose", looseAreas.sort(function (x, y) { return y.loose_files - x.loose_files; }).map(function (a) {
+    return { label: a.kind === "profile-root" ? "Profile folder" : a.kind === "drive-root" ? "Drive " + a.path : a.key, value: a.loose_files, text: count(a.loose_files) + " files" };
+  }));
+  var dl = areas.filter(function (a) { return a.key === "Downloads"; })[0];
+  if (dl) bars("chart-age", dl.age.buckets.map(function (bk, i) { return { label: bk, value: dl.age.files[i], text: count(dl.age.files[i]) + " · " + bytes(dl.age.bytes[i]) }; }));
+  else bars("chart-age", []);
+  var cats = {};
+  (S.important_docs || []).forEach(function (d) { cats[d.category] = (cats[d.category] || 0) + 1; });
+  var loosePlanned = {};
+  A.forEach(function (a) { if (a.group === "important") loosePlanned[a.category] = (loosePlanned[a.category] || 0) + 1; });
+  bars("chart-important", Object.keys(cats).sort(function (x, y) { return cats[y] - cats[x]; }).map(function (c) {
+    var loose = loosePlanned[c] || 0;
+    return { label: c, value: loose, value2: cats[c] - loose, text: count(cats[c]) + (loose ? " · " + loose + " loose" : "") };
+  }), { legend: ["lying loose (in the plan)", "already in a folder"] });
+
+  // ---- plan groups
+  var byGroup = {};
+  A.forEach(function (a) { (byGroup[a.group] = byGroup[a.group] || []).push(a); });
+  var renderers = [];
+  var filterText = "";
+  GROUPS.forEach(function (g) {
+    var items = byGroup[g[0]];
+    if (!items || !items.length) return;
+    var total = items.reduce(function (s, a) { return s + (a.bytes || 0); }, 0);
+    var shown = 150;
+    var list = el("ul", { "class": "items" });
+    var meta = el("span", { "class": "meta" });
+    var moreBtn = el("button", { "class": "btn more", type: "button" });
+    function visible() {
+      if (!filterText) return items;
+      return items.filter(function (a) { return ((a.from || "") + " " + (a.to || "") + " " + (a.why || "")).toLowerCase().indexOf(filterText) >= 0; });
+    }
+    function render() {
+      list.textContent = "";
+      var vis = visible();
+      vis.slice(0, shown).forEach(function (a) {
+        var cb = el("input", { type: "checkbox", "aria-label": "Approve: " + a.from });
+        cb.checked = on.has(a.id);
+        cb.addEventListener("change", function () { if (cb.checked) on.add(a.id); else on.delete(a.id); save(); update(); });
+        var verb = a.op === "move" ? "→ " + short(a.to) : a.op === "recycle" ? "→ Recycle Bin" : a.op === "remove-empty-dir" ? "→ remove (empty)" : a.op;
+        var why = a.why;
+        list.appendChild(el("li", { "class": "item" }, cb,
+          el("div", null,
+            el("div", { "class": "path", title: a.from, text: short(a.from) }),
+            el("div", { "class": "path to", title: a.to || "", text: verb }),
+            el("div", { "class": "why" }, el("span", { "class": "dot " + (a.risk === "low" ? "green" : "red"), title: a.risk === "low" ? "safe" : "check first" }), " ", why)),
+          el("div", { "class": "size", text: a.bytes ? bytes(a.bytes) : "" })));
+      });
+      moreBtn.classList.toggle("hidden", vis.length <= shown);
+      moreBtn.textContent = "Show " + Math.min(400, vis.length - shown) + " more of " + count(vis.length - shown);
+      var ticked = items.filter(function (a) { return on.has(a.id); }).length;
+      meta.textContent = count(ticked) + " of " + count(items.length) + " ticked" + (total ? " · " + bytes(total) : "");
+    }
+    moreBtn.addEventListener("click", function () { shown += 400; render(); });
+    var tick = el("button", { "class": "btn", type: "button", text: "Tick all" });
+    var untick = el("button", { "class": "btn", type: "button", text: "Untick all" });
+    tick.addEventListener("click", function () { visible().forEach(function (a) { on.add(a.id); }); save(); update(); });
+    untick.addEventListener("click", function () { visible().forEach(function (a) { on.delete(a.id); }); save(); update(); });
+    var card = el("div", { "class": "card group" },
+      el("div", { "class": "group-head" }, el("h3", { text: g[1] }), meta),
+      el("div", { "class": "group-desc", text: g[2] }),
+      el("div", { "class": "toolbar" }, tick, untick),
+      el("div", { style: "height:10px" }), list, moreBtn);
+    $("groups").appendChild(card);
+    renderers.push(render);
+  });
+  if (!renderers.length) $("groups").appendChild(el("div", { "class": "card group sub", text: "Nothing to tidy. Every folder looked fine." }));
+
+  $("tick-all").addEventListener("click", function () { A.forEach(function (a) { on.add(a.id); }); save(); update(); });
+  $("untick-all").addEventListener("click", function () { on.clear(); save(); update(); });
+  $("filter").addEventListener("input", function (e) { filterText = e.target.value.trim().toLowerCase(); update(); });
+
+  // ---- games
+  var lt = $("launchers").tBodies[0];
+  var launchers = (S.games && S.games.launchers) || [];
+  launchers.forEach(function (l) {
+    var size = l.games.reduce(function (s, g) { return s + (g.bytes || 0); }, 0);
+    lt.appendChild(el("tr", null, el("td", { text: l.name }), el("td", { "class": "num", text: count(l.games.length) }),
+      el("td", { "class": "num", text: size ? bytes(size) : "–" }), el("td", { "class": "mono", text: l.libraries.map(short).join("\n") || "–" }), el("td", { text: l.how_to_move })));
+  });
+  if (!launchers.length) lt.appendChild(el("tr", null, el("td", { colspan: "5", "class": "sub", text: "No game launchers found." })));
+  var gt = $("loose-games").tBodies[0], lg = (S.games && S.games.loose) || [];
+  lg.forEach(function (g) {
+    gt.appendChild(el("tr", null, el("td", { "class": "mono", text: short(g.path) }), el("td", { text: g.managed_by ? "installed by " + g.managed_by : g.engine }),
+      el("td", { "class": "num", text: bytes(g.bytes) }), el("td", null, el("span", { "class": "dot " + (g.in_games_folder ? "green" : "red") }), g.in_games_folder ? " yes" : " no")));
+  });
+  if (!lg.length) gt.appendChild(el("tr", null, el("td", { colspan: "4", "class": "sub", text: "None found." })));
+
+  // ---- naming
+  var nm = $("naming");
+  (S.naming_issues || []).forEach(function (n) {
+    nm.appendChild(el("details", { style: "margin-top:10px" }, el("summary", null, el("span", { "class": "mono", text: count(n.count) }), " · " + n.label),
+      el("div", { "class": "tree", text: n.examples.map(short).join("\n") })));
+  });
+  if (!(S.naming_issues || []).length) nm.appendChild(el("div", { "class": "sub", text: "No naming problems spotted." }));
+  var rules = (D.notes && D.notes.naming_rules) || [
+    "Name things by what they are: 2025-03 Lease - 12 High St.pdf, not scan0003.pdf.",
+    "Dates first and as YYYY-MM-DD, so files sort by time.",
+    "One topic, one folder. No 'New folder', 'stuff' or 'misc'.",
+    "Downloads is a waiting room: file or delete what's older than a month.",
+    "Games live in one Games folder per drive, moved only with their launcher."
+  ];
+  rules.forEach(function (r) { $("naming-rules").appendChild(el("li", { text: r })); });
+
+  // ---- left alone
+  (S.protected || []).forEach(function (p) { $("protected").appendChild(el("span", { "class": "chip", text: short(p) })); });
+  var progLike = areas.filter(function (a) { return a.program_like; }).map(function (a) { return short(a.path); });
+  var parts = [];
+  if (S.installed_programs) parts.push(count(S.installed_programs.count) + " installed programs (their folders are off-limits).");
+  if ((S.projects || []).length) parts.push(count(S.projects.length) + " code projects listed but not looked inside.");
+  if (progLike.length) parts.push("Program or tool folders left alone: " + progLike.join(", ") + ".");
+  var trunc = areas.filter(function (a) { return a.truncated; }).map(function (a) { return short(a.path); });
+  if (trunc.length) parts.push("Only partly counted (time limit): " + trunc.join(", ") + ".");
+  if (b.hash_truncated) parts.push("Duplicate check stopped at its time limit; there may be more duplicates.");
+  $("left-alone").textContent = parts.join(" ");
+
+  // ---- approval
+  function ranges(ids) {
+    ids.sort(function (x, y) { return x - y; });
+    var out = [], i = 0;
+    while (i < ids.length) { var j = i; while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++; out.push(i === j ? "" + ids[i] : ids[i] + "-" + ids[j]); i = j + 1; }
+    return out.join(",");
+  }
+  function chosen() { return A.filter(function (a) { return on.has(a.id); }); }
+  function summary(list) {
+    var mv = 0, rc = 0, rb = 0, em = 0;
+    list.forEach(function (a) { if (a.op === "move") mv++; else if (a.op === "recycle") { rc++; rb += a.bytes || 0; } else if (a.op === "remove-empty-dir") em++; });
+    return { mv: mv, rc: rc, rb: rb, em: em };
+  }
+  function approvalText() {
+    var list = chosen(), s = summary(list), note = $("notes").value.trim();
+    return "TIDY-APPROVE plan=" + D.plan_id + " ids=" + (ranges(list.map(function (a) { return a.id; })) || "none") + "\n" +
+      "moves: " + s.mv + " · to Recycle Bin: " + s.rc + " (" + bytes(s.rb) + ") · empty folders removed: " + s.em +
+      (note ? "\nnote: " + note.replace(/\s+/g, " ") : "");
+  }
+  function update() {
+    renderers.forEach(function (r) { r(); });
+    var s = summary(chosen());
+    $("dock-sum").textContent = count(on.size) + " ticked · " + count(s.mv) + " moves · " + count(s.rc) + " to Recycle Bin (" + bytes(s.rb) + ") · " + count(s.em) + " empty folders";
+    var dests = {};
+    chosen().forEach(function (a) { if (a.op === "move") { var d = short(dirname(a.to)); dests[d] = (dests[d] || 0) + 1; } });
+    var keys = Object.keys(dests).sort();
+    $("tree").textContent = keys.length ? keys.map(function (k) { return k + "  (" + dests[k] + ")"; }).join("\n") : "Nothing ticked to move yet.";
+  }
+  function fallback(text) {
+    var w = $("fallback-wrap"), t = $("fallback");
+    w.classList.remove("hidden"); t.value = text; t.focus(); t.select();
+    toast("Copy the selected text (Ctrl+C)");
+  }
+  $("copy").addEventListener("click", function () {
+    var text = approvalText();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { toast("Approval copied. Paste it to your assistant."); }, function () { fallback(text); });
+    } else fallback(text);
+  });
+  $("download").addEventListener("click", function () {
+    var list = chosen();
+    var body = JSON.stringify({ schema: "tidy-folders/approval@1", plan_id: D.plan_id, ids: list.map(function (a) { return a.id; }), note: $("notes").value.trim(), actions: list }, null, 1);
+    try {
+      var url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
+      var a = el("a", { href: url, download: "tidy-approval-" + D.plan_id + ".json" });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+    } catch (e) { fallback(body); }
+  });
+  $("toggle-notes").addEventListener("click", function () { $("notes-wrap").classList.toggle("hidden"); });
+  $("notes").addEventListener("input", update);
+  update();
+})();
+</script>
+</body>
+</html>

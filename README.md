@@ -154,6 +154,11 @@ The read-only commands take `--json` for scripts and agents.
 
 **The skill.** [`skills/mom`](skills/mom/SKILL.md) is a standard Agent Skill. It works in Claude Code (`~/.claude/skills/mom`) and Codex (`~/.agents/skills/mom`): it teaches an agent to check what it left running, stop it, take out its own trash and put reports where they belong. It works with or without momputer installed.
 
+**Two more skills.** They install the same way and don't need momputer.
+
+- [`skills/tidy-folders`](skills/tidy-folders) surveys your Windows folders without changing anything, then shows a tidy plan you tick through: important papers lying loose, games outside the Games folder, duplicates, old installers. Only what you approve moves, deletions go to the Recycle Bin, and there's an undo.
+- [`skills/inbox-cleanup`](skills/inbox-cleanup) reviews two months of Gmail without changing anything and builds a private report: who fills your inbox, what you never open, what to unsubscribe from, likely phishing, and a declutter plan. It acts only on what you tick.
+
 **The hooks.** `mom install claude-hooks codex-hooks` (or the switches under House rules) adds three hooks:
 
 - `SessionStart` remembers what the project folder looked like and hands the agent the house rules.

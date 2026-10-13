@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inbox report</title>
+<meta name="description" content="A read-only look at the last two months of a Gmail inbox, with a declutter plan to approve item by item.">
+<meta name="referrer" content="no-referrer">
+<style>
+:root {
+  --bg: #f5f5f3; --card: #ffffff; --ink: #0b0b0b; --ink-2: #4a4a4a; --muted: #8a8a8a; --line: #e2e2de;
+  --bar: #0b0b0b; --bar-2: #bdbdb8; --red: #d71921; --green: #1e9e57; --focus: #0b0b0b;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+    --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+  --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+body { padding: 0 16px 140px; }
+main { max-width: 1080px; margin: 0 auto; }
+a { color: inherit; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.label { font: 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); vertical-align: middle; }
+.dot.red { background: var(--red); } .dot.green { background: var(--green); }
+header.top { padding: 40px 0 20px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between; }
+h1 { font: 600 34px/1.1 var(--sans); letter-spacing: -.02em; margin: 6px 0 0; }
+h2 { font: 600 19px/1.3 var(--sans); margin: 0; }
+h3 { font: 600 15px/1.3 var(--sans); margin: 0; }
+.sub { color: var(--ink-2); }
+section { margin-top: 28px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+.grid { display: grid; gap: 12px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.tile .num { font: 500 30px/1.1 var(--mono); letter-spacing: -.02em; margin-top: 8px; }
+.tile .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.two { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.highlights { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
+.headline { font-size: 17px; margin: 0; }
+.bars { display: grid; gap: 8px; margin-top: 14px; }
+.bar-row { display: grid; grid-template-columns: minmax(80px, 34%) 1fr minmax(64px, auto); gap: 10px; align-items: center; }
+.bar-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.bar-track { position: relative; height: 18px; }
+.bar-fill { position: absolute; left: 0; top: 3px; height: 12px; background: var(--bar); border-radius: 0 4px 4px 0; min-width: 2px; }
+.bar-fill.second { background: var(--bar-2); }
+.bar-val { font: 12px/18px var(--mono); color: var(--ink-2); white-space: nowrap; text-align: right; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+svg.cols { width: 100%; height: 170px; display: block; margin-top: 14px; overflow: visible; }
+svg.cols rect.col { fill: var(--bar); }
+svg.cols rect.col.weekend { fill: var(--bar-2); }
+svg.cols rect.hit { fill: transparent; }
+svg.cols rect.hit:hover + rect.col, svg.cols rect.col:hover { opacity: .7; }
+svg.cols text { fill: var(--muted); font: 10px var(--mono); }
+svg.cols line { stroke: var(--line); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px; text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--ink); }
+.btn.small { padding: 2px 10px; font-size: 12px; }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.group-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.group-head .meta { color: var(--muted); font: 12px var(--mono); }
+.group-desc { color: var(--ink-2); font-size: 13px; margin: 6px 0 10px; }
+.items { list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.item { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.item input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: var(--ink); }
+.item .who { font-weight: 600; font-size: 14px; }
+.item .addr { font: 12px var(--mono); color: var(--ink-2); word-break: break-all; }
+.item .why { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.item .side { font: 12px/1.5 var(--mono); color: var(--muted); text-align: right; white-space: nowrap; }
+.query { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.query code { font: 12px var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; word-break: break-all; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 8px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+td.num { font-family: var(--mono); white-space: nowrap; }
+.scroll-x { overflow-x: auto; }
+.dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 12px 16px; z-index: 5; }
+.dock-in { max-width: 1080px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.dock .sum { font: 13px var(--mono); }
+.dock textarea { width: 100%; min-height: 60px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--bg); }
+.toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 6; }
+.toast.on { opacity: 1; }
+.hidden { display: none !important; }
+@media (max-width: 560px) {
+  h1 { font-size: 28px; }
+  .item { grid-template-columns: 22px 1fr; }
+  .item .side { grid-column: 2; text-align: left; }
+  .bar-row { grid-template-columns: 1fr auto; gap: 2px 10px; }
+  .bar-row .bar-track { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <div class="label"><span class="dot green"></span>&nbsp; Read-only review · nothing in your mailbox was changed</div>
+      <h1>Inbox report</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="label"><span class="dot green"></span> fine &nbsp; <span class="dot red"></span> needs a look</div>
+  </header>
+
+  <section id="summary" class="card hidden">
+    <p class="headline" id="headline"></p>
+    <ul class="highlights" id="highlights"></ul>
+  </section>
+
+  <section class="grid tiles" id="tiles"></section>
+
+  <section class="grid two">
+    <div class="card" style="grid-column: 1 / -1"><h2>Mail per day</h2><div class="sub" id="daily-sub"></div><div id="chart-daily"></div><div class="legend"><span><i style="background:var(--bar)"></i>weekday</span><span><i style="background:var(--bar-2)"></i>weekend</span></div></div>
+    <div class="card"><h2>By Gmail tab</h2><div class="sub">How much lands in each tab, and how much of it stays unread.</div><div class="bars" id="chart-cats"></div></div>
+    <div class="card"><h2>Who sends the most</h2><div class="sub">Top senders in this window.</div><div class="bars" id="chart-top"></div></div>
+  </section>
+
+  <section>
+    <div class="group-head"><h2>The plan</h2><span class="label">Tick what you approve. Nothing happens until you send the approval back.</span></div>
+    <div class="toolbar" style="margin-top:12px">
+      <button class="btn" id="tick-all" type="button">Tick all</button>
+      <button class="btn" id="untick-all" type="button">Untick all</button>
+    </div>
+    <div id="lists"></div>
+  </section>
+
+  <section class="card">
+    <h2>Senders you never opened</h2>
+    <div class="sub" id="never-sub"></div>
+    <div class="scroll-x"><table id="never"><thead><tr><th>Sender</th><th>Emails</th><th>Last</th><th>Latest subject</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="grid two">
+    <div class="card"><h2>Big attachments</h2><div class="sub" id="big-sub"></div><div class="scroll-x"><table id="big"><thead><tr><th>Size</th><th>From</th><th>Subject</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="card"><h2>Suspicious emails</h2><div class="sub">Examples and why they were flagged. Don't open their links or attachments.</div><div class="scroll-x"><table id="sus"><thead><tr><th>From</th><th>Subject</th><th>Why</th></tr></thead><tbody></tbody></table></div></div>
+  </section>
+
+  <section class="card">
+    <h2>How this was made</h2>
+    <div class="sub" id="method"></div>
+  </section>
+</main>
+
+<div class="dock" role="region" aria-label="Approval">
+  <div class="dock-in">
+    <div class="sum" id="dock-sum">0 ticked</div>
+    <div class="toolbar">
+      <button class="btn" id="toggle-notes" type="button">Add a note</button>
+      <button class="btn" id="download" type="button">Download plan</button>
+      <button class="btn primary" id="copy" type="button">Copy approval</button>
+    </div>
+  </div>
+  <div class="dock-in hidden" id="notes-wrap"><textarea id="notes" placeholder="Anything to change? e.g. keep Example News Weekly, I read it on my phone"></textarea></div>
+  <div class="dock-in hidden" id="fallback-wrap"><textarea id="fallback" readonly aria-label="Approval text to copy"></textarea></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script id="inbox-data" type="application/json">__INBOX_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var R = JSON.parse(document.getElementById("inbox-data").textContent);
+  var T = R.totals;
+  var LISTS = [
+    ["unsubscribe", "Unsubscribe", "Newsletters you open a quarter of the time or less. Ticking one lets your assistant unsubscribe you with Gmail's own Unsubscribe, or make a filter where Gmail offers none."],
+    ["filter", "Move out of the inbox", "Newsletters you read sometimes. A filter skips the inbox and labels them 'Newsletters'."],
+    ["spam", "Report as spam or phishing", "Flagged by the checks shown. Ticking one lets your assistant use Report spam and Block. Never their unsubscribe links."],
+    ["steps", "Clean-up steps", "Bigger sweeps. Your assistant tells you the exact count before any bulk change."]
+  ];
+  var DATA = { unsubscribe: R.lists.unsubscribe, filter: R.lists.filter, spam: R.lists.suspicious, steps: R.steps };
+  var KEY = "inbox-report:" + R.report_id;
+  var on = { unsubscribe: new Set(), filter: new Set(), spam: new Set(), steps: new Set() };
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { saved = null; }
+  Object.keys(on).forEach(function (k) {
+    if (saved && saved[k]) saved[k].forEach(function (n) { on[k].add(n); });
+    else if (!saved && k !== "steps") DATA[k].forEach(function (x) { on[k].add(x.n); });
+  });
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "text") n.textContent = attrs[k];
+      else if (k === "class") n.className = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    for (var i = 2; i < arguments.length; i++) { var c = arguments[i]; if (c != null) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); }
+    return n;
+  }
+  function svg(tag, attrs) { var n = document.createElementNS("http://www.w3.org/2000/svg", tag); Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); }); return n; }
+  function count(n) { return n == null ? "–" : Number(n).toLocaleString("en-US"); }
+  function pct(x) { return Math.round(x * 100) + "%"; }
+  function bytes(n) {
+    if (n == null) return "–";
+    var u = ["B", "KB", "MB", "GB"], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i];
+  }
+  function save() { try { var o = {}; Object.keys(on).forEach(function (k) { o[k] = Array.from(on[k]); }); localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* private window */ } }
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(function () { t.classList.remove("on"); }, 1800); }
+  function copy(text, ok) {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { toast(ok); }, function () { fallback(text); });
+    else fallback(text);
+  }
+  function fallback(text) { var w = $("fallback-wrap"), t = $("fallback"); w.classList.remove("hidden"); t.value = text; t.focus(); t.select(); toast("Copy the selected text (Ctrl+C)"); }
+  function gmailLink(q) { return "https://mail.google.com/mail/u/0/#search/" + encodeURIComponent(q); }
+
+  function bars(target, rows, legend) {
+    var box = $(target), max = 0;
+    rows.forEach(function (r) { max = Math.max(max, r.value + (r.value2 || 0)); });
+    if (!rows.length) { box.appendChild(el("div", { "class": "sub", text: "Nothing to show." })); return; }
+    rows.forEach(function (r) {
+      var track = el("div", { "class": "bar-track" });
+      var w = max ? r.value / max * 100 : 0, w2 = max && r.value2 ? r.value2 / max * 100 : 0;
+      track.appendChild(el("div", { "class": "bar-fill", style: "width:" + w.toFixed(2) + "%" }));
+      if (w2) track.appendChild(el("div", { "class": "bar-fill second", style: "left:" + w.toFixed(2) + "%;width:" + w2.toFixed(2) + "%" }));
+      box.appendChild(el("div", { "class": "bar-row", title: r.title || r.label + ": " + r.text }, el("div", { "class": "bar-label", text: r.label }), track, el("div", { "class": "bar-val", text: r.text })));
+    });
+    if (legend) box.appendChild(el("div", { "class": "legend" }, el("span", null, el("i", { style: "background:var(--bar)" }), legend[0]), el("span", null, el("i", { style: "background:var(--bar-2)" }), legend[1])));
+  }
+
+  // ---- header and summary
+  var src = (R.sources || []).join(" + ") || "unknown source";
+  $("subtitle").textContent = [R.account, R.window.start + " to " + R.window.end, "from " + src, R.complete ? "" : "sampled, not every email"].filter(Boolean).join(" · ");
+  if (R.headline || (R.highlights || []).length) {
+    $("summary").classList.remove("hidden");
+    $("headline").textContent = R.headline || "";
+    (R.highlights || []).forEach(function (h) { $("highlights").appendChild(el("li", { text: h })); });
+  }
+  var tiles = [
+    ["Emails", count(T.messages), "in " + R.daily.length + " days"],
+    ["Unread", T.messages ? pct(T.unread / T.messages) : "–", count(T.unread) + " emails"],
+    ["Newsletters", count(T.newsletters), "senders with an unsubscribe option or bulk mail"],
+    ["Never opened", count(T.never_opened), "senders, " + R.thresholds.never_opened_min + "+ emails each, all unread"],
+    ["Suspicious", count(T.suspicious), "senders flagged as spam or phishing"]
+  ];
+  if (R.storage && R.storage.used_gb != null) tiles.push(["Storage", R.storage.used_gb + " GB", "of " + (R.storage.total_gb || "?") + " GB used (shared with Drive and Photos)"]);
+  else tiles.push(["Big emails", count(T.big_messages), bytes(T.big_bytes) + " in emails over " + R.thresholds.big_mb + " MB"]);
+  tiles.forEach(function (t) { $("tiles").appendChild(el("div", { "class": "card tile" }, el("div", { "class": "label", text: t[0] }), el("div", { "class": "num", text: t[1] }), el("div", { "class": "note", text: t[2] }))); });
+
+  // ---- daily columns (inline SVG)
+  (function () {
+    var d = R.daily, n = d.length, max = 1, sum = 0;
+    d.forEach(function (x) { max = Math.max(max, x[1]); sum += x[1]; });
+    $("daily-sub").textContent = n ? "About " + Math.round(sum / n) + " a day. Busiest day: " + count(max) + "." : "";
+    var W = 1000, H = 150, pad = 18, gap = 2, bw = n ? Math.max(1, (W - gap * (n - 1)) / n) : 0;
+    var s = svg("svg", { "class": "cols", viewBox: "0 0 " + W + " " + (H + pad), preserveAspectRatio: "none", role: "img", "aria-label": "Emails per day, " + n + " days" });
+    s.appendChild(svg("line", { x1: 0, x2: W, y1: H + 0.5, y2: H + 0.5 }));
+    d.forEach(function (x, i) {
+      var h = x[1] / max * (H - 6), xx = i * (bw + gap);
+      var day = new Date(x[0] + "T12:00:00Z").getUTCDay();
+      var g = svg("g", {});
+      var title = svg("title", {}); title.textContent = x[0] + ": " + x[1] + " emails";
+      var col = svg("rect", { "class": "col" + (day === 0 || day === 6 ? " weekend" : ""), x: xx, y: H - h, width: bw, height: Math.max(h, x[1] ? 1 : 0), rx: Math.min(2, bw / 2) });
+      var hit = svg("rect", { "class": "hit", x: xx, y: 0, width: bw + gap, height: H });
+      hit.appendChild(title.cloneNode(true)); col.appendChild(title);
+      g.appendChild(hit); g.appendChild(col); s.appendChild(g);
+      if (x[0].slice(8) === "01" || i === 0) { var t = svg("text", { x: xx, y: H + 14 }); t.textContent = x[0].slice(5); s.appendChild(t); }
+    });
+    $("chart-daily").appendChild(s);
+  })();
+  bars("chart-cats", (R.categories || []).map(function (c) {
+    return { label: c[0], value: c[1] - c[2], value2: c[2], text: count(c[1]) + " · " + (c[1] ? pct(c[2] / c[1]) : "0%") + " unread" };
+  }), ["read", "unread"]);
+  bars("chart-top", (R.top_senders || []).map(function (s) {
+    return { label: s.name || s.email, value: s.count - s.unread, value2: s.unread, text: count(s.count), title: s.email + ": " + s.count + " emails, " + s.unread + " unread" };
+  }), ["read", "unread"]);
+
+  // ---- tickable lists
+  var renderers = [];
+  LISTS.forEach(function (L) {
+    var key = L[0], items = DATA[key] || [];
+    if (!items.length) return;
+    var list = el("ul", { "class": "items" }), meta = el("span", { "class": "meta" });
+    var tick = el("button", { "class": "btn", type: "button", text: "Tick all" });
+    var untick = el("button", { "class": "btn", type: "button", text: "Untick all" });
+    tick.addEventListener("click", function () { items.forEach(function (x) { on[key].add(x.n); }); save(); update(); });
+    untick.addEventListener("click", function () { on[key].clear(); save(); update(); });
+    function render() {
+      list.textContent = "";
+      items.forEach(function (x) {
+        var cb = el("input", { type: "checkbox", "aria-label": "Approve " + L[1] + ": " + (x.email || x.title) });
+        cb.checked = on[key].has(x.n);
+        cb.addEventListener("change", function () { if (cb.checked) on[key].add(x.n); else on[key].delete(x.n); save(); update(); });
+        var body, side;
+        if (key === "steps") {
+          body = el("div", null, el("div", { "class": "who", text: x.n + ". " + x.title }), el("div", { "class": "why", text: x.why }), el("div", { "class": "why", text: "How: " + x.how }), el("div", { "class": "why", text: "Your assistant: " + x.agent }));
+          x.queries.forEach(function (q) {
+            var b = el("button", { "class": "btn small", type: "button", text: "Copy" });
+            b.addEventListener("click", function () { copy(q, "Search copied"); });
+            body.appendChild(el("div", { "class": "query" }, el("code", { text: q }), b, el("a", { "class": "btn small", href: gmailLink(q), target: "_blank", rel: "noopener noreferrer", text: "Open in Gmail" })));
+          });
+          side = el("div", { "class": "side", text: x.count != null ? count(x.count) + " emails" : "" });
+        } else {
+          var how = key === "unsubscribe" ? (x.gmail_unsub ? "Gmail Unsubscribe" + (x.one_click ? " (one click)" : "") : "no Unsubscribe offered: filter instead") :
+                    key === "filter" ? "filter to 'Newsletters'" : (x.why || []).join(", ");
+          body = el("div", null, el("div", { "class": "who", text: x.name || x.email }), el("div", { "class": "addr", text: x.email }),
+            el("div", { "class": "why" }, el("span", { "class": "dot " + (key === "spam" || x.read_rate === 0 ? "red" : "green") }), " " + how + (x.subject ? " · latest: " + x.subject : "")));
+          side = el("div", { "class": "side" }, count(x.count) + " emails", el("br"), pct(x.read_rate) + " opened", el("br"), x.last || "");
+        }
+        list.appendChild(el("li", { "class": "item" }, cb, body, side));
+      });
+      meta.textContent = on[key].size + " of " + items.length + " ticked";
+    }
+    $("lists").appendChild(el("div", { "class": "card", style: "margin-top:12px" },
+      el("div", { "class": "group-head" }, el("h3", { text: L[1] }), meta), el("div", { "class": "group-desc", text: L[2] }),
+      el("div", { "class": "toolbar" }, tick, untick), list));
+    renderers.push(render);
+  });
+  $("tick-all").addEventListener("click", function () { Object.keys(on).forEach(function (k) { DATA[k].forEach(function (x) { on[k].add(x.n); }); }); save(); update(); });
+  $("untick-all").addEventListener("click", function () { Object.keys(on).forEach(function (k) { on[k].clear(); }); save(); update(); });
+
+  // ---- tables
+  function row(tb, cells) { tb.appendChild(el("tr", null, cells.map(function (c) { return typeof c === "string" ? el("td", { text: c }) : c; }).reduce(function (f, c) { f.appendChild(c); return f; }, document.createDocumentFragment()))); }
+  var nv = $("never").tBodies[0];
+  $("never-sub").textContent = R.never_opened.length ? "Every email from these senders in this window is still unread." : "None: every regular sender got opened at least once.";
+  R.never_opened.forEach(function (s) { row(nv, [el("td", null, el("div", { text: s.name || s.email }), el("div", { "class": "mono sub", text: s.email })), el("td", { "class": "num", text: count(s.count) }), el("td", { "class": "num", text: s.last }), s.subject]); });
+  var bg = $("big").tBodies[0];
+  $("big-sub").textContent = R.big.length ? count(T.big_messages) + " emails over " + R.thresholds.big_mb + " MB, " + bytes(T.big_bytes) + " together." : "No emails over " + R.thresholds.big_mb + " MB in this window.";
+  R.big.forEach(function (b) { row(bg, [el("td", { "class": "num", text: bytes(b.bytes) }), b.name || b.from, b.subject]); });
+  var su = $("sus").tBodies[0];
+  R.suspicious_examples.forEach(function (m) { row(su, [el("td", null, el("span", { "class": "dot red" }), " " + (m.name || m.from), el("div", { "class": "mono sub", text: m.from })), m.subject, m.why.join(", ")]); });
+  if (!R.suspicious_examples.length) row(su, [el("td", { colspan: "3", "class": "sub", text: "Nothing suspicious found." })]);
+
+  var th = R.thresholds;
+  $("method").textContent = "Read from " + src + ", without changing anything. " + (R.complete ? "Every email in the window was counted. " : "Not every email was read one by one; some numbers come from Gmail's search counts. ") +
+    "Unsubscribe: newsletters opened " + pct(th.unsubscribe_max_read) + " of the time or less, " + th.unsubscribe_min_count + "+ emails. Filter: opened up to " + pct(th.filter_max_read) + ", " + th.filter_min_count + "+ emails. " +
+    "'Opened' means Gmail no longer marks it unread. This report holds senders, subject lines and counts only, never message bodies. 'Open in Gmail' links go to mail.google.com only and open your first signed-in account. " + (R.agent_notes || "");
+
+  // ---- approval
+  function ranges(ids) {
+    ids = ids.slice().sort(function (a, b) { return a - b; });
+    var out = [], i = 0;
+    while (i < ids.length) { var j = i; while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++; out.push(i === j ? "" + ids[i] : ids[i] + "-" + ids[j]); i = j + 1; }
+    return out.join(",") || "none";
+  }
+  function approvalText() {
+    var note = $("notes").value.trim();
+    return "INBOX-APPROVE report=" + R.report_id + " unsubscribe=" + ranges(Array.from(on.unsubscribe)) + " filter=" + ranges(Array.from(on.filter)) +
+      " spam=" + ranges(Array.from(on.spam)) + " steps=" + ranges(Array.from(on.steps)) + (note ? "\nnote: " + note.replace(/\s+/g, " ") : "");
+  }
+  function update() {
+    renderers.forEach(function (r) { r(); });
+    $("dock-sum").textContent = on.unsubscribe.size + " unsubscribe · " + on.filter.size + " filter · " + on.spam.size + " report · " + on.steps.size + " steps";
+  }
+  $("copy").addEventListener("click", function () { copy(approvalText(), "Approval copied. Paste it to your assistant."); });
+  $("download").addEventListener("click", function () {
+    var pick = {}; Object.keys(on).forEach(function (k) { pick[k] = DATA[k].filter(function (x) { return on[k].has(x.n); }); });
+    var body = JSON.stringify({ schema: "inbox-cleanup/approval@1", report_id: R.report_id, note: $("notes").value.trim(), approved: pick }, null, 1);
+    try {
+      var url = URL.createObjectURL(new Blob([body], { type: "application/json" }));
+      var a = el("a", { href: url, download: "inbox-approval-" + R.report_id + ".json" });
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+    } catch (e) { fallback(body); }
+  });
+  $("toggle-notes").addEventListener("click", function () { $("notes-wrap").classList.toggle("hidden"); });
+  update();
+})();
+</script>
+</body>
+</html>
