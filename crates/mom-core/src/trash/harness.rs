@@ -64,10 +64,13 @@ struct Source {
     empty_only: bool,
     /// Everything found here is one thing to decide about, so one item (forty found.NNN folders).
     together: bool,
+    /// The app makes this again by itself the next time it starts (a cache of its own code), so
+    /// the newest one is kept because deleting it frees nothing, and mom says so.
+    remade: bool,
 }
 
 fn src(dir: PathBuf, kind: (&'static str, &'static str), pick: fn(&str) -> bool) -> Source {
-    Source { dir, kind, pick, name: |_, rel| rel.join(" / "), depth: 0, files_only: false, keep_newest: 0, sessions: false, empty_only: false, together: false }
+    Source { dir, kind, pick, name: |_, rel| rel.join(" / "), depth: 0, files_only: false, keep_newest: 0, sessions: false, empty_only: false, together: false, remade: false }
 }
 
 impl Source {
@@ -97,6 +100,10 @@ impl Source {
     }
     fn together(mut self) -> Source {
         self.together = true;
+        self
+    }
+    fn remade(mut self) -> Source {
+        self.remade = true;
         self
     }
 }
@@ -516,7 +523,7 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
         let r = roaming.join(folder);
         let storage = r.join("User").join("globalStorage");
         list.push(agent(name, Spot::Apps, vec![r.clone()]).junk(vec![
-            src(r.join("CachedData"), ("Old build", "old builds"), any).keep_newest(1),
+            src(r.join("CachedData"), ("Old build's cache", "old builds' caches"), any).keep_newest(1).remade(),
             src(r.join("CachedExtensionVSIXs"), ("Downloaded extension package", "downloaded extension packages"), any),
             src(r.join("Crashpad").join("reports"), ("Crash report", "crash reports"), any),
             src(r.join("logs"), ("Logs", "logs"), any),
@@ -890,10 +897,12 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             continue;
         }
         if newest {
-            let gone = c.age >= NEWEST_UNUSED && !MANY_APPS.contains(&a.name) && !installed().has(a.name);
+            let one_app = !MANY_APPS.contains(&a.name);
+            let gone = one_app && c.age >= NEWEST_UNUSED && !installed().has(a.name);
             f.cands.push(if gone {
-                let r = format!("{} isn't installed any more, and this was last touched {} ago", a.name, ago(c.age));
-                c.kept_but_tickable(r)
+                c.kept_but_tickable(format!("{} isn't installed any more", a.name))
+            } else if s.remade && one_app {
+                c.verdict(false, format!("{} makes it again when it starts", a.name))
             } else {
                 c.verdict(false, NEWEST)
             });
@@ -933,7 +942,7 @@ fn version_in(name: &str) -> Option<Vec<u64>> {
 }
 
 /// What keeps the newest of each sort.
-const NEWEST: &str = "The version the app uses now. Mom never offers it";
+const NEWEST: &str = "The app uses this one";
 
 /// The newest of each sort is locked because the app is using it. An app that isn't installed
 /// any more uses nothing: once its newest has gone untouched this long as well, it can be ticked.
@@ -1171,16 +1180,19 @@ mod tests {
         let mut going: Vec<&str> = apps.items.iter().filter(|i| i.goes).map(|i| i.name.as_str()).collect();
         going.sort();
         assert_eq!(going, vec!["VS Code · .8f2b1c", "VS Code · aaa"]);
-        assert_eq!(apps.items.iter().find(|i| i.name == "VS Code · bbb").unwrap().reason, super::NEWEST);
+        // The newest is a cache the editor would only make again: it stays, and says so.
+        let newest = apps.items.iter().find(|i| i.name == "VS Code · bbb").unwrap();
+        assert_eq!((newest.goes, newest.optional, newest.reason.as_str()), (false, false, "VS Code makes it again when it starts"));
+        assert_eq!(apps.items.iter().find(|i| i.name == "VS Code · aaa").unwrap().sub.as_deref(), Some("Old build's cache, 1 file"));
         // The newest build of an editor that was uninstalled over a year ago: kept, but it can be
         // ticked now. Of one that is still installed, never, however long it has sat untouched.
         write(&paths.appdata.join("Kiro").join("CachedData").join("only").join("x.bin"), 900, 400);
         let kiro = |ctx: &crate::trash::TrashCtx| measure("app-leftovers", ctx).unwrap().items.into_iter().find(|i| i.name == "Kiro · only").unwrap();
         let gone = kiro(&ctx);
-        assert!(!gone.goes && gone.optional && gone.reason.starts_with("Kiro isn't installed any more"), "{gone:?}");
+        assert!(!gone.goes && gone.optional && gone.reason == "Kiro isn't installed any more", "{gone:?}");
         ctx.installed = Some(crate::installed::Installed::with(&["Kiro"]));
         let here = kiro(&ctx);
-        assert_eq!((here.goes, here.optional, here.reason.as_str()), (false, false, super::NEWEST));
+        assert_eq!((here.goes, here.optional, here.reason.as_str()), (false, false, "Kiro makes it again when it starts"));
         ctx.installed = Some(crate::installed::Installed::with(&[]));
         let _ = std::fs::remove_dir_all(paths.appdata.join("Kiro"));
 

@@ -381,11 +381,12 @@ const DEFS: &[Def] = &[
     },
     Def {
         id: "app-leftovers",
-        label: "Old app builds and installers",
-        detail: "Old builds, downloaded extension packages, crash reports and update installers editors keep.",
-        what: "VS Code and the editors built on it (Cursor, Windsurf, Kiro, Trae, Qoder, Antigravity) keep a copy of \
-               every build they've run, every extension package they downloaded, crash reports and logs. Apps that \
-               update themselves keep the last installer they downloaded. None of it is used again.",
+        label: "Old app versions and updates",
+        detail: "Caches of old versions, downloaded extension packages, crash reports and update installers apps keep.",
+        what: "VS Code and the editors built on it (Cursor, Windsurf, Kiro, Trae, Qoder, Antigravity) keep a start-up \
+               cache for every build they've run, every extension package they downloaded, crash reports and logs. \
+               Apps that update themselves keep the versions they updated from and the last installer they \
+               downloaded. None of it is used again.",
         group: "dev",
         action: "delete",
         safety: "safe",

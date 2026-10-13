@@ -24,7 +24,7 @@ The [README](../README.md) is the short version. This is everything, at length.
       <ul>
         <li>Claude Code's scratch from finished sessions, named after what each session was doing</li>
         <li>what agent tools leave lying around: logs, temp files, undo snapshots, pasted text, caches and old Cursor worktrees, from Claude Code and the Claude app, Codex and its app, OpenCode, OpenClaw, Hermes, Pi, Copilot, Gemini, Qwen, Goose, Cline, Roo, Kilo, Continue, Kimi, Vibe, Junie, Mux, Crush, Droid, Zed, Warp, Windsurf, Kiro, Aider and more. All of it is kept for 67 days first, and nothing they need (chats, sessions, settings, skills, memory) is ever touched</li>
-        <li>old builds, downloaded extension packages and crash reports VS Code and its forks keep, older versions Squirrel apps (Slack, Discord, GitHub Desktop) and Chrome keep, and the update installers apps leave behind</li>
+        <li>caches of old builds, downloaded extension packages and crash reports VS Code and its forks keep, older versions Squirrel apps (Slack, Discord, GitHub Desktop) and Chrome keep, and the update installers apps leave behind</li>
         <li>shaders your graphics driver compiled for games you no longer play, games' logs and crash reports (never saves), and developer caches with no clean-up of their own (Dart, Flutter, Cypress, act, Firebase, VS Code's C++ and TypeScript caches)</li>
         <li>old <code>node_modules</code> and <code>target</code> folders in projects you stopped working on</li>
         <li>npm, bun, pip, uv, cargo and other developer caches. npx downloads wait 67 days (npx never notes when a package last ran) and stay if your shell history or an MCP server set-up runs them; Hugging Face models only go if you tick them</li>

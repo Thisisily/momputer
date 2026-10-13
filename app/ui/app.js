@@ -1988,10 +1988,12 @@ in ${x.cwd}`)}">
   }
 
   function itemRow(s, i, picking, label) {
-    const sub = [i.sub, i.reason || (i.ageSecs ? `changed ${ageLong(i.ageSecs)} ago` : "")].filter(Boolean).join(" · ");
+    // One that stays says why first: that's the question, and the end of a long line is cut off.
+    const why = i.reason || (i.ageSecs ? `changed ${ageLong(i.ageSecs)} ago` : "");
+    const sub = (i.goes ? [i.sub, why] : [why, i.sub]).filter(Boolean).join(" · ");
     const id = `it-${hash(i.path || i.name)}`;
     const shown = label || i.name;
-    const main = `<span class="item-main"><span class="item-name"${shown !== i.name ? ` title="${esc(i.name)}"` : ""}>${esc(shown)}</span>${sub ? `<span class="item-sub">${esc(sub)}</span>` : ""}</span>`;
+    const main = `<span class="item-main"><span class="item-name"${shown !== i.name ? ` title="${esc(i.name)}"` : ""}>${esc(shown)}</span>${sub ? `<span class="item-sub" title="${esc(sub)}">${esc(sub)}</span>` : ""}</span>`;
     // Docker's things aren't files: no folder button for them.
     const reveal = i.path && s.action !== "tool" && !i.path.startsWith("docker:") ? `<button class="mini-btn" data-act="reveal-path" data-path="${esc(i.path)}" title="Show in File Explorer" aria-label="Show ${esc(i.name)} in File Explorer">${ICON.folder}</button>` : "";
     const size = `<span class="item-size num">${bytes(i.bytes)}</span>`;
