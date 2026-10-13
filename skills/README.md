@@ -13,10 +13,20 @@ Agent Skills that tidy one room of your digital life each. They all work the sam
 | [`backup-checkup`](backup-checkup) | Answers "if this disk died today, what would I lose?": which folders and code have a second copy, and which don't. |
 | [`desktop-icons`](desktop-icons) | Tidies a cluttered Windows desktop: dead and duplicate shortcuts, loose files and installers. It reads shortcuts without ever running one, and moves only what you tick, with an undo. |
 | [`rename-documents`](rename-documents) | Gives scans and downloads names you can find later (`scan0001.pdf` becomes `2024-03-14 Lanternfall invoice 1182.pdf`). Old and new side by side; renames only what you tick, with an undo. |
+| [`subscription-audit`](subscription-audit) | Finds what you pay for again and again and what it costs a year, from Gmail receipts and bank statement files you export. You do the cancelling. |
+| [`bookmark-cleanup`](bookmark-cleanup) | Tidies browser bookmarks: duplicates, empty folders, never-opened and dead links. It never touches the browser's own files; you import the new file. |
 
 ## Install
 
-Copy a skill's folder to:
+In Claude Code, all of them in one line:
+
+```
+/plugin install momputer-skills --marketplace Thisisily/momputer
+```
+
+Or just one: `/plugin install tidy-folders --marketplace Thisisily/momputer`.
+
+Anywhere else, copy a skill's folder to:
 
 - Claude Code: `~/.claude/skills/<name>/` (or `.claude/skills/` in a project)
 - Codex: `~/.agents/skills/<name>/` (or `.agents/skills/` in a repo)

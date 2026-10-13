@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subscriptions report</title>
+<meta name="description" content="A read-only look at what is paid for again and again, what it costs a year, and a plan to approve item by item.">
+<meta name="referrer" content="no-referrer">
+<style>
+:root {
+  --bg: #f5f5f3; --card: #ffffff; --ink: #0b0b0b; --ink-2: #4a4a4a; --muted: #8a8a8a; --line: #e2e2de;
+  --bar: #0b0b0b; --bar-2: #bdbdb8; --red: #d71921; --green: #1e9e57; --focus: #0b0b0b;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+    --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+  --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+body { padding: 0 16px 150px; }
+main { max-width: 1080px; margin: 0 auto; }
+a { color: inherit; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.label { font: 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); vertical-align: middle; flex: none; }
+.dot.red { background: var(--red); } .dot.green { background: var(--green); } .dot.ink { background: var(--ink); }
+header.top { padding: 40px 0 20px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between; }
+h1 { font: 600 34px/1.1 var(--sans); letter-spacing: -.02em; margin: 6px 0 0; }
+h2 { font: 600 19px/1.3 var(--sans); margin: 0; }
+h3 { font: 600 15px/1.3 var(--sans); margin: 0; }
+.sub { color: var(--ink-2); }
+section { margin-top: 28px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; min-width: 0; }
+.grid { display: grid; gap: 12px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.tile .num { font: 500 24px/1.1 var(--mono); letter-spacing: -.02em; margin-top: 8px; overflow-wrap: anywhere; }
+.tile .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.wide { grid-column: 1 / -1; }
+.highlights { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); }
+.headline { font-size: 17px; margin: 0; }
+.warn { margin-top: 10px; font-size: 13px; color: var(--ink-2); }
+.bars { display: grid; gap: 8px; margin-top: 14px; }
+.bar-row { display: grid; grid-template-columns: minmax(80px, 34%) 1fr minmax(64px, auto); gap: 10px; align-items: center; }
+.bar-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+svg.hbar { display: block; width: 100%; height: 12px; }
+svg.hbar rect { fill: var(--bar); }
+.bar-val { font: 12px/18px var(--mono); color: var(--ink-2); white-space: nowrap; text-align: right; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+svg.cols { width: 100%; height: 150px; display: block; margin-top: 14px; overflow: visible; }
+svg.cols rect.col { fill: var(--bar); }
+svg.cols rect.col.part { fill: var(--bar-2); }
+svg.cols rect.hit { fill: transparent; }
+svg.cols rect.hit:hover + rect.col { opacity: .7; }
+svg.cols line { stroke: var(--line); }
+.col-labels { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); margin-top: 4px; font: 10px var(--mono); color: var(--muted); text-align: center; }
+.cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-top: 14px; }
+.cal .wd { font: 10px var(--mono); color: var(--muted); text-align: center; text-transform: uppercase; letter-spacing: .08em; padding-bottom: 2px; }
+.cal .day { border: 1px solid var(--line); border-radius: 8px; min-height: 46px; padding: 4px 5px; font: 11px/1.3 var(--mono); color: var(--muted); overflow: hidden; }
+.cal .day.past { opacity: .4; }
+.cal .day.today { border-color: var(--ink); }
+.cal .day.has { color: var(--ink); }
+.cal .day .amt { display: block; margin-top: 3px; white-space: nowrap; }
+.cal .day .dot { width: 6px; height: 6px; margin-right: 3px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px; text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--ink); }
+.btn.small { padding: 2px 10px; font-size: 12px; }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.group-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.group-head .meta { color: var(--muted); font: 12px var(--mono); }
+.group-desc { color: var(--ink-2); font-size: 13px; margin: 6px 0 10px; }
+.acts { margin-top: 12px; border-top: 1px solid var(--line); }
+.act { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.act .what { font-weight: 600; font-size: 14px; }
+.act .desc { color: var(--muted); font-size: 12px; }
+.act .meta { color: var(--muted); font: 12px var(--mono); margin-right: 4px; }
+.items { list-style: none; margin: 0; padding: 0; }
+.sub-item { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.sub-item:last-child { border-bottom: 0; padding-bottom: 0; }
+.sub-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 16px; align-items: baseline; }
+.sub-name { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; min-width: 0; }
+.sub-price { font: 500 15px var(--mono); white-space: nowrap; }
+.sub-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 16px; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.sub-meta .mono { font-size: 12px; }
+svg.spark { display: block; margin-top: 10px; height: 28px; max-width: 100%; }
+svg.spark rect { fill: var(--bar-2); }
+svg.spark rect.now { fill: var(--bar); }
+.spark-note { color: var(--muted); font: 11px var(--mono); margin-top: 3px; }
+.flags { list-style: none; margin: 8px 0 0; padding: 0; font-size: 13px; color: var(--ink-2); }
+.flags li { padding-left: 14px; position: relative; margin-top: 3px; overflow-wrap: anywhere; }
+.flags .dot { position: absolute; left: 0; top: 7px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px 4px 8px; font-size: 13px; cursor: pointer; user-select: none; }
+.chip input { width: 15px; height: 15px; margin: 0; accent-color: var(--ink); }
+.chip.on { border-color: var(--ink); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 8px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+td.num { font-family: var(--mono); white-space: nowrap; }
+td.name { overflow-wrap: anywhere; }
+.scroll-x { overflow-x: auto; }
+.query { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.query code { font: 12px var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; word-break: break-all; }
+.dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 12px 16px; z-index: 5; }
+.dock-in { max-width: 1080px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.dock .sum { font: 13px var(--mono); }
+.dock textarea { width: 100%; min-height: 60px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--bg); }
+.toast { position: fixed; left: 50%; bottom: 110px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 6; max-width: calc(100% - 32px); }
+.toast.on { opacity: 1; }
+.hidden { display: none !important; }
+@media (max-width: 760px) { .two { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 560px) {
+  h1 { font-size: 28px; }
+  .card { padding: 14px; }
+  .bar-row { grid-template-columns: 1fr auto; gap: 2px 10px; }
+  .bar-row svg.hbar { grid-column: 1 / -1; grid-row: 2; }
+  .act { grid-template-columns: 1fr; }
+  .cal { gap: 3px; }
+  .cal .day { padding: 3px; min-height: 42px; font-size: 10px; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <div class="label"><span class="dot green"></span>&nbsp; Read-only review · nothing was cancelled, paid or changed</div>
+      <h1>Subscriptions</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="label"><span class="dot green"></span> fine &nbsp; <span class="dot red"></span> needs a look</div>
+  </header>
+
+  <section id="summary" class="card hidden">
+    <p class="headline" id="headline"></p>
+    <ul class="highlights" id="highlights"></ul>
+    <div class="warn hidden" id="stale"></div>
+  </section>
+
+  <section class="grid tiles" id="tiles"></section>
+
+  <section class="grid two">
+    <div class="card wide"><h2>Paid each month</h2><div class="sub" id="months-sub"></div><div id="chart-months"></div><div class="col-labels" id="month-labels"></div></div>
+    <div class="card"><h2>By category</h2><div class="sub" id="cats-sub"></div><div class="bars" id="chart-cats"></div></div>
+    <div class="card"><h2>Coming up</h2><div class="sub" id="cal-sub"></div><div class="cal" id="calendar"></div>
+      <div class="legend"><span><span class="dot ink"></span>&nbsp; the usual charge</span><span><span class="dot red"></span>&nbsp; a yearly renewal or a trial ending</span></div></div>
+    <div class="card wide"><h2>Next eight weeks</h2><div class="scroll-x"><table id="upcoming"><thead><tr><th>When</th><th>What</th><th>Amount</th><th>Kind</th></tr></thead><tbody></tbody></table></div></div>
+  </section>
+
+  <section>
+    <div class="group-head"><h2>The plan</h2><span class="label">Tick what you want. Nothing happens until you send the approval back.</span></div>
+    <div class="card" style="margin-top:12px">
+      <div class="group-desc" style="margin-top:0">Your assistant never cancels, pays, logs in or types card details. A tick asks for help with that one subscription: the steps, a draft, or a price to compare. You do the cancelling.</div>
+      <div class="toolbar">
+        <button class="btn" id="tick-all" type="button">Tick all</button>
+        <button class="btn" id="untick-all" type="button">Untick all</button>
+        <button class="btn" id="tick-suggested" type="button">Tick suggested only</button>
+      </div>
+      <div class="acts" id="acts"></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="group-head"><h3>What you pay for</h3><span class="meta" id="items-meta"></span></div>
+      <div class="group-desc">Each bar is one charge, oldest on the left. Tick what you want done about each one.</div>
+      <ul class="items" id="items"></ul>
+    </div>
+  </section>
+
+  <section class="card hidden" id="stopped-card">
+    <h2>Stopped or cancelled</h2>
+    <div class="sub">These used to come round and haven't lately. They are not counted above.</div>
+    <div class="scroll-x"><table id="stopped"><thead><tr><th>What</th><th>Was</th><th>Last charge</th><th>Why it's here</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card">
+    <h2>How this was made</h2>
+    <div class="sub" id="method"></div>
+    <div id="searches"></div>
+  </section>
+</main>
+
+<div class="dock" role="region" aria-label="Approval">
+  <div class="dock-in">
+    <div class="sum" id="dock-sum">0 ticked</div>
+    <div class="toolbar">
+      <button class="btn" id="toggle-notes" type="button">Add a note</button>
+      <button class="btn primary" id="copy" type="button">Copy approval</button>
+    </div>
+  </div>
+  <div class="dock-in hidden" id="notes-wrap"><textarea id="notes" placeholder="Anything to add? e.g. number 3 is shared with my sister, keep it"></textarea></div>
+  <div class="dock-in hidden" id="fallback-wrap"><textarea id="fallback" readonly aria-label="Approval text to copy"></textarea></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script id="subs-data" type="application/json">__SUBSCRIPTIONS_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var R = JSON.parse(document.getElementById("subs-data").textContent);
+  var T = R.totals, CUR = R.currency, ITEMS = R.items || [];
+  var ACTIONS = [
+    ["cancel", "Cancel", "You get the steps to cancel it yourself. Nothing is cancelled for you."],
+    ["draft", "Draft a cancellation e-mail", "Written as a draft for you to read and send. Never sent for you."],
+    ["downgrade", "Downgrade", "Your assistant looks up the cheaper plans and what you would save."],
+    ["yearly", "Switch to yearly", "Your assistant looks up the yearly price and what you would save."],
+    ["check", "Check it's still used", "Your assistant asks you about it and says where to see your last use."]
+  ];
+  var CHIP = { cancel: "Cancel", draft: "Draft e-mail", downgrade: "Downgrade", yearly: "Go yearly", check: "Still used?" };
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var PER = { "weekly": "a week", "fortnightly": "every two weeks", "every 4 weeks": "every four weeks", "monthly": "a month", "every 2 months": "every two months", "quarterly": "every three months", "half-yearly": "every six months", "yearly": "a year" };
+  var KEY = "subscriptions-report:" + R.report_id;
+  var on = {};
+  ACTIONS.forEach(function (a) { on[a[0]] = new Set(); });
+  function offers(x, k) { return (x.offers || []).indexOf(k) >= 0; }
+  function suggested() { ACTIONS.forEach(function (a) { on[a[0]].clear(); }); ITEMS.forEach(function (x) { (x.suggest || []).forEach(function (k) { if (on[k] && offers(x, k)) on[k].add(x.n); }); }); }
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { saved = null; }
+  if (saved && typeof saved === "object") {
+    ACTIONS.forEach(function (a) { (Array.isArray(saved[a[0]]) ? saved[a[0]] : []).forEach(function (n) { var x = ITEMS[n - 1]; if (x && x.n === n && offers(x, a[0])) on[a[0]].add(n); }); });
+  } else suggested();
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "text") n.textContent = attrs[k];
+      else if (k === "class") n.className = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    for (var i = 2; i < arguments.length; i++) { var c = arguments[i]; if (c != null) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); }
+    return n;
+  }
+  function svg(tag, attrs) { var n = document.createElementNS("http://www.w3.org/2000/svg", tag); Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); }); return n; }
+  var fmts = {};
+  function money(x, cur, whole) {
+    if (x == null) return "–";
+    cur = cur || CUR;
+    if (typeof x !== "number" || !isFinite(x)) return "–";
+    if (cur === "XXX" || !/^[A-Z]{3}$/.test(cur)) return x.toFixed(whole ? 0 : 2);
+    var k = cur + (whole ? 0 : 2);
+    // without "whole" the currency's own number of decimals is used: two for euros, three for dinars, none for yen
+    if (!(k in fmts)) { try { fmts[k] = new Intl.NumberFormat(undefined, whole ? { style: "currency", currency: cur, minimumFractionDigits: 0, maximumFractionDigits: 0 } : { style: "currency", currency: cur }); } catch (e) { fmts[k] = null; } }
+    return fmts[k] ? fmts[k].format(x) : cur + " " + x.toFixed(whole ? 0 : 2);
+  }
+  function parts(iso) { var p = String(iso || "").split("-"); return { y: +p[0], m: +p[1], d: +p[2] }; }
+  function fmtDate(iso, year) { if (!iso) return ""; var p = parts(iso); return p.d + " " + MONTHS[p.m - 1] + (year === false ? "" : " " + p.y); }
+  function plural(n, one, many) { return n + " " + (n === 1 ? one : many); }
+  function save() { try { var o = {}; Object.keys(on).forEach(function (k) { o[k] = Array.from(on[k]); }); localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* private window */ } }
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(function () { t.classList.remove("on"); }, 1800); }
+  function copy(text, ok) {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { toast(ok); }, function () { fallback(text); });
+    else fallback(text);
+  }
+  function fallback(text) { var w = $("fallback-wrap"), t = $("fallback"); w.classList.remove("hidden"); t.value = text; t.focus(); t.select(); toast("Copy the selected text (Ctrl+C)"); }
+  // The only links on this page: the fixed searches the script wrote, opened in Gmail.
+  function gmailLink(q) { return "https://mail.google.com/mail/u/0/#search/" + encodeURIComponent(q); }
+
+  // ---- header and summary
+  var src = (R.sources || []).join(" + ") || "the data gathered";
+  $("subtitle").textContent = [R.owner, "charges from " + fmtDate(R.window.start) + " to " + fmtDate(R.window.end), "from " + src].filter(Boolean).join(" · ");
+  if (R.headline || (R.highlights || []).length || R.stale) {
+    $("summary").classList.remove("hidden");
+    $("headline").textContent = R.headline || "";
+    (R.highlights || []).forEach(function (h) { $("highlights").appendChild(el("li", { text: h })); });
+    if (R.stale) { var st = $("stale"); st.classList.remove("hidden"); st.appendChild(el("span", { "class": "dot red" })); st.appendChild(document.createTextNode(" The newest charge here is from " + fmtDate(R.asof) + ", " + R.stale_days + " days ago. Anything since then isn't in this report.")); }
+  }
+  var others = (T.others || []).map(function (o) { return money(o.yearly, o.currency) + " a year"; }).join(", ");
+  var tiles = [
+    ["Each month", money(T.main.monthly), "across " + plural(T.main.count, "subscription", "subscriptions")],
+    ["Each year", money(T.main.yearly, CUR, true), others ? "plus " + others + " in other currencies" : "if nothing changes"],
+    ["Due in 30 days", money(T.due30.amount, CUR, true), plural(T.due30.count, "charge", "charges") + " on the way"],
+    ["Price rises", String(T.rises), T.rises ? "went up or are about to" : "none seen"],
+    ["Trials ending", String(T.trials), T.trials ? "start charging soon" : "none seen"],
+    ["Needs a look", String(T.look), "marked with a red dot below"]
+  ];
+  tiles.forEach(function (t) { $("tiles").appendChild(el("div", { "class": "card tile" }, el("div", { "class": "label", text: t[0] }), el("div", { "class": "num", text: t[1] }), el("div", { "class": "note", text: t[2] }))); });
+
+  // ---- paid each month (inline SVG columns, labels in HTML so they don't stretch)
+  (function () {
+    var d = R.months || [], n = d.length, max = 0, sum = 0, full = 0;
+    d.forEach(function (x, i) { max = Math.max(max, x[1]); if (i < n - 1) { sum += x[1]; full++; } });
+    $("months-sub").textContent = n ? "What the recurring charges added up to, month by month. The last column is the month so far." + (others ? " " + CUR + " only." : "") : "No charges to chart.";
+    if (!n) return;
+    var W = 1000, H = 130, gap = 10, bw = (W - gap * (n - 1)) / n;
+    var s = svg("svg", { "class": "cols", viewBox: "0 0 " + W + " " + (H + 2), preserveAspectRatio: "none", role: "img", "aria-label": "Recurring charges per month, " + n + " months" });
+    s.appendChild(svg("line", { x1: 0, x2: W, y1: H + 0.5, y2: H + 0.5 }));
+    d.forEach(function (x, i) {
+      var h = max ? x[1] / max * (H - 6) : 0, xx = i * (bw + gap), p = parts(x[0] + "-01");
+      var g = svg("g", {}), title = svg("title", {});
+      title.textContent = MONTHS[p.m - 1] + " " + p.y + ": " + money(x[1]);
+      var hit = svg("rect", { "class": "hit", x: xx, y: 0, width: bw + gap, height: H });
+      hit.appendChild(title);
+      g.appendChild(hit);
+      g.appendChild(svg("rect", { "class": "col" + (i === n - 1 ? " part" : ""), x: xx, y: H - h, width: bw, height: Math.max(h, x[1] ? 1 : 0) }));
+      s.appendChild(g);
+      $("month-labels").appendChild(el("span", { text: MONTHS[p.m - 1] }));
+    });
+    $("chart-months").appendChild(s);
+  })();
+
+  // ---- by category (inline SVG bars)
+  (function () {
+    var rows = R.categories || [], box = $("chart-cats"), max = 0;
+    rows.forEach(function (c) { max = Math.max(max, c[1]); });
+    $("cats-sub").textContent = rows.length ? "A year of each kind, at today's prices." : "";
+    if (!rows.length) { box.appendChild(el("div", { "class": "sub", text: "Nothing recurring was found." })); return; }
+    rows.forEach(function (c) {
+      var s = svg("svg", { "class": "hbar", viewBox: "0 0 100 12", preserveAspectRatio: "none", role: "img", "aria-label": c[0] + ": " + money(c[1]) + " a year" });
+      s.appendChild(svg("rect", { x: 0, y: 1, width: max ? Math.max(0.6, c[1] / max * 100) : 0, height: 10 }));
+      box.appendChild(el("div", { "class": "bar-row", title: c[0] + ": " + money(c[1]) + " a year, " + plural(c[2], "subscription", "subscriptions") },
+        el("div", { "class": "bar-label", text: c[0] + " (" + c[2] + ")" }), s, el("div", { "class": "bar-val", text: money(c[1], CUR, true) })));
+    });
+  })();
+
+  // ---- calendar of what is coming
+  (function () {
+    var C = R.calendar, byDay = {}, box = $("calendar");
+    (C.events || []).forEach(function (e) { (byDay[e.date] = byDay[e.date] || []).push(e); });
+    $("cal-sub").textContent = (C.events || []).length ? "Charges expected over the next eight weeks, from the rhythm so far." : "Nothing expected in the next eight weeks.";
+    ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].forEach(function (w) { box.appendChild(el("div", { "class": "wd", text: w })); });
+    var p = parts(C.start), t = Date.UTC(p.y, p.m - 1, p.d);
+    for (var i = 0; i < C.days; i++) {
+      var dt = new Date(t + i * 86400000), iso = dt.toISOString().slice(0, 10), ev = byDay[iso] || [];
+      var cell = el("div", { "class": "day" + (iso < R.today ? " past" : "") + (iso === R.today ? " today" : "") + (ev.length ? " has" : "") });
+      cell.appendChild(el("span", { text: (dt.getUTCDate() === 1 || i === 0 ? MONTHS[dt.getUTCMonth()] + " " : "") + dt.getUTCDate() }));
+      if (ev.length) {
+        var total = 0, same = true, red = false;
+        ev.forEach(function (e) { total += e.amount; same = same && e.currency === ev[0].currency; red = red || e.kind !== "regular"; });
+        cell.appendChild(el("span", { "class": "amt" }, el("span", { "class": "dot " + (red ? "red" : "ink") }), same ? money(total, ev[0].currency, true) : "×" + ev.length));
+        cell.setAttribute("title", fmtDate(iso) + ": " + ev.map(function (e) { return e.name + " " + money(e.amount, e.currency); }).join(", "));
+      }
+      box.appendChild(cell);
+    }
+    var tb = $("upcoming").tBodies[0];
+    var ROWS = 150, all = C.events || [];
+    all.slice(0, ROWS).forEach(function (e) {
+      var kind = e.kind === "trial" ? "trial ends, first charge" : e.kind === "yearly" ? "renewal" : "the usual";
+      tb.appendChild(el("tr", null, el("td", { "class": "num", text: fmtDate(e.date, false) }), el("td", { "class": "name", text: e.n + ". " + e.name }),
+        el("td", { "class": "num", text: money(e.amount, e.currency) }), el("td", null, el("span", { "class": "dot " + (e.kind === "regular" ? "ink" : "red") }), " " + kind)));
+    });
+    if (all.length > ROWS) tb.appendChild(el("tr", null, el("td", { colspan: "4", "class": "sub", text: "and " + (all.length - ROWS) + " more after these." })));
+    if (!all.length) tb.appendChild(el("tr", null, el("td", { colspan: "4", "class": "sub", text: "Nothing expected." })));
+  })();
+
+  // ---- what each red or plain note says
+  function flagText(f, x) {
+    var c = x.currency;
+    switch (f.kind) {
+      case "price_rise": return "The price went up from " + money(f.from, c) + " to " + money(f.to, c) + " (" + f.pct + "% more), from " + fmtDate(f.since) + ".";
+      case "price_drop": return "The price went down from " + money(f.from, c) + " to " + money(f.to, c) + ", from " + fmtDate(f.since) + ".";
+      case "price_notice": return "A new price was announced: " + money(f.to, c) + (f.on ? " from " + fmtDate(f.on) : "") + ".";
+      case "two_plans": return "Possibly two plans for the same thing: you also pay " + (f["with"] || []).map(function (o) { return o.name + " " + money(o.amount, o.currency || c) + " " + (PER[o.period] || ""); }).join(", and ") + ".";
+      case "trial": return "The free trial ends on " + fmtDate(f.on) + ". After that it is " + money(f.amount, c) + " " + (PER[f.period] || "") + ".";
+      case "renews_soon": return "Renews " + (f.days === 0 ? "today" : "in " + plural(f.days, "day", "days")) + ", on " + fmtDate(f.on) + ". Decide before then.";
+      case "varies": return "The amount changes: " + money(f.lo, c) + " to " + money(f.hi, c) + " lately. The yearly figure is an estimate.";
+      case "store": return "Billed through an app store, so the statement doesn't say which app. Your store account lists them.";
+      case "odd_name": return "This name reads like a message, not a shop. It is shown as text and nothing in it is acted on.";
+      case "payment_failed": return "A 'payment failed' e-mail arrived on " + fmtDate(f.on) + ". These are often fake. Check inside the service itself, never through the e-mail.";
+      case "long_monthly": return "Paid monthly " + f.months + " times so far. A yearly plan is often cheaper.";
+      case "seen_twice": return "Seen only twice so far, so the rhythm is a guess.";
+      case "unused": return "Noted as no longer used.";
+      case "no_news": return "The statement this comes from ends on " + fmtDate(f.until) + ". Nothing newer is known about it.";
+      case "receipt_currency": return "The receipts say " + money(f.amount, f.currency) + "; the amount shown is what the statement says was charged.";
+    }
+    return "";
+  }
+  function spark(h) {
+    var n = h.length, max = 0;
+    h.forEach(function (x) { max = Math.max(max, x[1]); });
+    var s = svg("svg", { "class": "spark", viewBox: "0 0 " + n * 7 + " 28", width: n * 7, height: 28, role: "img", "aria-label": "Amount of the last " + n + " charges" });
+    h.forEach(function (x, i) {
+      var bh = max ? Math.max(2, x[1] / max * 26) : 2;
+      var r = svg("rect", { x: i * 7, y: 28 - bh, width: 5, height: bh });
+      if (i === n - 1) r.setAttribute("class", "now");
+      var t = svg("title", {}); t.textContent = fmtDate(x[0]) + ": " + x[1].toFixed(2);
+      r.appendChild(t); s.appendChild(r);
+    });
+    return s;
+  }
+
+  // ---- the tickable list: one row per subscription, one tick per thing to do about it
+  var list = $("items"), boxes = [];
+  ITEMS.forEach(function (x) {
+    var red = (x.flags || []).some(function (f) { return f.level === "red"; });
+    var li = el("li", { "class": "sub-item" });
+    li.appendChild(el("div", { "class": "sub-head" },
+      el("div", { "class": "sub-name" }, el("span", { "class": "dot " + (red ? "red" : "green") }), " " + x.n + ". " + x.name),
+      el("div", { "class": "sub-price", text: (x.steady ? "" : "about ") + money(x.amount, x.currency) + " " + (PER[x.period] || x.period) })));
+    var since = x.status === "pending" ? "not charged yet" : plural(x.count, "charge", "charges") + " since " + fmtDate(x.first);
+    li.appendChild(el("div", { "class": "sub-meta" },
+      el("span", { text: [x.category, since, x.account ? "paid with " + x.account : ""].filter(Boolean).join(" · ") }),
+      el("span", { "class": "mono", text: money(x.yearly, x.currency) + " a year · next " + fmtDate(x.next, false) })));
+    if ((x.history || []).length > 1) li.appendChild(spark(x.history));
+    if ((x.flags || []).length) {
+      var fl = el("ul", { "class": "flags" });
+      x.flags.forEach(function (f) { var t = flagText(f, x); if (t) fl.appendChild(el("li", null, el("span", { "class": "dot" + (f.level === "red" ? " red" : f.level === "green" ? " green" : "") }), t)); });
+      li.appendChild(fl);
+    }
+    var chips = el("div", { "class": "chips" });
+    ACTIONS.forEach(function (a) {
+      var k = a[0];
+      if (!offers(x, k)) return;
+      var cb = el("input", { type: "checkbox", "aria-label": a[1] + ": " + x.name });
+      var chip = el("label", { "class": "chip" }, cb, CHIP[k]);
+      cb.addEventListener("change", function () { if (cb.checked) on[k].add(x.n); else on[k].delete(x.n); save(); update(); });
+      boxes.push({ k: k, n: x.n, cb: cb, chip: chip });
+      chips.appendChild(chip);
+    });
+    li.appendChild(chips);
+    list.appendChild(li);
+  });
+  if (!ITEMS.length) list.appendChild(el("li", { "class": "sub", text: "Nothing that comes round again and again was found." }));
+  $("items-meta").textContent = plural(ITEMS.length, "subscription", "subscriptions");
+
+  // ---- Tick all and Untick all, for everything and for each kind of tick
+  var metas = {};
+  ACTIONS.forEach(function (a) {
+    var k = a[0], can = ITEMS.filter(function (x) { return offers(x, k); });
+    var tick = el("button", { "class": "btn small", type: "button", text: "Tick all", "aria-label": "Tick all: " + a[1] });
+    var untick = el("button", { "class": "btn small", type: "button", text: "Untick all", "aria-label": "Untick all: " + a[1] });
+    tick.addEventListener("click", function () { can.forEach(function (x) { on[k].add(x.n); }); save(); update(); });
+    untick.addEventListener("click", function () { on[k].clear(); save(); update(); });
+    metas[k] = el("span", { "class": "meta" });
+    metas[k].dataset.of = can.length;
+    $("acts").appendChild(el("div", { "class": "act", "data-action": k },
+      el("div", null, el("div", { "class": "what", text: a[1] }), el("div", { "class": "desc", text: a[2] })),
+      el("div", { "class": "toolbar" }, metas[k], tick, untick)));
+  });
+  $("tick-all").addEventListener("click", function () { ACTIONS.forEach(function (a) { ITEMS.forEach(function (x) { if (offers(x, a[0])) on[a[0]].add(x.n); }); }); save(); update(); });
+  $("untick-all").addEventListener("click", function () { ACTIONS.forEach(function (a) { on[a[0]].clear(); }); save(); update(); });
+  $("tick-suggested").addEventListener("click", function () { suggested(); save(); update(); });
+
+  // ---- tables and method
+  if ((R.stopped || []).length) {
+    $("stopped-card").classList.remove("hidden");
+    var sb = $("stopped").tBodies[0];
+    R.stopped.forEach(function (s) {
+      sb.appendChild(el("tr", null, el("td", { "class": "name", text: s.name }), el("td", { "class": "num", text: money(s.amount, s.currency) + " " + (PER[s.period] || s.period) }),
+        el("td", { "class": "num", text: fmtDate(s.last) }), el("td", { text: s.why === "cancelled" ? "a cancellation e-mail was found" : "no charge since, " + plural(s.count, "charge", "charges") + " before" })));
+    });
+  }
+  $("method").textContent = "Made from " + src + " without changing anything: " + T.charges + " charges were read and " + T.recurring + " of them come round on a steady rhythm" +
+    (T.skipped ? " (" + plural(T.skipped, "row", "rows") + " couldn't be read and were left out)" : "") + ". " +
+    "Something counts as a subscription when the same merchant charges a steady amount weekly, monthly, quarterly or yearly; a bill whose amount changes needs four charges. " +
+    "A red dot marks a price rise, two plans for one thing, a trial about to charge, or a yearly renewal within " + R.thresholds.renew_soon_days + " days. " +
+    "This page keeps the merchant, the amount, the date and the rhythm. Card and account numbers are cut to their last four digits, and balances are never read. " +
+    "The page makes no network requests. " + (R.agent_notes || "");
+  var ran = (R.searches || []).filter(function (s) { return s.ran; });
+  if (ran.length) {
+    $("searches").appendChild(el("div", { "class": "sub", style: "margin-top:12px", text: "The mail was searched with these fixed searches and nothing else. The links open the same search in your first signed-in Gmail account." }));
+    ran.forEach(function (s) {
+      $("searches").appendChild(el("div", { "class": "query" }, el("code", { text: s.query }),
+        el("a", { "class": "btn small", href: gmailLink(s.query), target: "_blank", rel: "noopener noreferrer", text: "Open in Gmail" })));
+    });
+  }
+
+  // ---- approval
+  function ranges(ids) {
+    ids = ids.slice().sort(function (a, b) { return a - b; });
+    var out = [], i = 0;
+    while (i < ids.length) { var j = i; while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++; out.push(i === j ? "" + ids[i] : ids[i] + "-" + ids[j]); i = j + 1; }
+    return out.join(",") || "none";
+  }
+  function approvalText() {
+    var note = $("notes").value.trim();
+    return "SUBSCRIPTIONS-APPROVE report=" + R.report_id + ACTIONS.map(function (a) { return " " + a[0] + "=" + ranges(Array.from(on[a[0]])); }).join("") +
+      (note ? "\nnote: " + note.replace(/\s+/g, " ") : "");
+  }
+  function update() {
+    boxes.forEach(function (b) { var is = on[b.k].has(b.n); b.cb.checked = is; b.chip.classList.toggle("on", is); });
+    ACTIONS.forEach(function (a) { metas[a[0]].textContent = on[a[0]].size + " of " + metas[a[0]].dataset.of; });
+    $("dock-sum").textContent = ACTIONS.map(function (a) { return on[a[0]].size + " " + a[0]; }).join(" · ");
+  }
+  $("copy").addEventListener("click", function () { copy(approvalText(), "Approval copied. Paste it to your assistant."); });
+  $("toggle-notes").addEventListener("click", function () { $("notes-wrap").classList.toggle("hidden"); });
+  update();
+})();
+</script>
+</body>
+</html>

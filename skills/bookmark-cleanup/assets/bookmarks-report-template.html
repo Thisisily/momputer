@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bookmarks report</title>
+<meta name="description" content="A read-only look at a browser's bookmarks: copies, empty folders, things never opened, and a tidy-up plan to approve item by item.">
+<meta name="referrer" content="no-referrer">
+<style>
+:root {
+  --bg: #f5f5f3; --card: #ffffff; --ink: #0b0b0b; --ink-2: #4a4a4a; --muted: #8a8a8a; --line: #e2e2de;
+  --bar: #0b0b0b; --bar-2: #bdbdb8; --red: #d71921; --green: #1e9e57; --focus: #0b0b0b;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+    --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #000000; --card: #0e0e0e; --ink: #f2f2f2; --ink-2: #b5b5b5; --muted: #7c7c7c; --line: #262626;
+  --bar: #f2f2f2; --bar-2: #4d4d4d; --red: #ff3b3b; --green: #2fd17a; --focus: #f2f2f2;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 var(--sans); }
+body { padding: 0 16px 150px; }
+main { max-width: 1080px; margin: 0 auto; }
+a { color: inherit; }
+button, input, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.label { font: 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mono { font-family: var(--mono); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); vertical-align: middle; flex: none; }
+.dot.red { background: var(--red); } .dot.green { background: var(--green); }
+header.top { padding: 40px 0 20px; display: flex; flex-wrap: wrap; gap: 12px 32px; align-items: end; justify-content: space-between; }
+h1 { font: 600 34px/1.1 var(--sans); letter-spacing: -.02em; margin: 6px 0 0; }
+h2 { font: 600 19px/1.3 var(--sans); margin: 0; }
+h3 { font: 600 15px/1.3 var(--sans); margin: 0; }
+.sub { color: var(--ink-2); }
+section { margin-top: 28px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; min-width: 0; }
+.grid { display: grid; gap: 12px; }
+.tiles { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.tile .num { font: 500 24px/1.1 var(--mono); letter-spacing: -.02em; margin-top: 8px; overflow-wrap: anywhere; }
+.tile .note { color: var(--muted); font-size: 13px; margin-top: 4px; }
+.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.wide { grid-column: 1 / -1; }
+.bars { display: grid; gap: 8px; margin-top: 14px; }
+.bar-row { display: grid; grid-template-columns: minmax(80px, 40%) 1fr minmax(40px, auto); gap: 10px; align-items: center; }
+.bar-label { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+svg.hbar { display: block; width: 100%; height: 12px; }
+svg.hbar rect { fill: var(--bar); }
+svg.hbar rect.soft { fill: var(--bar-2); }
+.bar-val { font: 12px/18px var(--mono); color: var(--ink-2); white-space: nowrap; text-align: right; }
+svg.cols { width: 100%; height: 150px; display: block; margin-top: 14px; overflow: visible; }
+svg.cols rect.col { fill: var(--bar); }
+svg.cols rect.hit { fill: transparent; }
+svg.cols rect.hit:hover + rect.col { opacity: .7; }
+svg.cols line { stroke: var(--line); }
+.col-labels { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); margin-top: 4px; font: 10px var(--mono); color: var(--muted); text-align: center; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; cursor: pointer; font-size: 13px; text-decoration: none; display: inline-block; }
+.btn:hover { border-color: var(--ink); }
+.btn.small { padding: 2px 10px; font-size: 12px; }
+.btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.group-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.group-head .meta { color: var(--muted); font: 12px var(--mono); }
+.group-desc { color: var(--ink-2); font-size: 13px; margin: 6px 0 10px; }
+.items { list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.item { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.item input { margin: 3px 0 0; width: 16px; height: 16px; accent-color: var(--ink); }
+.item .who { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.addr { font: 12px/1.5 var(--mono); color: var(--ink-2); overflow-wrap: anywhere; word-break: break-all; }
+.item .why { color: var(--muted); font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+.more { margin-top: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 8px 8px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+td.name { overflow-wrap: anywhere; min-width: 160px; }
+.scroll-x { overflow-x: auto; }
+.steps { margin: 10px 0 0; padding-left: 20px; color: var(--ink-2); }
+.steps li { margin-top: 4px; }
+.dock { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card); border-top: 1px solid var(--line); padding: 12px 16px; z-index: 5; }
+.dock-in { max-width: 1080px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; }
+.dock .sum { font: 13px var(--mono); }
+.dock textarea { width: 100%; min-height: 60px; margin-top: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 8px; background: var(--bg); }
+.toast { position: fixed; left: 50%; bottom: 110px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 999px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 6; max-width: calc(100% - 32px); }
+.toast.on { opacity: 1; }
+.hidden { display: none !important; }
+@media (max-width: 760px) { .two { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 560px) {
+  h1 { font-size: 28px; }
+  .card { padding: 14px; }
+  .bar-row { grid-template-columns: 1fr auto; gap: 2px 10px; }
+  .bar-row svg.hbar { grid-column: 1 / -1; grid-row: 2; }
+}
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <div class="label"><span class="dot green"></span>&nbsp; Read-only review · your browser's bookmarks were not changed</div>
+      <h1>Bookmarks</h1>
+      <div class="sub" id="subtitle"></div>
+    </div>
+    <div class="label"><span class="dot green"></span> fine &nbsp; <span class="dot red"></span> needs a look</div>
+  </header>
+
+  <section class="grid tiles" id="tiles"></section>
+
+  <section class="grid two">
+    <div class="card wide"><h2>Saved each year</h2><div class="sub" id="years-sub"></div><div id="chart-years"></div><div class="col-labels" id="year-labels"></div></div>
+    <div class="card"><h2>When they were last opened</h2><div class="sub" id="opened-sub"></div><div class="bars" id="chart-opened"></div></div>
+    <div class="card"><h2>Sites you saved most</h2><div class="sub">By number of bookmarks.</div><div class="bars" id="chart-sites"></div></div>
+    <div class="card wide"><h2>Fullest folders</h2><div class="sub">Bookmarks lying loose in each folder, not counting its subfolders.</div><div class="bars" id="chart-folders"></div></div>
+  </section>
+
+  <section>
+    <div class="group-head"><h2>The plan</h2><span class="label">Tick what you approve. Nothing happens until you send the approval back.</span></div>
+    <div class="card" style="margin-top:12px">
+      <div class="group-desc" style="margin-top:0">What you tick goes into a new bookmarks file for you to import. Your browser's own bookmarks stay exactly as they are, and everything left out is kept in a second file.</div>
+      <div class="toolbar">
+        <button class="btn" id="tick-all" type="button">Tick all</button>
+        <button class="btn" id="untick-all" type="button">Untick all</button>
+        <button class="btn" id="tick-suggested" type="button">Tick suggested only</button>
+      </div>
+    </div>
+    <div id="lists"></div>
+  </section>
+
+  <section class="card hidden" id="hand-card">
+    <h2>Check these by hand</h2>
+    <div class="sub" id="hand-sub"></div>
+    <div class="scroll-x"><table id="hand"><thead><tr><th>Bookmark</th><th>Where</th><th>What happened</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card">
+    <h2>How this was made, and what happens next</h2>
+    <div class="sub" id="method"></div>
+    <ol class="steps">
+      <li>Tick what you want and press Copy approval. Paste the line to your assistant.</li>
+      <li>Your assistant writes a new file, bookmarks-tidy.html, with those changes applied, and bookmarks-removed.html with everything that was left out.</li>
+      <li>In your browser, first save a backup with its own Export bookmarks. Then import bookmarks-tidy.html. The browser adds it next to what you have, usually in a folder called Imported.</li>
+      <li>Look through the imported set. When you are happy with it, delete the old bookmarks yourself and drag the new ones into place. Your assistant never deletes or edits anything in the browser.</li>
+    </ol>
+  </section>
+</main>
+
+<div class="dock" role="region" aria-label="Approval">
+  <div class="dock-in">
+    <div class="sum" id="dock-sum">0 ticked</div>
+    <div class="toolbar">
+      <button class="btn" id="toggle-notes" type="button">Add a note</button>
+      <button class="btn primary" id="copy" type="button">Copy approval</button>
+    </div>
+  </div>
+  <div class="dock-in hidden" id="notes-wrap"><textarea id="notes" placeholder="Anything to add? e.g. keep both copies of the recipes page"></textarea></div>
+  <div class="dock-in hidden" id="fallback-wrap"><textarea id="fallback" readonly aria-label="Approval text to copy"></textarea></div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script id="bookmarks-data" type="application/json">__BOOKMARKS_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  var R = JSON.parse(document.getElementById("bookmarks-data").textContent);
+  var T = R.totals, TH = R.thresholds, PAGE = 150;
+  var LISTS = [
+    ["dupes", "Extra copies", "copies", "The same page saved more than once. One copy stays: the one you opened most recently. A tick leaves this extra one out."],
+    ["folders", "Folders", "folders", "Empty folders to drop, and folders with the same name side by side to make into one."],
+    ["stale", "Not opened in years", "old", "Never opened, or not for two years. A tick moves it into a folder called “" + R.new_folders.archive + "”. Nothing is thrown away."],
+    ["bar", "Crowding the bookmarks bar", "bar", "On the bar, but not opened in a year. A tick moves it into a folder called “" + R.new_folders.from_bar + "”."],
+    ["big", "Piles", "piles", "Folders with " + TH.big_folder + " or more loose bookmarks. A tick sorts the ones from the same site into folders named after the site."],
+    ["dead", "Dead links", "dead", "The site says the page is gone (404 or 410), or its domain no longer exists. A tick leaves the bookmark out."],
+    ["look", "Not web pages, or holding a password", "other", "Bookmarklets, files, pages of the browser itself, and addresses with a user name or password in them. They are never opened or run, and they stay unless you tick them."]
+  ];
+  var DATA = R.lists;
+  var KEY = "bookmarks-report:" + R.report_id;
+  var on = {};
+  LISTS.forEach(function (L) { on[L[0]] = new Set(); });
+  function suggested() { LISTS.forEach(function (L) { on[L[0]].clear(); (DATA[L[0]] || []).forEach(function (x) { if (x["default"]) on[L[0]].add(x.n); }); }); }
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { saved = null; }
+  if (saved && typeof saved === "object") {
+    LISTS.forEach(function (L) { var max = (DATA[L[0]] || []).length; (Array.isArray(saved[L[0]]) ? saved[L[0]] : []).forEach(function (n) { if (Number.isInteger(n) && n >= 1 && n <= max) on[L[0]].add(n); }); });
+  } else suggested();
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, attrs) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === "text") n.textContent = attrs[k];
+      else if (k === "class") n.className = attrs[k];
+      else n.setAttribute(k, attrs[k]);
+    });
+    for (var i = 2; i < arguments.length; i++) { var c = arguments[i]; if (c != null) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c); }
+    return n;
+  }
+  function svg(tag, attrs) { var n = document.createElementNS("http://www.w3.org/2000/svg", tag); Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); }); return n; }
+  function count(n) { return n == null ? "–" : Number(n).toLocaleString("en-US"); }
+  function plural(n, one, many) { return count(n) + " " + (n === 1 ? one : many); }
+  function save() { try { var o = {}; Object.keys(on).forEach(function (k) { o[k] = Array.from(on[k]); }); localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) { /* private window */ } }
+  function toast(msg) { var t = $("toast"); t.textContent = msg; t.classList.add("on"); setTimeout(function () { t.classList.remove("on"); }, 1800); }
+  function copy(text, ok) {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { toast(ok); }, function () { fallback(text); });
+    else fallback(text);
+  }
+  function fallback(text) { var w = $("fallback-wrap"), t = $("fallback"); w.classList.remove("hidden"); t.value = text; t.focus(); t.select(); toast("Copy the selected text (Ctrl+C)"); }
+  // An address is text. It is also a link only when it is a plain http or https address.
+  function address(x) {
+    var box = el("div", { "class": "addr" });
+    if (typeof x.href === "string" && /^https?:\/\/[^\s<>"'`\\]+$/i.test(x.href)) box.appendChild(el("a", { href: x.href, target: "_blank", rel: "noopener noreferrer", text: x.shown }));
+    else box.textContent = x.shown;
+    return box;
+  }
+  function hbars(target, rows, soft) {
+    var box = $(target), max = 0;
+    rows.forEach(function (r) { max = Math.max(max, r[1]); });
+    if (!rows.length) { box.appendChild(el("div", { "class": "sub", text: "Nothing to show." })); return; }
+    rows.forEach(function (r) {
+      var s = svg("svg", { "class": "hbar", viewBox: "0 0 100 12", preserveAspectRatio: "none", role: "img", "aria-label": r[0] + ": " + r[1] });
+      var bar = svg("rect", { x: 0, y: 1, width: max && r[1] ? Math.max(0.6, r[1] / max * 100) : 0, height: 10 });
+      if (soft && soft(r)) bar.setAttribute("class", "soft");
+      s.appendChild(bar);
+      box.appendChild(el("div", { "class": "bar-row", title: r[0] + ": " + count(r[1]) }, el("div", { "class": "bar-label", text: r[0] }), s, el("div", { "class": "bar-val", text: count(r[1]) })));
+    });
+  }
+
+  // ---- header and tiles
+  var S = R.source, names = { chrome: "Chrome", edge: "Edge", brave: "Brave", vivaldi: "Vivaldi", chromium: "Chromium" };
+  var from = S.browser ? (names[S.browser] || S.browser) + ", profile " + S.profile : S.kind === "html" ? "an exported bookmarks file" : "a bookmarks file";
+  $("subtitle").textContent = [plural(T.bookmarks, "bookmark", "bookmarks") + " in " + plural(T.folders, "folder", "folders"), "from " + from, "read from a copy on " + String(S.read || "").slice(0, 10)].join(" · ");
+  var tiles = [
+    ["Bookmarks", count(T.bookmarks), "in " + plural(T.folders, "folder", "folders")],
+    ["Extra copies", count(T.dup_extra), T.dup_groups ? plural(T.dup_groups, "page", "pages") + " saved more than once" : "no page is saved twice"],
+    ["Never opened", S.has_last_used ? count(T.never) : "–", S.has_last_used ? "since the browser began keeping track" : "this source doesn't say when a bookmark was opened"],
+    ["On the bar", count(T.bar_items), T.bar_items > T.bar_max ? "crowded: over " + T.bar_max : "fits"],
+    ["Empty folders", count(T.empty_folders), T.same_name_folders ? plural(T.same_name_folders, "folder shares", "folders share") + " a name with a neighbour" : "and no two with the same name"],
+    ["Dead links", T.checked ? count(T.dead) : "–", T.checked ? plural(T.by_hand, "more", "more") + " to check by hand" : "not checked: that contacts every site"]
+  ];
+  tiles.forEach(function (t) { $("tiles").appendChild(el("div", { "class": "card tile" }, el("div", { "class": "label", text: t[0] }), el("div", { "class": "num", text: t[1] }), el("div", { "class": "note", text: t[2] }))); });
+
+  // ---- charts (inline SVG; the labels are HTML so they don't stretch)
+  (function () {
+    var d = R.years || [], n = d.length, max = 0;
+    d.forEach(function (x) { max = Math.max(max, x[1]); });
+    $("years-sub").textContent = n ? "How many of today's bookmarks were added in each year." : "This source doesn't say when bookmarks were added.";
+    if (!n) return;
+    var W = 1000, H = 130, gap = n > 14 ? 6 : 10, bw = (W - gap * (n - 1)) / n;
+    var s = svg("svg", { "class": "cols", viewBox: "0 0 " + W + " " + (H + 2), preserveAspectRatio: "none", role: "img", "aria-label": "Bookmarks added per year, " + n + " years" });
+    s.appendChild(svg("line", { x1: 0, x2: W, y1: H + 0.5, y2: H + 0.5 }));
+    d.forEach(function (x, i) {
+      var h = max ? x[1] / max * (H - 6) : 0, xx = i * (bw + gap), g = svg("g", {}), title = svg("title", {});
+      title.textContent = x[0] + ": " + count(x[1]);
+      var hit = svg("rect", { "class": "hit", x: xx, y: 0, width: bw + gap, height: H });
+      hit.appendChild(title);
+      g.appendChild(hit);
+      g.appendChild(svg("rect", { "class": "col", x: xx, y: H - h, width: bw, height: Math.max(h, x[1] ? 1 : 0) }));
+      s.appendChild(g);
+      $("year-labels").appendChild(el("span", { text: n > 14 && i % 2 ? "" : n > 8 ? "’" + String(x[0]).slice(2) : String(x[0]) }));
+    });
+    $("chart-years").appendChild(s);
+  })();
+  if (S.has_last_used) {
+    $("opened-sub").textContent = "Chromium browsers note when a bookmark is opened. They began doing so around 2022, so 'never' means not since then.";
+    hbars("chart-opened", R.opened || [], function (r) { return r[0] === "Never" || r[0] === "Over two years ago"; });
+  } else {
+    $("opened-sub").textContent = "An exported file doesn't say when a bookmark was last opened, so nothing here is judged by use. Reading the browser's own bookmarks (Chrome, Edge, Brave, Vivaldi) would show it.";
+  }
+  hbars("chart-sites", R.sites || []);
+  hbars("chart-folders", R.biggest || [], function (r) { return r[1] < TH.big_folder; });
+
+  // ---- tickable lists: every one has Tick all and Untick all
+  var renderers = [];
+  LISTS.forEach(function (L) {
+    var key = L[0], items = DATA[key] || [];
+    if (!items.length) return;
+    var list = el("ul", { "class": "items" }), meta = el("span", { "class": "meta" }), shown = Math.min(PAGE, items.length), boxes = [];
+    var tick = el("button", { "class": "btn", type: "button", text: "Tick all", "aria-label": "Tick all: " + L[1] });
+    var untick = el("button", { "class": "btn", type: "button", text: "Untick all", "aria-label": "Untick all: " + L[1] });
+    var more = el("button", { "class": "btn more", type: "button" });
+    tick.addEventListener("click", function () { items.forEach(function (x) { on[key].add(x.n); }); save(); update(); });
+    untick.addEventListener("click", function () { on[key].clear(); save(); update(); });
+    more.addEventListener("click", function () { var to = Math.min(items.length, shown + 1000); draw(shown, to); shown = to; update(); });
+    function row(x) {
+      var cb = el("input", { type: "checkbox", "aria-label": L[1] + " " + x.n + ": " + x.title });
+      cb.addEventListener("change", function () { if (cb.checked) on[key].add(x.n); else on[key].delete(x.n); save(); update(); });
+      boxes.push([x.n, cb]);
+      var body = el("div", null, el("div", { "class": "who", text: x.n + ". " + x.title }));
+      var red = key === "dead" || x.kind === "secret";
+      if (key === "folders") {
+        body.appendChild(el("div", { "class": "why" }, el("span", { "class": "dot" }), " In " + x.where + " · " + x.why));
+      } else if (key === "big") {
+        body.appendChild(el("div", { "class": "why" }, el("span", { "class": "dot" }), " " + (x.where ? "In " + x.where + " · " : "") + x.why));
+        body.appendChild(el("div", { "class": "addr", text: (x.sites || []).map(function (s) { return s[0] + " (" + s[1] + ")"; }).join(", ") }));
+      } else {
+        body.appendChild(address(x));
+        var facts = ["in " + x.where];
+        if (x.added) facts.push("added " + x.added);
+        if (S.has_last_used) facts.push(x.last_used ? "opened " + x.last_used : "never opened");
+        body.appendChild(el("div", { "class": "why", text: facts.join(" · ") }));
+        body.appendChild(el("div", { "class": "why" }, el("span", { "class": "dot" + (red ? " red" : "") }), " " + x.why + (key === "dupes" ? ". The copy that stays is in " + x.keep_where + "." : "")));
+      }
+      return el("li", { "class": "item" }, cb, body);
+    }
+    function draw(a, b) { var f = document.createDocumentFragment(); for (var i = a; i < b; i++) f.appendChild(row(items[i])); list.appendChild(f); }
+    draw(0, shown);
+    $("lists").appendChild(el("div", { "class": "card", style: "margin-top:12px", "data-list": key },
+      el("div", { "class": "group-head" }, el("h3", { text: L[1] }), meta), el("div", { "class": "group-desc", text: L[3] }),
+      el("div", { "class": "toolbar" }, tick, untick), list, more));
+    renderers.push(function () {
+      boxes.forEach(function (b) { b[1].checked = on[key].has(b[0]); });
+      meta.textContent = count(on[key].size) + " of " + count(items.length) + " ticked";
+      more.classList.toggle("hidden", shown >= items.length);
+      more.textContent = "Show " + count(Math.min(1000, items.length - shown)) + " more of " + count(items.length);
+    });
+  });
+  if (!renderers.length) $("lists").appendChild(el("div", { "class": "card sub", style: "margin-top:12px", text: "Nothing to tidy: no copies, no empty folders, nothing left unopened." }));
+  $("tick-all").addEventListener("click", function () { LISTS.forEach(function (L) { (DATA[L[0]] || []).forEach(function (x) { on[L[0]].add(x.n); }); }); save(); update(); });
+  $("untick-all").addEventListener("click", function () { LISTS.forEach(function (L) { on[L[0]].clear(); }); save(); update(); });
+  $("tick-suggested").addEventListener("click", function () { suggested(); save(); update(); });
+
+  // ---- links that couldn't be reached, and how this was made
+  if (T.checked) {
+    $("hand-card").classList.remove("hidden");
+    var hb = $("hand").tBodies[0], skipped = (R.unchecked || []).map(function (u) { return count(u[1]) + " " + u[0]; }).join("; ");
+    $("hand-sub").textContent = (R.by_hand.length ? "These couldn't be reached. That is not proof they are gone: a site can be slow, or refuse automatic checks. Open them yourself before deciding."
+      : "Every page that was asked gave an answer.") + (skipped ? " Not asked at all: " + skipped + "." : "");
+    R.by_hand.forEach(function (x) { hb.appendChild(el("tr", null, el("td", { "class": "name" }, el("div", { text: x.title }), address(x)), el("td", { text: x.where }), el("td", null, el("span", { "class": "dot red" }), " " + x.why))); });
+    if (!R.by_hand.length) hb.appendChild(el("tr", null, el("td", { colspan: "3", "class": "sub", text: "Nothing to check by hand." })));
+  }
+  $("method").textContent = "Read from a copy of the bookmarks; the browser's own file was only looked at, never written to. " +
+    "Two bookmarks count as the same page when their addresses match after dropping www., a slash at the end, the part after #, and tracking tags such as utm_source. " +
+    (S.has_last_used ? "A bookmark counts as not opened in years when it was never opened and was added over a year ago, or was last opened over two years ago. " : "") +
+    "The bar counts as crowded above " + TH.bar_max + " items, a folder as a pile from " + TH.big_folder + " loose bookmarks. " +
+    (T.checked ? count(T.requested) + " pages were asked on " + T.checked_on + " whether they still exist, with a plain request that sends no cookies or logins. Private and local addresses, such as a router, were never asked. "
+      : "Links were not checked: that means contacting every site, so it only happens if you ask for it. ") +
+    "Addresses on this page are shown as text; only plain web addresses are links, and they open the site itself. This page makes no network requests.";
+
+  // ---- approval
+  function ranges(ids) {
+    ids = ids.slice().sort(function (a, b) { return a - b; });
+    var out = [], i = 0;
+    while (i < ids.length) { var j = i; while (j + 1 < ids.length && ids[j + 1] === ids[j] + 1) j++; out.push(i === j ? "" + ids[i] : ids[i] + "-" + ids[j]); i = j + 1; }
+    return out.join(",") || "none";
+  }
+  function approvalText() {
+    var note = $("notes").value.trim();
+    return "BOOKMARKS-APPROVE report=" + R.report_id + LISTS.map(function (L) { return " " + L[0] + "=" + ranges(Array.from(on[L[0]])); }).join("") +
+      (note ? "\nnote: " + note.replace(/\s+/g, " ") : "");
+  }
+  function update() {
+    renderers.forEach(function (r) { r(); });
+    $("dock-sum").textContent = LISTS.map(function (L) { return count(on[L[0]].size) + " " + L[2]; }).join(" · ");
+  }
+  $("copy").addEventListener("click", function () { copy(approvalText(), "Approval copied. Paste it to your assistant."); });
+  $("toggle-notes").addEventListener("click", function () { $("notes-wrap").classList.toggle("hidden"); });
+  update();
+})();
+</script>
+</body>
+</html>
