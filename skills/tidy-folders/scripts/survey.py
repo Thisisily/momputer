@@ -307,39 +307,108 @@ def drive_list(only=None, include_removable=False):
     return drives
 
 
+# ---------------------------------------------------------------- places other accounts can write to
+# Steam's and Epic's own folders, the top of a drive, and wherever a registry value points can
+# often be written by other accounts on the PC. A folder or file there can be swapped for a
+# link, and a link can lead to another PC: listing or opening it would sign in to that PC as
+# the person running the survey. So nothing in such a place is ever asked about by name alone.
+# Every folder on the way is opened as itself (a link is opened as the link, never followed),
+# checked to be a real folder, and kept open until the looking is done, which stops any of them
+# being renamed, replaced or deleted meanwhile. Whatever can't be opened or examined, or isn't
+# there, is "no".
 _DRIVE_KINDS = {}
+_WIN = {}
 
 
 def on_this_pc(path):
-    """True only for a full path on a disk in this PC (built in, or plugged in). Anything else is
-    never asked about: a path a registry value or a launcher's file names could be a share on
-    another PC, and asking whether it exists would sign in to that PC as the user."""
+    """True only for a full path, by its spelling, on a disk in this PC (built in, or plugged in)."""
     if not isinstance(path, str) or not re.match(r"^[A-Za-z]:\\", path) or not IS_WIN:
         return False
     root = path[:3].upper()
     if root not in _DRIVE_KINDS:
         import ctypes
         _DRIVE_KINDS[root] = ctypes.windll.kernel32.GetDriveTypeW(root)
-    if _DRIVE_KINDS[root] not in (2, 3):  # removable, fixed. Not a network drive, not unknown
-        return False
-    # Nor through a link: part by part, each looked at as itself. A symlink on a local disk can
-    # lead to another PC all the same. (What isn't there yet ends the walk: nothing to follow.)
-    cur = root
-    for part in [p for p in os.path.normpath(path)[3:].split("\\") if p]:
-        cur = os.path.join(cur, part)
-        if is_link("\\\\?\\" + cur) is not False:
-            return os.path.lexists("\\\\?\\" + cur) is False
-    return True
+    return _DRIVE_KINDS[root] in (2, 3)  # removable, fixed. Not a network drive, not unknown
 
 
-def is_link(path):
-    """True for a junction or symlink, False for anything else that is there, None if it can't be looked at."""
+def _win():
+    if not _WIN:
+        import ctypes
+        from ctypes import wintypes
+
+        class Tag(ctypes.Structure):  # FILE_ATTRIBUTE_TAG_INFO
+            _fields_ = [("attributes", wintypes.DWORD), ("tag", wintypes.DWORD)]
+
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                  wintypes.HANDLE]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        k.GetFileInformationByHandleEx.restype = wintypes.BOOL
+        k.GetFileInformationByHandleEx.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        _WIN.update(k=k, Tag=Tag, byref=ctypes.byref, sizeof=ctypes.sizeof, none=wintypes.HANDLE(-1).value)
+    return _WIN
+
+
+def _opened(path, access, share):
+    """(handle, is a folder, is a link) for `path` itself, or None if it can't be opened or examined.
+    A link is opened as the link: nothing it leads to is touched."""
+    w = _win()
+    k = w["k"]
+    # OPEN_EXISTING; FILE_FLAG_BACKUP_SEMANTICS (a folder can be opened) | FILE_FLAG_OPEN_REPARSE_POINT (a link is not followed)
+    h = k.CreateFileW("\\\\?\\" + path, access, share, None, 3, 0x02000000 | 0x00200000, None)
+    if h is None or h == w["none"]:
+        return None
+    info = w["Tag"]()
+    if not k.GetFileInformationByHandleEx(h, 9, w["byref"](info), w["sizeof"](info)):  # 9: FileAttributeTagInfo
+        k.CloseHandle(h)
+        return None
+    # A junction or a symlink is a reparse point whose tag says it stands for another name (bit 29)
+    return h, bool(info.attributes & 0x10), bool(info.attributes & 0x400 and info.tag & 0x20000000)
+
+
+def hold(path):
+    """Handles that keep every folder from the drive down to `path` what and where it is, or None.
+    None unless `path` is spelled as a full path on a disk in this PC and every part of it is a
+    real folder: no part is a link, a file, missing, or impossible to open."""
+    if not on_this_pc(path):
+        return None
+    handles, cur = [], path[:3]
+    for part in [None] + [p for p in os.path.normpath(path)[3:].split("\\") if p]:
+        if part:
+            cur = os.path.join(cur, part)
+        got = _opened(cur, 0x80, 0x1 | 0x2)  # FILE_READ_ATTRIBUTES; others may read and write in it, not rename or delete it
+        if got is None or not got[1] or got[2]:
+            release(handles + ([got[0]] if got else []))
+            return None
+        handles.append(got[0])
+    return handles
+
+
+def release(handles):
+    for h in handles or []:
+        _win()["k"].CloseHandle(h)
+
+
+def a_folder_here(path):
+    """True if `path` is a real folder on a disk in this PC, reached through no link."""
+    held = hold(path)
+    release(held)
+    return held is not None
+
+
+def listed(path):
+    """The names in a folder, or None unless it is a real folder on a disk in this PC reached
+    through no link. It and everything above it stay held while it is listed."""
+    held = hold(path)
+    if held is None:
+        return None
     try:
-        st = os.lstat(path)
+        return os.listdir("\\\\?\\" + path)
     except OSError:
         return None
-    import stat
-    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & 0x400 and getattr(st, "st_reparse_tag", 0) & 0x20000000)
+    finally:
+        release(held)
 
 
 def installed_programs(never=()):
@@ -357,7 +426,7 @@ def installed_programs(never=()):
         for sub in reg_subkeys(hive, base):
             v = reg_values(hive, base + "\\" + sub)
             loc = expand(v.get("InstallLocation"))
-            if (loc and len(loc) > 3 and on_this_pc(loc) and os.path.isdir(loc) and os.path.dirname(norm(loc)) != norm(loc)
+            if (loc and len(loc) > 3 and a_folder_here(loc) and os.path.dirname(norm(loc)) != norm(loc)
                     and not any(under(n, [norm(loc)]) for n in never_n)):
                 progs.append({"name": v.get("DisplayName") or sub, "path": loc,
                               "publisher": v.get("Publisher") or "",
@@ -370,16 +439,27 @@ def installed_programs(never=()):
     return out
 
 
-def read_text(path, limit=2_000_000):
-    """The start of a launcher's own text file. A file that is a link is not opened: these files sit
-    where other accounts on the PC can write, and a link can lead to another PC."""
-    if is_link(path) is not False:
+def read_text(path, limit=2_000_000, folder_held=False):
+    """The start of a small text file in a place other accounts may be able to write to, or "".
+    Its folder is held as in hold() (or already is, by the caller: `folder_held`); the file is
+    opened as itself and read only if it is a plain file. A file that is a link is never opened."""
+    held = [] if folder_held else hold(os.path.dirname(path))
+    if held is None:
         return ""
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read(limit)
+        got = _opened(path, 0x80000000, 0x1 | 0x2 | 0x4)  # GENERIC_READ; nobody else is kept out
+        if got is None:
+            return ""
+        if got[1] or got[2]:
+            release([got[0]])
+            return ""
+        import msvcrt
+        with os.fdopen(msvcrt.open_osfhandle(got[0], os.O_RDONLY), "rb") as f:  # closing f closes the handle
+            return f.read(limit).decode("utf-8", "replace")
     except OSError:
         return ""
+    finally:
+        release(held)
 
 
 def launchers(drives):
@@ -390,48 +470,59 @@ def launchers(drives):
     steam = None
     if IS_WIN:
         steam = expand((reg_values(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam", False) or {}).get("SteamPath"))
-    if steam and on_this_pc(steam) and os.path.isdir(steam):
+    if steam and a_folder_here(steam):
         libs = {norm(steam): steam}
         for vdf in (os.path.join(steam, "steamapps", "libraryfolders.vdf"),
                     os.path.join(steam, "config", "libraryfolders.vdf")):
             for m in re.finditer(r'"path"\s+"([^"]+)"', read_text(vdf)):
                 p = os.path.normpath(m.group(1).replace("\\\\", "\\"))
-                if on_this_pc(p):  # the file is one other accounts on the PC can write: a library it names on a share is never visited
+                if on_this_pc(p):  # a library it names on a share is never visited
                     libs.setdefault(norm(p), p)
         games, roots = [], []
         for lib in libs.values():
             sa = os.path.join(lib, "steamapps")
-            if not os.path.isdir(sa):
+            held = hold(sa)  # None unless it is a real folder on this PC, reached through no link
+            if held is None:
                 continue
-            roots.append(lib)
-            try:
-                names = os.listdir(sa)
+            try:  # held once: for the listing, and for every manifest read out of it
+                names = os.listdir("\\\\?\\" + sa)
+                roots.append(lib)
+                for n in names:
+                    if n.startswith("appmanifest_") and n.endswith(".acf"):
+                        t = read_text(os.path.join(sa, n), 200_000, folder_held=True)
+                        g = {k: (re.search(r'"%s"\s+"([^"]*)"' % k, t) or [None, None])[1]
+                             for k in ("name", "installdir", "SizeOnDisk")}
+                        if g["installdir"] and not re.search(r'[\\/:*?"<>|]', g["installdir"]):
+                            games.append({"name": (g["name"] or g["installdir"])[:120],
+                                          "path": os.path.join(sa, "common", g["installdir"]),
+                                          "bytes": int(g["SizeOnDisk"]) if (g["SizeOnDisk"] or "").isdigit() else None})
             except OSError:
-                continue
-            for n in names:
-                if n.startswith("appmanifest_") and n.endswith(".acf"):
-                    t = read_text(os.path.join(sa, n), 200_000)
-                    g = {k: (re.search(r'"%s"\s+"([^"]*)"' % k, t) or [None, None])[1]
-                         for k in ("name", "installdir", "SizeOnDisk")}
-                    if g["installdir"] and not re.search(r'[\\/:*?"<>|]', g["installdir"]):
-                        games.append({"name": (g["name"] or g["installdir"])[:120],
-                                      "path": os.path.join(sa, "common", g["installdir"]),
-                                      "bytes": int(g["SizeOnDisk"]) if (g["SizeOnDisk"] or "").isdigit() else None})
+                pass
+            finally:
+                release(held)
         found.append({"name": "Steam", "libraries": roots, "games": games})
 
     # Epic: manifests in ProgramData
     epic_dir = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Epic", "EpicGamesLauncher", "Data", "Manifests")
-    if os.path.isdir(epic_dir):
-        games = []
-        for n in sorted(os.listdir(epic_dir)):
-            if n.endswith(".item"):
-                try:
-                    j = json.loads(read_text(os.path.join(epic_dir, n), 2_000_000))
-                except ValueError:
-                    continue
-                if isinstance(j, dict) and on_this_pc(j.get("InstallLocation")):
-                    games.append({"name": str(j.get("DisplayName") or n)[:120], "path": os.path.normpath(j["InstallLocation"]),
-                                  "bytes": j.get("InstallSize") if isinstance(j.get("InstallSize"), int) else None})
+    held = hold(epic_dir)
+    if held is not None:
+        games, items = [], []
+        try:  # held once: for the listing, and for every manifest read out of it
+            for n in sorted(os.listdir("\\\\?\\" + epic_dir)):
+                if n.endswith(".item"):
+                    items.append((n, read_text(os.path.join(epic_dir, n), 2_000_000, folder_held=True)))
+        except OSError:
+            pass
+        finally:
+            release(held)
+        for n, text in items:
+            try:
+                j = json.loads(text)
+            except ValueError:
+                continue
+            if isinstance(j, dict) and on_this_pc(j.get("InstallLocation")):
+                games.append({"name": str(j.get("DisplayName") or n)[:120], "path": os.path.normpath(j["InstallLocation"]),
+                              "bytes": j.get("InstallSize") if isinstance(j.get("InstallSize"), int) else None})
         found.append({"name": "Epic Games", "libraries": sorted({os.path.dirname(g["path"]) for g in games}), "games": games})
 
     if IS_WIN:
@@ -442,7 +533,7 @@ def launchers(drives):
             for sub in reg_subkeys(winreg.HKEY_LOCAL_MACHINE, key):
                 v = reg_values(winreg.HKEY_LOCAL_MACHINE, key + "\\" + sub)
                 p = expand(v.get(pathk))
-                if p and on_this_pc(p) and os.path.isdir(p):
+                if p and a_folder_here(p):
                     games.append({"name": v.get(namek) if namek else os.path.basename(p.rstrip("\\/")),
                                   "path": p, "bytes": None})
             if games:
@@ -453,14 +544,12 @@ def launchers(drives):
         games, libs = [], []
         for d in drives:
             base = os.path.join(d["root"], folder)
-            if os.path.isdir(base):
+            names = listed(base)  # the top of a drive is a place anyone on the PC can make a folder, or a link, in
+            if names is not None:
                 libs.append(base)
-                try:
-                    for n in sorted(os.listdir(base)):
-                        if os.path.isdir(os.path.join(base, n)) and n.lower() not in ("gamesave", "riot client"):
-                            games.append({"name": n, "path": os.path.join(base, n), "bytes": None})
-                except OSError:
-                    pass
+                for n in sorted(names):
+                    if n.lower() not in ("gamesave", "riot client") and a_folder_here(os.path.join(base, n)):
+                        games.append({"name": n, "path": os.path.join(base, n), "bytes": None})
         if libs:
             found.append({"name": lname, "libraries": libs, "games": games})
     for f in found:

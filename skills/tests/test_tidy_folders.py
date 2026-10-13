@@ -73,15 +73,19 @@ try:
     except OSError:
         note("this account can't make symlinks: the two link checks on launcher files were not run")
     asked = []
-    real_isdir, real_values, real_subkeys = os.path.isdir, tidy_survey.reg_values, tidy_survey.reg_subkeys
+    real_opened, real_isdir, real_values, real_subkeys = tidy_survey._opened, os.path.isdir, tidy_survey.reg_values, tidy_survey.reg_subkeys
+
+    def opened_noting(p, access, share):
+        asked.append(str(p))
+        return None if str(p).startswith("\\\\") else real_opened(p, access, share)  # noted, never passed on: this test contacts nothing
 
     def isdir_noting(p):
         asked.append(str(p))
-        return False if str(p).startswith("\\\\") else real_isdir(p)  # noted, and never passed on: this test contacts nothing
+        return False if str(p).startswith("\\\\") else real_isdir(p)
 
     program_data = os.environ.get("ProgramData")
     try:
-        os.path.isdir = isdir_noting
+        os.path.isdir, tidy_survey._opened = isdir_noting, opened_noting
         tidy_survey.reg_values = lambda hive, key, *a: {"SteamPath": steam} if key.endswith("Valve\\Steam") else {}
         tidy_survey.reg_subkeys = lambda hive, key: []
         os.environ["ProgramData"] = os.path.join(T, "launchers", "ProgramData")  # so no real launcher's files are read
@@ -91,21 +95,46 @@ try:
             os.environ.pop("ProgramData", None)
         else:
             os.environ["ProgramData"] = program_data
-        os.path.isdir, tidy_survey.reg_values, tidy_survey.reg_subkeys = real_isdir, real_values, real_subkeys
+        os.path.isdir, tidy_survey._opened, tidy_survey.reg_values, tidy_survey.reg_subkeys = real_isdir, real_opened, real_values, real_subkeys
     steam_found = next((f for f in found if f["name"] == "Steam"), {"libraries": [], "games": []})
     check("a game library on a share, or not a full path, is never asked about; one on this PC is read",
           not any(p.startswith("\\\\") or "files.example" in p or p.startswith("relative") for p in asked)
+          and any(p.endswith("Library here\\steamapps") for p in asked)
           and sorted(os.path.basename(l) for l in steam_found["libraries"]) == ["Library here", "Steam"]
           and [g["name"] for g in steam_found["games"]] == ["Lanternfall Quest"], (asked, steam_found))
     if len(symlinks) == 2:
         check("a launcher file that is a link, and a library reached through a link, are not read",
               not any("Link" in g["name"] for g in steam_found["games"]) and not any("Library link" in l for l in steam_found["libraries"])
-              and not tidy_survey.on_this_pc(os.path.join(T, "launchers", "Library link", "steamapps")), steam_found)
+              and not tidy_survey.a_folder_here(os.path.join(T, "launchers", "Library link", "steamapps"))
+              and tidy_survey.listed(os.path.join(T, "launchers", "Library link")) is None
+              and tidy_survey.read_text(os.path.join(here_lib, "steamapps", "appmanifest_3.acf")) == ""
+              and "Lanternfall Quest" in tidy_survey.read_text(os.path.join(here_lib, "steamapps", "appmanifest_1.acf")), steam_found)
     for link in symlinks:
         (os.rmdir if os.path.isdir(link) else os.remove)(link)  # the link itself, never what it leads to
     check("on_this_pc: only a full path on a disk in this PC",
           tidy_survey.on_this_pc(T) and not any(tidy_survey.on_this_pc(p) for p in (
               "\\\\files.example\\share\\x", "\\\\?\\UNC\\files.example\\share", "relative\\x", "C:", "", None, 7, "Q:relative")))
+    # While a folder is being looked into, it and everything above it are held: nobody can swap one for a link meanwhile.
+    inner = os.path.join(T, "launchers", "held", "inner")
+    os.makedirs(inner)
+    write(os.path.join(inner, "a file.txt"), "x")
+    held = tidy_survey.hold(inner)
+    try:
+        os.rename(os.path.join(T, "launchers", "held"), os.path.join(T, "launchers", "held moved"))
+        swapped = True
+    except OSError:
+        swapped = False
+    tidy_survey.release(held)
+    check("a folder that is being looked into can't be moved or replaced meanwhile, and can afterwards",
+          held is not None and not swapped and tidy_survey.a_folder_here(inner))
+    os.rename(os.path.join(T, "launchers", "held"), os.path.join(T, "launchers", "held moved"))
+    moved = os.path.join(T, "launchers", "held moved", "inner")
+    check("what isn't there, is a file, or isn't spelled as a full path on this PC is never 'a folder here'",
+          tidy_survey.a_folder_here(moved) and not any(tidy_survey.a_folder_here(p) for p in (
+              inner, os.path.join(moved, "missing"), os.path.join(moved, "a file.txt"), os.path.join(moved, "a file.txt", "below"),
+              "\\\\files.example\\share", "moved\\inner", ""))
+          and tidy_survey.listed(os.path.join(moved, "missing")) is None and tidy_survey.read_text(os.path.join(moved, "missing.txt")) == ""
+          and tidy_survey.listed(moved) == ["a file.txt"])
     sys.path.remove(S)
     shutil.rmtree(os.path.join(T, "launchers"))  # this test's own fixture, inside its own work folder
 
