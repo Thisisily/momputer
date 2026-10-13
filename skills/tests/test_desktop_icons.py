@@ -194,9 +194,17 @@ try:
           len(far["target"]) > 600 and len(far["to"]) <= 200 and far["status"] == "dead"
           and all(len(s.get("why", "")) < 400 for s in sv["suggestions"]), far["to"])
     cmdline = by_name[("desktop", "Net use.lnk")]["shortcut"].get("args_preview", "")
-    check("what a command shortcut would run is shown without what looks like a password, a key or a long coded value",
-          "net use" in cmdline and "/user:lanternfall" in cmdline and len(cmdline) <= 120
-          and not any(s in raw for s in ("Hunter2-PASSWORD-77", "TOKEN-VALUE-5521", "KEY VALUE 3310", "QUJDQUJDQUJD")), cmdline)
+    check("nothing from a command shortcut's arguments is shown, only how long they are and which fixed things they mention",
+          "characters of instructions" in cmdline and "signing in to another PC or account" in cmdline and "an encoded command" in cmdline
+          and "Properties" in cmdline
+          and not any(s in raw for s in ("Hunter2-PASSWORD-77", "TOKEN-VALUE-5521", "KEY VALUE 3310", "QUJDQUJDQUJD", "lanternfall & tool",
+                                         "files.example", "echo pwned")), cmdline)
+    sys.path.insert(0, S)
+    import survey as desktop_survey  # noqa: E402  (the skill's own script)
+    started = time.time()
+    said = desktop_survey.about_args("x" * 200000 + " /user:" * 5000) + desktop_survey.shown_path("C:\\" + "y" * 200000)
+    sys.path.remove(S)
+    check("a very long shortcut costs no time to describe", time.time() - started < 2 and len(said) < 700, len(said))
     check("the same program in two places is reported as perhaps installed twice",
           len(sv["twice"]) == 1 and sv["twice"][0]["program"] == "samename.exe" and len(sv["twice"][0]["places"]) == 2, sv["twice"])
     check("a dead shortcut on the Public Desktop is 'for you to do'", len(sv["for_you"]) == 1 and sv["for_you"][0]["name"] == "Dead Public.lnk", sv["for_you"])
@@ -262,7 +270,8 @@ try:
           SECRET not in html and "SECRET-TOKEN" not in html and "rungameid" not in html)
     check("the page is self-contained: no outside address in it but the SVG namespace",
           html.count("http://www.w3.org/2000/svg") == html.count("http://") and "https://" not in html and "//cdn" not in html)
-    check("what a flagged shortcut would run is shown as plain text next to it", "echo pwned" in acts["Invoice.pdf.lnk"].get("detail", ""))
+    check("what a flagged shortcut would run is described next to it, never shown",
+          "characters of instructions" in acts["Invoice.pdf.lnk"].get("detail", "") and "echo pwned" not in json.dumps(plan) and "echo pwned" not in html)
     r = run(build + ["--notes", notes_json, "--out", os.path.join(out, "again.html"), "--plan", os.path.join(out, "again.json")])
     check("building twice from the same survey and notes gives the same plan id",
           json.load(open(os.path.join(out, "again.json"), encoding="utf-8"))["plan_id"] == plan["plan_id"])

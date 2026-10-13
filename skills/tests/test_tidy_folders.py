@@ -57,6 +57,21 @@ try:
     write(os.path.join(steam, "steamapps", "libraryfolders.vdf"),
           '"libraryfolders"\n{\n "0" { "path" "%s" }\n "1" { "path" "\\\\\\\\files.example\\\\share\\\\SteamLibrary" }\n "2" { "path" "relative\\\\lib" }\n}\n'
           % here_lib.replace("\\", "\\\\"))
+    # A manifest that is a link, and a library reached through one: neither is read. (Making a
+    # symlink needs a right most accounts don't have; without it these two are not run.)
+    elsewhere = os.path.join(T, "launchers", "elsewhere")
+    write(os.path.join(elsewhere, "steamapps", "appmanifest_9.acf"), '"name" "Reached Through A Link"\n"installdir" "Reached"\n')
+    write(os.path.join(elsewhere, "linked.acf"), '"name" "Read Through A Link"\n"installdir" "Linked"\n')
+    symlinks = []
+    try:
+        os.symlink(os.path.join(elsewhere, "linked.acf"), os.path.join(here_lib, "steamapps", "appmanifest_3.acf"))
+        symlinks.append(os.path.join(here_lib, "steamapps", "appmanifest_3.acf"))
+        os.symlink(elsewhere, os.path.join(T, "launchers", "Library link"), target_is_directory=True)
+        symlinks.append(os.path.join(T, "launchers", "Library link"))
+        with open(os.path.join(steam, "steamapps", "libraryfolders.vdf"), "a", encoding="utf-8") as f:
+            f.write('"3" { "path" "%s" }\n' % os.path.join(T, "launchers", "Library link").replace("\\", "\\\\"))
+    except OSError:
+        note("this account can't make symlinks: the two link checks on launcher files were not run")
     asked = []
     real_isdir, real_values, real_subkeys = os.path.isdir, tidy_survey.reg_values, tidy_survey.reg_subkeys
 
@@ -82,6 +97,12 @@ try:
           not any(p.startswith("\\\\") or "files.example" in p or p.startswith("relative") for p in asked)
           and sorted(os.path.basename(l) for l in steam_found["libraries"]) == ["Library here", "Steam"]
           and [g["name"] for g in steam_found["games"]] == ["Lanternfall Quest"], (asked, steam_found))
+    if len(symlinks) == 2:
+        check("a launcher file that is a link, and a library reached through a link, are not read",
+              not any("Link" in g["name"] for g in steam_found["games"]) and not any("Library link" in l for l in steam_found["libraries"])
+              and not tidy_survey.on_this_pc(os.path.join(T, "launchers", "Library link", "steamapps")), steam_found)
+    for link in symlinks:
+        (os.rmdir if os.path.isdir(link) else os.remove)(link)  # the link itself, never what it leads to
     check("on_this_pc: only a full path on a disk in this PC",
           tidy_survey.on_this_pc(T) and not any(tidy_survey.on_this_pc(p) for p in (
               "\\\\files.example\\share\\x", "\\\\?\\UNC\\files.example\\share", "relative\\x", "C:", "", None, 7, "Q:relative")))

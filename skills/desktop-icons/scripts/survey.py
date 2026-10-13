@@ -42,7 +42,7 @@ MAX_ELSEWHERE = 3000              # Start menu and taskbar shortcuts looked at
 FOLDER_ENTRY_CAP = 5000           # entries counted inside one desktop folder
 STALE_DAYS = 30                   # untouched this long: ticked by default
 MAX_SHOWN = 200                   # characters of a shortcut's target that are shown; the rest is cut
-MAX_ARGS_SHOWN = 120              # and of what a command shortcut would run
+MAX_ARGS_READ = 4096              # characters of a command shortcut's arguments that are looked at
 A_HIDDEN, A_SYSTEM, A_REPARSE = 0x2, 0x4, 0x400
 CLOUD_ONLY = 0x1000 | 0x40000 | 0x400000
 LINK_TAGS = (0xA0000003, 0xA000000C)
@@ -131,37 +131,37 @@ def fill_in_places(text):
     return None if bad or "%" in out else out
 
 
-# Passwords and keys ride in a command's arguments ("net use ... hunter2 /user:me", "--token=..."),
-# so what looks like one is blanked before the rest is shown.
-SECRET_SWITCH_RX = re.compile(
-    r"(?i)((?<![A-Za-z])(?:pass(?:word|wd)?|pwd|token|secret|api[-_]?key|key|auth|credentials?|bearer)\s*[=:\s]\s*)(\"[^\"]*\"|'[^']*'|\S+)")
-NET_USER_RX = re.compile(r"(?i)(\S+)(\s+/user:\S+)(\s+\S+)?")
-LONG_VALUE_RX = re.compile(r"[A-Za-z0-9+/=_\-]{24,}")
+# What a command's arguments are said to do. Nothing from the arguments themselves is ever shown:
+# passwords and keys ride in them ("net use ... hunter2 /user:me", "curl -u me:hunter2"), and no
+# list of what a password looks like is complete. Only these fixed words can come out.
+ARGS_MENTION = [
+    ("an encoded command", ("-enc", "encodedcommand", "frombase64string")),
+    ("downloading something", ("http://", "https://", "ftp://", "downloadstring", "downloadfile", "invoke-webrequest", "iwr ", "curl",
+                               "wget", "bitsadmin", "urlcache", "start-bitstransfer")),
+    ("deleting files", ("del ", "erase ", "rd ", "rmdir", "remove-item", "format ", "cipher /w", "vssadmin")),
+    ("changing Windows settings", ("reg add", "reg delete", "regedit", "set-itemproperty", "new-itemproperty", "bcdedit", "netsh",
+                                   "set-mppreference")),
+    ("setting something to run later", ("schtasks", "scheduledtask", "\\startup", "currentversion\\run")),
+    ("signing in to another PC or account", ("net use", "net user", "runas", "/user:", "psexec", "cmdkey")),
+    ("hiding its window", ("-windowstyle hidden", "-w hidden", "/min", "vbhide")),
+    ("running another script", (".ps1", ".bat", ".cmd", ".vbs", ".js", "invoke-expression", "iex ", "iex(", "mshta", "rundll32", "regsvr32")),
+]
 
 
-def shown_args(args):
-    """The start of a command's arguments, for showing: one line, cut to length, with anything that
-    looks like a password, a key or a long coded value blanked."""
-    text = " ".join(args.split())
-
-    def around_user(m):
-        before, user, after = m.group(1), m.group(2), m.group(3) or ""
-        if not re.match(r"^(?:[A-Za-z]:|\\\\|/)", before):   # not a drive, a share or a switch: the password
-            before = "[not shown]"
-        if after.strip() and not after.strip().startswith("/"):
-            after = " [not shown]"
-        return before + user + after
-
-    text = NET_USER_RX.sub(around_user, text)
-    text = SECRET_SWITCH_RX.sub(lambda m: m.group(1) + "[not shown]", text)
-    text = LONG_VALUE_RX.sub("[long value not shown]", text)
-    return text[:MAX_ARGS_SHOWN]
+def about_args(args):
+    """What can be said of a command's arguments without showing any of them: how long they are, and
+    which of a few fixed things they mention. Plain word-spotting on the first few thousand characters."""
+    low = " ".join(args[:MAX_ARGS_READ].lower().split())
+    said = [label for label, words in ARGS_MENTION if any(w in low for w in words)]
+    return "%d characters of instructions%s. They aren't shown here, because instructions can hold passwords: right-click the shortcut > Properties to read them." % (
+        len(args.strip()), "; they mention " + ", ".join(said) if said else "")
 
 
 def shown_path(text):
-    """A target for showing: spelled out, and cut to length (a shortcut can hold 32,000 characters)."""
-    text = spelled_out(text)
-    return text if len(text) <= MAX_SHOWN else text[:MAX_SHOWN - 3] + "..."
+    """A target for showing: cut to length first (a shortcut can hold 32,000 characters), then spelled out."""
+    long = len(text) > MAX_SHOWN
+    text = spelled_out(text[:MAX_SHOWN])
+    return text[:MAX_SHOWN - 3] + "..." if long or len(text) > MAX_SHOWN else text
 
 
 def spelled_out(text):
@@ -433,7 +433,7 @@ def _read_shortcut(path, name, size, cloud, prober):
     shown = name[:-4] if name.lower().endswith(".lnk") else name
     if base in COMMAND_HOSTS and sc["has_args"]:
         sc["flag"] = "runs a command: %s with instructions attached" % base
-        sc["args_preview"] = shown_args(args)
+        sc["args_preview"] = about_args(args)
     elif sc["leads_to"] == "program" and ext_of(shown) in PRETEND_EXTS:
         sc["flag"] = "named like a document but starts a program (%s)" % spelled_out(base)
     return sc

@@ -320,7 +320,26 @@ def on_this_pc(path):
     if root not in _DRIVE_KINDS:
         import ctypes
         _DRIVE_KINDS[root] = ctypes.windll.kernel32.GetDriveTypeW(root)
-    return _DRIVE_KINDS[root] in (2, 3)  # removable, fixed. Not a network drive, not unknown
+    if _DRIVE_KINDS[root] not in (2, 3):  # removable, fixed. Not a network drive, not unknown
+        return False
+    # Nor through a link: part by part, each looked at as itself. A symlink on a local disk can
+    # lead to another PC all the same. (What isn't there yet ends the walk: nothing to follow.)
+    cur = root
+    for part in [p for p in os.path.normpath(path)[3:].split("\\") if p]:
+        cur = os.path.join(cur, part)
+        if is_link("\\\\?\\" + cur) is not False:
+            return os.path.lexists("\\\\?\\" + cur) is False
+    return True
+
+
+def is_link(path):
+    """True for a junction or symlink, False for anything else that is there, None if it can't be looked at."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    import stat
+    return stat.S_ISLNK(st.st_mode) or bool(getattr(st, "st_file_attributes", 0) & 0x400 and getattr(st, "st_reparse_tag", 0) & 0x20000000)
 
 
 def installed_programs(never=()):
@@ -352,6 +371,10 @@ def installed_programs(never=()):
 
 
 def read_text(path, limit=2_000_000):
+    """The start of a launcher's own text file. A file that is a link is not opened: these files sit
+    where other accounts on the PC can write, and a link can lead to another PC."""
+    if is_link(path) is not False:
+        return ""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             return f.read(limit)
