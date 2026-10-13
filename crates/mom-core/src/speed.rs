@@ -689,12 +689,13 @@ fn tuners(installed: &[String], table: &ProcTable, gpu: Option<&Gpu>, trouble: b
 
 /// Helpers that come with hardware and utilities and run all day: (who, what they do, process
 /// names without .exe, lowercase, and the apps worth offering to uninstall: never the ones that
-/// run your mouse or lights).
+/// run your mouse or lights). What they do is read out after "It", so it starts with a verb:
+/// "runs your lights", not "lighting".
 const EXTRAS: &[(&str, &str, &[&str], &[&str])] = &[
     ("IObit Uninstaller", "watches every program you install", &["uninstallmonitor", "iobituninstaler", "iobitunsvr"], &["IObit Uninstaller"]),
     (
         "Razer Synapse and Cortex",
-        "mouse settings, lighting and a game booster",
+        "runs your mouse settings and lighting, and a game booster",
         &[
             "razerappengine", "razer central", "razercentralservice", "razercortex", "cortexlauncherservice", "gamemanagerservice3",
             "razer_elevation_service", "rzactionsvc", "razerwdl", "rzchromasdkservice", "rzsdkserver", "rzsdkservice", "chromastreamserver",
@@ -709,16 +710,16 @@ const EXTRAS: &[(&str, &str, &[&str], &[&str])] = &[
     ),
     (
         "ASUS Armoury Crate and Aura",
-        "lighting and fan control",
+        "runs your lighting and fans",
         &["armourycrate.service", "armourycrate.usersessionhelper", "armourycratecontrolinterface", "asuscertservice", "lightingservice", "atkexcomsvc", "asus_framework", "ledcontrolservice"],
         &[],
     ),
-    ("Logitech G HUB", "mouse, keyboard and lighting settings", &["lghub", "lghub_agent", "lghub_updater", "lghub_system_tray"], &[]),
-    ("Corsair iCUE", "lighting and fan control", &["icue", "corsair.service", "corsairdeviceservice", "icue.service"], &[]),
-    ("NZXT CAM", "lighting and fan control", &["nzxt cam", "nzxtcam"], &[]),
-    ("SteelSeries GG", "device settings", &["steelseriesgg", "steelseriesengine", "steelseriesggclient"], &[]),
-    ("MSI Center", "lighting and fan control", &["msi.centralserver", "msi_central_service", "mysticlight_service", "msi.centralserver.service"], &[]),
-    ("Wallpaper Engine", "moving wallpapers", &["wallpaper32", "wallpaper64", "webwallpaper32"], &[]),
+    ("Logitech G HUB", "keeps your mouse, keyboard and lighting settings", &["lghub", "lghub_agent", "lghub_updater", "lghub_system_tray"], &[]),
+    ("Corsair iCUE", "runs your lighting and fans", &["icue", "corsair.service", "corsairdeviceservice", "icue.service"], &[]),
+    ("NZXT CAM", "runs your lighting and fans", &["nzxt cam", "nzxtcam"], &[]),
+    ("SteelSeries GG", "keeps your keyboard and mouse settings", &["steelseriesgg", "steelseriesengine", "steelseriesggclient"], &[]),
+    ("MSI Center", "runs your lighting and fans", &["msi.centralserver", "msi_central_service", "mysticlight_service", "msi.centralserver.service"], &[]),
+    ("Wallpaper Engine", "plays moving wallpapers", &["wallpaper32", "wallpaper64", "webwallpaper32"], &[]),
 ];
 
 /// Worth mentioning: a quarter of a core all day long (on average since it started), or this
@@ -1174,6 +1175,23 @@ mod tests {
         assert_eq!((fix.kind, fix.value.as_str(), fix.label.as_str()), ("end", "app:iobit uninstaller", "End IObit Uninstaller"));
         assert_eq!((f[0].more[0].kind, f[0].more[0].label.as_str()), ("uninstall", "Uninstall IObit Uninstaller 16"));
         assert_eq!(short("Razer Synapse and Cortex"), "Razer");
+    }
+
+    #[test]
+    fn what_a_helper_does_reads_as_a_sentence() {
+        // "It runs your lighting and fans", never "It lighting and fan control".
+        const VERBS: &[&str] = &["watches", "runs", "keeps", "plays"];
+        for (who, what, _, _) in EXTRAS {
+            let first = what.split(' ').next().unwrap_or_default();
+            assert!(VERBS.contains(&first), "{who}: \"It {what}\" isn't a sentence");
+            assert!(!what.ends_with('.') && !what.contains(':'), "{who}: {what}");
+        }
+        let now = 1_000_000;
+        let mut razer = fake(30, 1, "RazerAppEngine.exe", "RazerAppEngine", now - 100_000);
+        razer.mem = 600 * 1024 * 1024;
+        let f = extras(&ProcTable::from_procs(vec![razer], 999), &[], &[], &[], now);
+        assert_eq!(f[0].title, "Razer runs all the time");
+        assert!(f[0].detail.starts_with("It runs your mouse settings and lighting, and a game booster: 1 process, 600"), "{}", f[0].detail);
     }
 
     #[test]
