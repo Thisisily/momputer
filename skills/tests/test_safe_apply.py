@@ -7,6 +7,11 @@ exist and be under %TEMP%, because the checks rely on Temp being a protected pla
 outside that work folder is created, moved, renamed or deleted. The work folder is removed at
 the end unless --keep is given.
 
+Hostile actions and log rows aimed at real places on this PC (Windows, Program Files, AppData,
+the Startup folder, a drive itself) only ever go through a dry run or a preview. Whatever is run
+for real is aimed inside the work folder, and nothing is run for real at all if a check has
+failed before the first --apply.
+
 --entry names the script in the skill's scripts/ folder that is run as the command line: the
 engine itself (the default), or a wrapper around it that adds no rules in --root mode, such as
 tidy-folders' apply_plan.py.
@@ -23,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -74,12 +80,60 @@ def run(args, **kw):
     return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", **kw)
 
 
+def for_real():
+    """Called before anything is run for real (--apply, or revert.ps1 without -Preview). The first
+    time, it stops the whole test if a check has already failed: the dry runs before it are what
+    say the engine still refuses what it must, and nothing is run for real on a failed one."""
+    if not started:
+        if fails:
+            print("\nSTOPPED before the first --apply: %d check(s) had already failed, so nothing is run for real: %s"
+                  % (len(fails), fails))
+            sys.exit(1)
+        started.append(count[0])
+
+
 def entry(*args):
+    if "--apply" in args:
+        for_real()
     return run([PY, "-I", ENTRY] + list(args))
 
 
-def revert(folder, *args):
-    return run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", os.path.join(folder, "revert.ps1")] + list(args))
+def powershell(script, *args, **kw):
+    if "-Preview" not in args:
+        for_real()
+    return run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script] + list(args), **kw)
+
+
+def revert(folder, *args, **kw):
+    """The copy of revert.ps1 next to a log."""
+    return powershell(os.path.join(folder, "revert.ps1"), *args, **kw)
+
+
+def own_revert(*args, **kw):
+    """The skill's own revert.ps1, in its scripts folder."""
+    return powershell(REVERT, *args, **kw)
+
+
+def not_in_work_folder(paths):
+    """Those of `paths` that are not inside this test's work folder (spelled out, or by its short name)."""
+    homes = [os.path.normcase(T) + os.sep, os.path.normcase(short(T)) + os.sep]
+    out = []
+    for p in paths:
+        if isinstance(p, str) and p:
+            q = os.path.normcase(os.path.normpath(p.replace("/", "\\")))
+            if not any(q.startswith(h) for h in homes):
+                out.append(p)
+    return out
+
+
+def only_in_work_folder(what, rows):
+    """Stops the test if a plan or log that will be run for real names a place outside the work
+    folder. Hostile rows aimed at real places (Windows, Program Files, AppData...) go through a
+    dry run only: the code under test is never the only thing between a mistake and this PC."""
+    aimed = not_in_work_folder([r.get(k) for r in rows for k in ("from", "to")])
+    if aimed:
+        sys.exit("%s would be run for real, and it names a place outside the work folder: %s. "
+                 "Make it dry_only, or aim the row inside the work folder." % (what, aimed[:3]))
 
 
 def tree(root):
@@ -114,21 +168,58 @@ def only(lines, aid, status, word=""):
 
 
 def junction(link, target):
-    made = subprocess.run(["cmd", "/c", "mklink", "/J", link, target], capture_output=True, text=True)
-    if made.returncode == 0:
-        links.append(link)
-    return made.returncode == 0
+    """Make a junction at `link` that leads to the folder `target`. True if it was made. Windows is
+    asked directly: no command line is built from the two paths."""
+    existed = os.path.lexists(link)
+    try:
+        import _winapi  # Windows only
+        _winapi.CreateJunction(target, link)
+    except (ImportError, AttributeError, OSError):
+        if not existed:
+            try:
+                os.rmdir(link)  # a half-made link is an empty folder (or the link itself): never what it leads to
+            except OSError:
+                pass
+        return False
+    links.append(link)
+    return True
 
 
-def write_log(folder, rows):
+def write_log(folder, rows, dry_only=False):
+    if not dry_only:
+        only_in_work_folder(os.path.basename(folder), rows)
     os.makedirs(folder)
     shutil.copyfile(REVERT, os.path.join(folder, "revert.ps1"))
     with open(os.path.join(folder, "undo-log.csv"), "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, ["time", "id", "op", "from", "to", "status", "note"], quoting=csv.QUOTE_ALL)
         w.writeheader()
         for i, row in enumerate(rows):
-            w.writerow({"time": "2026-01-01T00:00:00", "id": i + 1, "op": row["op"], "from": row["from"],
+            w.writerow({"time": "2026-01-01T00:00:00", "id": row.get("id", i + 1), "op": row["op"], "from": row["from"],
                         "to": row.get("to", ""), "status": "DONE", "note": ""})
+
+
+def turn_into_junction(folder, target):
+    """Turn an existing, empty folder into a junction to `target` where it stands: no rename and no
+    delete, so it is the one swap that is still open to someone who can write to a folder while the
+    engine holds that folder open."""
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateFileW.restype = ctypes.c_void_p
+    k.CreateFileW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p]
+    k.DeviceIoControl.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32,
+                                  ctypes.c_void_p, ctypes.c_void_p]
+    k.CloseHandle.argtypes = [ctypes.c_void_p]
+    h = k.CreateFileW(X + folder, 0x40000000, 7, None, 3, 0x02000000 | 0x00200000, None)  # GENERIC_WRITE, share all, the folder itself
+    if h in (None, ctypes.c_void_p(-1).value):
+        return False
+    sub = "\\??\\" + target
+    data = struct.pack("<HHHH", 0, len(sub) * 2, len(sub) * 2 + 2, len(target) * 2) + (sub + "\0" + target + "\0").encode("utf-16-le")
+    blob = struct.pack("<IHH", 0xA0000003, len(data), 0) + data   # a mount point (junction) reparse buffer
+    got = ctypes.c_uint32(0)
+    ok = k.DeviceIoControl(h, 0x000900A4, blob, len(blob), None, 0, ctypes.byref(got), None)  # FSCTL_SET_REPARSE_POINT
+    k.CloseHandle(h)
+    if ok:
+        links.append(folder)
+    return bool(ok)
 
 
 @contextlib.contextmanager
@@ -143,6 +234,8 @@ def patched(obj, name, value):
 
 def in_process(argv, **hooks):
     """Run the engine inside this process (so it can be patched). Returns (output, exit code or None)."""
+    if "--apply" in argv:
+        for_real()
     buf, code = io.StringIO(), None
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         try:
@@ -156,6 +249,7 @@ def in_process(argv, **hooks):
 
 links = []          # every junction made here, removed (the link itself, never its target) at the end
 locked = []         # folders made unlistable, to be opened up again whatever happens
+started = []        # filled in by for_real() once the first run for real has been let through
 pycache_before = os.path.isdir(os.path.join(SCRIPTS, "__pycache__"))
 sys.path.insert(0, SCRIPTS)
 import safe_apply as sa  # noqa: E402  (the skill's own copy)
@@ -231,15 +325,25 @@ try:
         bad = [b for b in bad if "alias" not in b[0]]
         note("this disk doesn't create short names for new folders: the two short-name alias actions were not run "
              "(the short names of Program Files and AppData were)")
+    # The hostile actions aimed at real places on this PC. They go through the dry run only, in a
+    # plan of their own; the plan that is later run with --apply holds nothing aimed outside the
+    # work folder (make_plan stops the test if it would).
+    real_places = {"network share as source", "network share as destination", "device path", "C:\\Windows",
+                   "Startup folder as destination", "short name of Program Files", "short name of AppData as the last part"}
+    bad_real = [b for b in bad if b[0] in real_places]
+    bad_here = [b for b in bad if b[0] not in real_places]
 
-    def make_plan(file_name, actions, schema=None):
+    def make_plan(file_name, actions, schema=None, dry_only=False):
+        if not dry_only:
+            only_in_work_folder(file_name, actions)
         actions = [dict(a, id=i + 1) for i, a in enumerate(actions)]
         plan = {"schema": schema or os.path.basename(SKILL) + "/plan@1", "plan_id": sa.plan_fingerprint(actions), "actions": actions}
         path = os.path.join(T, file_name)
         json.dump(plan, open(path, "w", encoding="utf-8"), ensure_ascii=False)
         return path, plan, "TIDY-APPROVE plan=%s ids=1-%d" % (plan["plan_id"], len(actions))
 
-    plan_path, plan, approve = make_plan("plan.json", good + [b[1] for b in bad])
+    plan_path, plan, approve = make_plan("plan.json", good + [b[1] for b in bad_here])
+    real_path, _, real_approve = make_plan("plan-real.json", [b[1] for b in bad_real], dry_only=True)
     log1 = os.path.join(T, "log1")
     before = tree(root)
 
@@ -247,7 +351,9 @@ try:
     print("\n-- 1. dry run: good actions would happen, hostile ones are refused")
     r = entry(plan_path, "--approve", approve, "--root", root, "--log-dir", log1)
     lines = by_id(r.stdout)
-    check("dry run exits clean", r.returncode == 0, r.stderr or r.stdout)
+    rr = entry(real_path, "--approve", real_approve, "--root", root, "--log-dir", log1)
+    real_lines = by_id(rr.stdout)
+    check("dry run exits clean", r.returncode == 0 and rr.returncode == 0, r.stderr or rr.stderr or r.stdout)
     # The alias rule, tested directly: a path whose real name differs from how it's written is refused.
     g = sa.Guard(root)
     check("guard accepts a plain path in the folder", g.why_not(victim) is None, g.why_not(victim))
@@ -261,9 +367,12 @@ try:
     check("long_name keeps parts that don't exist yet", sa.long_name(os.path.join(doc, "New", "x.txt")) == os.path.join(doc, "New", "x.txt"))
     check("dry run: the %d good moves would happen (a name ending in a dot and a folder too)" % len(good),
           all(only(lines, i + 1, "WOULD") for i in range(len(good))), r.stdout)
-    for k, (why, _) in enumerate(bad):
-        i = len(good) + k + 1
-        check("refused: " + why, only(lines, i, "REFUSED"), lines.get(i) or r.stdout[-400:])
+    for b in bad:   # in the order they are listed above, whichever of the two plans a row is in
+        if b in bad_real:
+            i, where, out = bad_real.index(b) + 1, real_lines, rr.stdout
+        else:
+            i, where, out = len(good) + bad_here.index(b) + 1, lines, r.stdout
+        check("refused: " + b[0], only(where, i, "REFUSED"), where.get(i) or out[-400:])
     check("dry run changed nothing", tree(root) == before and not os.path.exists(log1))
 
     # ------------------------------------------------------------ 2. the plan id and the approval
@@ -328,7 +437,7 @@ try:
     check("revert.ps1 puts everything back, odd names and the folder included", r.returncode == 0 and tree(root) == before, r.stdout + r.stderr)
     check("revert.ps1 removed the folder the apply made", not os.path.exists(os.path.join(doc, "Important")))
     check("nothing in a file name ran (no stray files)", sorted(os.listdir(T)) == sorted(
-        [MARK, "log1", "outside", "plan-one.json", "plan-tampered.json", "plan.json", "profile"]), os.listdir(T))
+        [MARK, "log1", "outside", "plan-one.json", "plan-real.json", "plan-tampered.json", "plan.json", "profile"]), os.listdir(T))
     log2 = os.path.join(T, "log2")
     r = entry(plan_path, "--approve", approve, "--root", root, "--log-dir", log2, "--apply")
     r = entry("--undo", log2, "--root", root)
@@ -360,15 +469,21 @@ try:
 
     # ------------------------------------------------------------ 5. an edited undo log
     print("\n-- 5. an edited undo log can't send a file into Startup, Windows, a share, or anywhere by another name")
-    log3 = os.path.join(T, "log3")
-    rows = [
+    # Rows that name a real place on this PC are only ever previewed (log3r); the rows that are run
+    # for real (log3) are all aimed inside the work folder. Both routes refuse a row before they
+    # look at whether it is a preview, so the preview shows the same refusal.
+    log3, log3r = os.path.join(T, "log3"), os.path.join(T, "log3r")
+    real_rows = [
         {"op": "move", "from": startup, "to": victim},
         {"op": "move", "from": "\\\\localhost\\C$\\Users\\Public\\mom-sec-test.txt", "to": victim},
-        {"op": "move", "from": os.path.join(outside, "moved.txt"), "to": victim},
         {"op": "move", "from": os.path.join(doc, "back.txt"), "to": "C:\\Windows\\win.ini"},
-        {"op": "move", "from": os.path.join(doc, "..", "..", "up.txt"), "to": victim},
         {"op": "remove-empty-dir", "from": os.path.join(appdata, "mom-sec-test-dir")},
         {"op": "move", "from": os.path.join(doc, "from-pf"), "to": short(os.environ["ProgramFiles"])},
+        {"op": "mkdir", "from": T[:3]},   # a drive itself
+    ]
+    rows = [
+        {"op": "move", "from": os.path.join(outside, "moved.txt"), "to": victim},
+        {"op": "move", "from": os.path.join(doc, "..", "..", "up.txt"), "to": victim},
         {"op": "move", "from": os.path.join(doc, "back2.txt"), "to": victim.replace("\\", "/")},
         {"op": "move", "from": os.path.join(doc, "sub.", "back3.txt"), "to": victim},
         {"op": "move", "from": os.path.join(out_link, "landed.txt"), "to": victim},
@@ -379,6 +494,7 @@ try:
         {"op": "move", "from": "", "to": victim},
     ]
     write_log(log3, rows)
+    write_log(log3r, real_rows, dry_only=True)
 
     def untouched():
         return (os.path.exists(victim) and not os.path.exists(startup) and os.path.exists("C:\\Windows\\win.ini")
@@ -387,12 +503,18 @@ try:
                 and os.path.isdir(os.environ["ProgramFiles"]) and tree(root) == before
                 and os.path.isdir(out_link) and sorted(os.listdir(outside)) == ["secret.txt"])
 
+    rp = entry("--undo", log3r, "--root", root)
     r = entry("--undo", log3, "--root", root, "--apply")
-    check("the Python undo refuses every row of an edited log", r.stdout.count("REFUSED") == len(rows) and untouched(), r.stdout + r.stderr)
+    check("the Python undo refuses every row of an edited log", r.stdout.count("REFUSED") == len(rows)
+          and rp.stdout.count("REFUSED") == len(real_rows) and "WOULD" not in rp.stdout and untouched(), rp.stdout + r.stdout + r.stderr)
+    rp = revert(log3r, "-Root", root, "-Preview")
     r = revert(log3, "-Root", root)
-    check("revert.ps1 refuses every row of an edited log", r.stdout.count("REFUSED") == len(rows) and r.returncode == 1 and untouched(), r.stdout + r.stderr)
+    check("revert.ps1 refuses every row of an edited log", r.stdout.count("REFUSED") == len(rows) and r.returncode == 1
+          and rp.stdout.count("REFUSED") == len(real_rows) and rp.returncode == 1 and untouched(), rp.stdout + r.stdout + r.stderr)
+    rp = revert(log3r, "-Root", os.environ["LOCALAPPDATA"], "-Preview")
     r = revert(log3, "-Root", os.environ["LOCALAPPDATA"])
-    check("revert.ps1 -Root on AppData\\Local exempts nothing", r.stdout.count("REFUSED") == len(rows) and untouched(), r.stdout + r.stderr)
+    check("revert.ps1 -Root on AppData\\Local exempts nothing", r.stdout.count("REFUSED") == len(rows)
+          and rp.stdout.count("REFUSED") == len(real_rows) and untouched(), rp.stdout + r.stdout + r.stderr)
     # A log with no usable columns, and an empty one: nothing moves, no crash into a move
     log3b = os.path.join(T, "log3b")
     write_log(log3b, [])
@@ -508,7 +630,7 @@ try:
                  {"op": "move", "from": plain_txt, "to": os.path.join(doc, "four.txt")},
                  {"op": "move", "from": plain_txt, "to": os.path.join(doc, "five.txt")},
                  {"op": "move", "from": victim, "to": 5}]
-    hp, _, happrove = make_plan("plan-hooks.json", h_actions)
+    hp, _, happrove = make_plan("plan-hooks.json", h_actions, dry_only=True)   # one row names Windows itself: never applied
     out, code = in_process([hp, "--approve", happrove, "--root", root, "--log-dir", log1], places=my_places, check=my_check)
     L = by_id(out)
     check("a place the skill added: nothing goes into it", only(L, 1, "REFUSED", "destination is inside a place the skill added"), out)
@@ -668,7 +790,7 @@ try:
         plain_dir = os.path.join(doc, "Box")
         log9 = os.path.join(T, "log9")
         write_log(log9, [{"op": "move", "from": far, "to": plain_dir}, {"op": "move", "from": far + " 2", "to": holder},
-                         {"op": "move", "from": far + ".txt", "to": victim}])
+                         {"op": "move", "from": far + ".txt", "to": victim}], dry_only=True)
         state_now = tree(root)
         r = revert(log9, "-Root", root, "-Preview")
         check("revert.ps1 (preview): a folder that came from another drive is MANUAL, a file would go back",
@@ -679,8 +801,500 @@ try:
               r.stdout.count("WOULD") == 2 and r.stdout.count("REFUSED") == 1 and "holds a link" in r.stdout and tree(root) == state_now
               and not os.path.exists(os.path.dirname(far)), r.stdout + r.stderr)
 
-    # ------------------------------------------------------------ 9. odds and ends
-    print("\n-- 9. the rest")
+    # ------------------------------------------------------------ 9. the Recycle Bin call
+    print("\n-- 9. the Recycle Bin takes only what the plan names")
+    held = tree(root)   # how the made-up profile stands now: every scenario from here on puts it back like this
+    pics, vids = os.path.join(root, "Pictures"), os.path.join(root, "Videos")
+    fake_bin, binned = os.path.join(T, "pretend-recycle-bin"), []
+
+    def pretend_recycle(path):
+        """In place of the engine's recycle(): a move inside the work folder."""
+        os.makedirs(fake_bin, exist_ok=True)
+        dest = os.path.join(fake_bin, "%03d %s" % (len(binned), os.path.basename(path)))
+        shutil.move(X + path, X + dest)
+        binned.append((dest, path))
+        return None
+
+    def empty_bin():
+        """Put back what the pretend Recycle Bin holds."""
+        for dest, path in reversed(binned):
+            if os.path.lexists(X + dest):
+                shutil.move(X + dest, X + path)
+        del binned[:]
+        if os.path.isdir(fake_bin):
+            os.rmdir(fake_bin)
+
+    all_flags = 0x4 | 0x10 | 0x40 | 0x400 | 0x4000 | 0x2000
+    flags = getattr(sa, "RECYCLE_FLAGS", 0)
+    check("the Recycle Bin call is told not to take connected files along (FOF_NO_CONNECTED_ELEMENTS: a saved page's \"_files\" folder), "
+          "and as before: no prompts, undo allowed, a warning before anything is deleted for good", flags == all_flags, hex(flags))
+    page, companion = os.path.join(doc, "Saved page.htm"), os.path.join(doc, "Saved page_files")
+    open(page, "w").write("<html></html>")
+    os.makedirs(companion)
+    open(os.path.join(companion, "style.css"), "w").write("c")
+    gp, _, gapprove = make_plan("plan-page.json", [{"op": "recycle", "from": page}])
+    passed = []
+
+    def pretend_shell_delete(path, given):
+        passed.append((sa.norm(path), given))
+        pretend_recycle(path)
+        return 0, False
+
+    name = "recycle() hands exactly those flags, and only the page, to the Windows call (the call itself swapped for a move inside the work folder)"
+    if not hasattr(sa, "shell_delete"):
+        check(name, False, "this engine has no shell_delete() to swap; the real call is never made in a test")
+    elif ctypes.windll.kernel32.GetDriveTypeW(T[:3]) != 3:
+        note("the work folder is not on a fixed disk, so recycle() stops before the Windows call: the flags it hands over were not seen")
+    else:
+        want = [(sa.norm(sa.real(page)), all_flags)]
+        with patched(sa, "shell_delete", pretend_shell_delete):
+            out, code = in_process([gp, "--approve", gapprove, "--root", root, "--log-dir", os.path.join(T, "log-page"), "--apply"])
+        check(name, only(by_id(out), 1, "DONE") and passed == want and not os.path.exists(page)
+              and os.path.isfile(os.path.join(companion, "style.css")), (passed, out))
+    empty_bin()
+    os.remove(page)
+    shutil.rmtree(companion)
+
+    # ------------------------------------------------------------ 10. the log folder is always new
+    print("\n-- 10. a run's undo log goes into a new folder: an older log is never added to, or replayed")
+    logp = os.path.join(T, "log-planted")
+    planted_csv = os.path.join(logp, "undo-log.csv")
+    write_log(logp, [{"op": "move", "from": os.path.join(doc, "planted.txt"), "to": victim}])   # undoing this would take victim.txt out of Downloads
+    planted = open(planted_csv, "rb").read()
+    r = entry(one_path, "--approve", "T-APPROVE plan=%s ids=1" % pid, "--root", root, "--log-dir", logp, "--apply")
+    used = logp + " (2)"
+    check("a log folder that is already there is left exactly as it was: the run makes \"<name> (2)\" and says so",
+          r.returncode == 0 and only(by_id(r.stdout), 1, "DONE") and os.path.isfile(os.path.join(used, "undo-log.csv"))
+          and ("\n  %s\n" % used) in r.stdout and open(planted_csv, "rb").read() == planted
+          and sorted(os.listdir(logp)) == ["revert.ps1", "undo-log.csv"], r.stdout[-700:] + r.stderr)
+    new_rows = sa.read_log(os.path.join(used, "undo-log.csv")) if os.path.isdir(used) else []
+    with open(REVERT, "rb") as f:
+        own_script = f.read()
+    check("the new folder holds this run's rows only, and the revert script", [x["op"] for x in new_rows] == ["mkdir", "move"]
+          and not any("planted" in x["from"] for x in new_rows) and open(os.path.join(used, "revert.ps1"), "rb").read() == own_script, new_rows)
+    r = entry("--undo", used if os.path.isdir(used) else logp, "--root", root, "--apply")
+    check("undoing that run puts its own move back, and nothing that was lying in the older folder is replayed",
+          r.returncode == 0 and tree(root) == held and not os.path.exists(os.path.join(doc, "planted.txt")), r.stdout + r.stderr)
+    if os.path.exists(os.path.join(doc, "planted.txt")):   # only an engine that replays the planted row gets here
+        os.rename(os.path.join(doc, "planted.txt"), victim)
+    refused = False
+    if hasattr(sa, "new_folder"):
+        with patched(sa, "new_folder", lambda path: logp):   # as if a log had turned up in the new folder a moment after it was made
+            try:
+                sa.Log(os.path.join(T, "log-x"), False).f.close()
+            except FileExistsError:
+                refused = True
+    check("undo-log.csv itself is made new or not at all: a file of that name is never opened to be added to",
+          refused and open(planted_csv, "rb").read() == planted)
+
+    # ------------------------------------------------------------ 11. revert.ps1: main folders, -Log
+    print("\n-- 11. revert.ps1 never moves a main folder itself, and reads the log it is pointed at")
+    m_rows = [{"op": "move", "from": os.path.join(doc, "Stolen desktop"), "to": desk},   # would move the whole Desktop into Documents
+              {"op": "move", "from": pics, "to": box},                                   # a main folder as the place to put something back
+              {"op": "mkdir", "from": vids},                                             # would delete Videos (it is empty)
+              {"op": "mkdir", "from": vids.upper()},
+              {"op": "remove-empty-dir", "from": dl},
+              {"op": "remove-empty-dir", "from": root},                                  # the profile folder itself
+              {"op": "recycle", "from": desk}]
+    logm = os.path.join(T, "log-mains")
+    write_log(logm, m_rows)
+    r = revert(logm, "-Root", root)
+    check("revert.ps1 refuses every row that names a main folder itself (the Desktop is not moved into Documents, an empty Videos is not deleted)",
+          r.stdout.count("one of your main folders") == len(m_rows) and r.returncode == 1 and tree(root) == held and os.path.isdir(vids), r.stdout + r.stderr)
+    if os.path.isdir(os.path.join(doc, "Stolen desktop")) and not os.path.exists(desk):   # only a script that moves the Desktop gets here
+        os.rename(os.path.join(doc, "Stolen desktop"), desk)
+    os.makedirs(vids, exist_ok=True)
+    r = entry("--undo", logm, "--root", root, "--apply")
+    check("...and so does the Python undo", r.stdout.count("one of your main folders") == len(m_rows) and tree(root) == held and os.path.isdir(vids),
+          r.stdout + r.stderr)
+    # Without -Root the script asks Windows and its environment where the main folders are. Here the
+    # environment names made-up ones, so that branch is seen at work without a row that names a real folder.
+    fake_home, fake_public, fake_drive = (os.path.join(T, n) for n in ("fake-profile", "fake-public", "fake-onedrive"))
+    for d in (fake_home, os.path.join(fake_public, "Downloads"), fake_drive):
+        os.makedirs(d)
+    env_rows = [{"op": "mkdir", "from": fake_home}, {"op": "mkdir", "from": fake_public},
+                {"op": "mkdir", "from": os.path.join(fake_public, "Downloads")}, {"op": "mkdir", "from": fake_drive}]
+    loge = os.path.join(T, "log-env")
+    write_log(loge, env_rows)
+    r = revert(loge, env=dict(os.environ, USERPROFILE=fake_home, PUBLIC=fake_public, ONEDRIVE=fake_drive))   # os.environ's keys are capitals
+    check("revert.ps1 without -Root: the profile, Public, Public Downloads and OneDrive folders themselves (made-up ones, named in its "
+          "environment) are refused as main folders", r.stdout.count("one of your main folders") == len(env_rows)
+          and all(os.path.isdir(x["from"]) for x in env_rows), r.stdout + r.stderr)
+    for d in (fake_home, fake_public, fake_drive):
+        shutil.rmtree(d)
+    # -Log: the skill's own script, pointed at a log folder
+    logo = os.path.join(T, "log-own")
+    entry(one_path, "--approve", "T-APPROVE plan=%s ids=1" % pid, "--root", root, "--log-dir", logo, "--apply")
+    moved_now = tree(root)
+    if os.path.isfile(os.path.join(logo, "revert.ps1")):
+        os.remove(os.path.join(logo, "revert.ps1"))   # so the only script that can be running is the skill's own
+    rp = own_revert("-Log", logo, "-Root", root, "-Preview")
+    previewed = rp.returncode == 0 and "BACK" in rp.stdout and tree(root) == moved_now and moved_now != held
+    r = own_revert("-Log", logo, "-Root", root)
+    check("the skill's own revert.ps1 with -Log <log folder>: -Preview changes nothing, then everything is put back",
+          previewed and r.returncode == 0 and tree(root) == held and not os.path.exists(os.path.join(doc, "Important")),
+          rp.stdout + rp.stderr[:200] + r.stdout + r.stderr[:200])
+    if tree(root) != held:   # a script that doesn't know -Log left the move in place: put it back the other way
+        entry("--undo", logo, "--root", root, "--apply")
+    ra = own_revert("-Log", os.path.join(logo, "undo-log.csv"), "-Root", root, "-Preview")
+    rb = own_revert("-Log", outside, "-Root", root, "-Preview")
+    rc = own_revert("-Root", root, "-Preview")
+    check("-Log also takes the undo-log.csv itself; a folder with no log in it, or no -Log and no log next to the script, is nothing to do",
+          ra.returncode == 0 and "Would move back: 0. Skipped: 1." in ra.stdout and rb.returncode == 1 and "no undo-log.csv" in rb.stdout
+          and rc.returncode == 1 and "not next to this script" in rc.stdout and tree(root) == held, ra.stdout + rb.stdout + rc.stdout + ra.stderr[:200])
+    skill_md = os.path.join(SKILL, "SKILL.md")
+    if os.path.isfile(skill_md):
+        said = open(skill_md, encoding="utf-8").read()
+        check("SKILL.md hands over the skill's own revert.ps1 with -Log, not the copy next to the log",
+              'scripts\\revert.ps1" -Log "<log folder>"' in said and '-File "<log folder>\\revert.ps1"' not in said)
+
+    # ------------------------------------------------------------ 12. the undo and the skill's own rules
+    print("\n-- 12. the undo holds every row to the skill's own rules too")
+    asked = []
+
+    def skill_check(action, guard):
+        asked.append((action.get("op"), action.get("from"), action.get("to"), action.get("undo")))
+        return "the skill said no" if "refuse me" in str(action.get("from")) else None
+
+    rules_dst = os.path.join(doc, "Rules", "Deeper", "plain.txt")
+    up, _, uapprove = make_plan("plan-rules.json", [{"op": "move", "from": plain_txt, "to": rules_dst}])
+    logu = os.path.join(T, "log-rules")
+    out, code = in_process([up, "--approve", uapprove, "--root", root, "--log-dir", logu, "--apply"], check=skill_check)
+    del asked[:]
+    out2, code2 = in_process(["--undo", logu, "--root", root, "--apply"], check=skill_check)
+    check("an honest log still undoes exactly, the folders made for the move included; the skill's check is asked about the move as it was "
+          "(from and to as logged, marked as an undo), never about the engine's own \"mkdir\" rows",
+          only(by_id(out), 1, "DONE") and code2 is None and tree(root) == held and not os.path.exists(os.path.join(doc, "Rules"))
+          and set(asked) == {("move", plain_txt, rules_dst, True)}, (asked[:3], out2))
+    lone = [os.path.join(doc, n) for n in ("Lonely", "Lonely 2", "Lonely 3")]
+    for d in lone:
+        os.makedirs(d)
+    e_rows = [{"id": 1, "op": "move", "from": os.path.join(desk, "refuse me.txt"), "to": victim},      # the skill's check says no
+              {"id": 2, "op": "mkdir", "from": lone[0]},                                                # no move in this log needed this folder
+              {"id": 3, "op": "mkdir", "from": lone[1]},                                                # its move is one the skill refuses
+              {"id": 3, "op": "move", "from": os.path.join(desk, "refuse me too.txt"), "to": os.path.join(lone[1], "in.txt")},
+              {"id": 4, "op": "mkdir", "from": lone[2]},                                                # its "move" never left the folder
+              {"id": 4, "op": "move", "from": os.path.join(lone[2], "a.txt"), "to": os.path.join(lone[2], "b.txt")},
+              {"id": 5, "op": "recycle", "from": os.path.join(desk, "refuse me three.txt")}]
+    logv = os.path.join(T, "log-rules-edited")
+    write_log(logv, e_rows)
+    out, code = in_process(["--undo", logv, "--root", root, "--apply"], check=skill_check)
+    check("an edited log: a row the skill's check refuses is not undone, and neither is a \"mkdir\" row with no move that needed the folder",
+          out.count("REFUSED") == 6 and out.count("the skill said no") == 3 and out.count("not a folder that was made for a move") == 3
+          and out.count("SKIP") == 1 and all(os.path.isdir(d) for d in lone) and tree(root) == held, out)
+    if os.path.exists(os.path.join(desk, "refuse me.txt")):   # only an engine that doesn't ask the skill gets here
+        os.rename(os.path.join(desk, "refuse me.txt"), victim)
+    for d in lone:
+        if os.path.isdir(d):
+            os.rmdir(d)
+    # The same through a skill's own command, where the skill has rules of its own
+    wrapper, kind = os.path.join(SCRIPTS, "apply_plan.py"), os.path.basename(SKILL)
+
+    def wrapped(*args):
+        if "--apply" in args:
+            for_real()
+        return run([PY, "-I", wrapper] + list(args))
+
+    if kind == "rename-documents" and os.path.isfile(wrapper):
+        import names as nm  # noqa: E402  (the skill's own: how long a name may be)
+        photo = os.path.join(pics, "photo.jpg")
+        open(photo, "w").write("p")
+        os.makedirs(os.path.join(dl, "Empty"))
+        now = tree(root)
+        e_rows = [{"op": "move", "from": os.path.join(doc, "got.jpg"), "to": photo},                 # a file pulled out of Pictures into Documents
+                  {"op": "move", "from": os.path.join(doc, "Stolen desktop"), "to": desk},           # the Desktop itself
+                  {"op": "move", "from": os.path.join(dl, "Renamed folder"), "to": longdir},         # a folder, inside the folders it may work in
+                  {"op": "move", "from": os.path.join(longdir, "moved in.txt"), "to": victim},       # a file into another folder there
+                  {"op": "move", "from": os.path.join(dl, "victim.exe"), "to": victim},              # a rename that changes the kind of file
+                  {"op": "mkdir", "from": os.path.join(dl, "Empty")},                                # an empty folder, to be removed
+                  {"op": "remove-empty-dir", "from": os.path.join(dl, "Made")},                      # a folder, to be made
+                  {"op": "recycle", "from": victim}]
+        logw = os.path.join(T, "log-rename-edited")
+        write_log(logw, e_rows)
+        r = wrapped("--undo", logw, "--root", root, "--apply")
+        check("rename-documents' own undo (its default folders) refuses every row that is not a rename of a file in its folder: a file out of "
+              "Pictures, the Desktop itself, a folder, a move to another folder, another extension, a folder to remove or make, a recycle",
+              r.stdout.count("REFUSED") == len(e_rows) and tree(root) == now and os.path.isdir(os.path.join(dl, "Empty"))
+              and not os.path.exists(os.path.join(dl, "Made")), r.stdout + r.stderr)
+        for a, b in ((os.path.join(dl, "victim.exe"), victim), (os.path.join(dl, "Renamed folder"), longdir)):   # only if a row above was carried out
+            if os.path.exists(a) and not os.path.exists(b):
+                os.rename(a, b)
+        for d in (os.path.join(dl, "Empty"), os.path.join(dl, "Made")):
+            if os.path.isdir(d):
+                os.rmdir(d)
+        os.remove(photo)
+        # an honest log from this skill's apply, with a name the engine had to add " (2)" to: longer than a name may be
+        room = min(nm.MAX_NAME, nm.MAX_PATH - len(dl) - 1)
+        acts = [{"op": "move", "from": victim, "to": os.path.join(dl, "2024-01-05 Lanternfall letter.txt")}]
+        scan, taken = os.path.join(dl, "scan0007.txt"), None
+        if room >= 14:
+            taken = os.path.join(dl, "2024 " + "a" * (room - 9) + ".txt")
+            open(X + taken, "w").write("already here")
+            open(scan, "w").write("s")
+            acts.append({"op": "move", "from": scan, "to": taken})
+        else:
+            note("the work folder's path is too long to try a name at the length limit: the \" (2)\" case of the rename undo was not run")
+        now = tree(root)
+        np, _, napprove = make_plan("plan-rename.json", acts)
+        logn = os.path.join(T, "log-rename")
+        r = wrapped(np, "--approve", napprove, "--root", root, "--log-dir", logn, "--apply")
+        L = by_id(r.stdout)
+        r2 = wrapped("--undo", logn, "--root", root, "--apply")
+        check("...and an honest log from its own apply still undoes exactly, a name the engine had to add \" (2)\" to included",
+              only(L, 1, "DONE") and (not taken or only(L, 2, "DONE", "renamed to avoid overwriting")) and r2.returncode == 0
+              and r2.stdout.count("DONE") == len(acts) and "REFUSED" not in r2.stdout and tree(root) == now, r.stdout[-600:] + r2.stdout + r2.stderr)
+        for f in (scan, taken):
+            if f and os.path.lexists(X + f):
+                os.remove(X + f)
+    elif kind == "desktop-icons" and os.path.isfile(wrapper):
+        os.makedirs(os.path.join(doc, "Empty"))
+        now = tree(root)
+        e_rows = [{"op": "move", "from": os.path.join(doc, "took.txt"), "to": victim},               # out of Downloads into Documents: neither is the Desktop
+                  {"op": "mkdir", "from": os.path.join(doc, "Empty")},
+                  {"op": "remove-empty-dir", "from": os.path.join(doc, "Made")},
+                  {"op": "recycle", "from": victim}]
+        logw = os.path.join(T, "log-desktop-edited")
+        write_log(logw, e_rows)
+        r = wrapped("--undo", logw, "--root", root, "--apply")
+        check("desktop-icons' own undo refuses every row for something that didn't come off the Desktop",
+              r.stdout.count("REFUSED") == len(e_rows) and tree(root) == now and os.path.isdir(os.path.join(doc, "Empty"))
+              and not os.path.exists(os.path.join(doc, "Made")), r.stdout + r.stderr)
+        if os.path.exists(os.path.join(doc, "took.txt")) and not os.path.exists(victim):   # only if that row was carried out
+            os.rename(os.path.join(doc, "took.txt"), victim)
+        for d in (os.path.join(doc, "Empty"), os.path.join(doc, "Made")):
+            if os.path.isdir(d):
+                os.rmdir(d)
+        np, _, napprove = make_plan("plan-desktop.json", [{"op": "move", "from": plain_txt, "to": os.path.join(doc, "From the desktop", "plain.txt")}])
+        logn = os.path.join(T, "log-desktop")
+        r = wrapped(np, "--approve", napprove, "--root", root, "--log-dir", logn, "--apply")
+        r2 = wrapped("--undo", logn, "--root", root, "--apply")
+        check("...and an honest log from its own apply still undoes exactly, the folder it made included",
+              only(by_id(r.stdout), 1, "DONE") and r2.returncode == 0 and "REFUSED" not in r2.stdout and tree(root) == held
+              and not os.path.exists(os.path.join(doc, "From the desktop")), r.stdout[-600:] + r2.stdout + r2.stderr)
+
+    # ------------------------------------------------------------ 13. pins
+    print("\n-- 13. what was checked can't be swapped before it is used: the folders are held open")
+    has_pins = hasattr(sa, "Pins")
+    pin_dst, hollow, doomed = os.path.join(doc, "Pinned"), os.path.join(doc, "Hollow"), os.path.join(doc, "doomed.txt")
+    os.makedirs(os.path.join(hollow, "inner"))
+    open(doomed, "w").write("d")
+    start = tree(root)
+    pp, pplan, papprove = make_plan("plan-pins.json", [{"op": "move", "from": plain_txt, "to": os.path.join(pin_dst, "plain.txt")},
+                                                         {"op": "recycle", "from": doomed}, {"op": "remove-empty-dir", "from": hollow}])
+    just_the_move = "T-APPROVE plan=%s ids=1" % pplan["plan_id"]
+    # (i) a folder held open that gives the wrong answer, or none
+    answers = (("it is somewhere else", "final_path", lambda h: os.path.join(T, "outside"), "swapped"),
+               ("nothing about where it is", "final_path", lambda h: None, "can't be examined"),
+               ("it is a link", "handle_kind", lambda h: "link", "swapped"),
+               ("nothing about what it is", "handle_kind", lambda h: None, "can't be examined"),
+               ("nothing at all (it can't be opened)", "open_folder", lambda p: None, "can't be examined"))
+    for n, (what, attr, fake, word) in enumerate(answers):
+        name = "a held folder that says %s: the move, the recycle and the empty-folder removal are refused, and nothing changes" % what
+        if not has_pins:
+            check(name, False, "this engine does not hold the folders open")
+            continue
+        with patched(sa, attr, fake), patched(sa, "recycle", pretend_recycle):
+            out, code = in_process([pp, "--approve", papprove, "--root", root, "--log-dir", os.path.join(T, "log-pin-%d" % n), "--apply"])
+        L = by_id(out)
+        check(name, all(only(L, i, "REFUSED", word) for i in (1, 2, 3)) and tree(root) == start and os.path.isdir(os.path.join(hollow, "inner"))
+              and not binned, out)
+        if os.path.isdir(pin_dst):
+            os.rmdir(pin_dst)   # made for the move before the move was refused
+    # truthful answers: the plan is carried out. The undo holds the folders open as well
+    logq = os.path.join(T, "log-pins")
+    with patched(sa, "recycle", pretend_recycle):
+        out, code = in_process([pp, "--approve", papprove, "--root", root, "--log-dir", logq, "--apply"])
+    L = by_id(out)
+    carried = (only(L, 1, "DONE") and only(L, 2, "DONE") and [x[0] for x in L.get(3, [])] == ["DONE", "DONE"] and len(binned) == 1
+               and not os.path.exists(hollow) and os.path.exists(os.path.join(pin_dst, "plain.txt")))
+    out2, stuck = "", False
+    if has_pins:
+        with patched(sa, "final_path", lambda h: os.path.join(T, "outside")):
+            out2, code2 = in_process(["--undo", logq, "--root", root, "--apply"])
+        stuck = out2.count("REFUSED") == 1 and "swapped" in out2 and os.path.exists(os.path.join(pin_dst, "plain.txt")) and not os.path.exists(plain_txt)
+    out3, code3 = in_process(["--undo", logq, "--root", root, "--apply"])
+    empty_bin()
+    check("with truthful answers the same plan is carried out; the undo holds the folders open too (a wrong answer refuses the move back), "
+          "and then puts everything back", carried and stuck and code3 is None and tree(root) == start
+          and os.path.isdir(os.path.join(hollow, "inner")) and not os.path.exists(pin_dst), out + out2 + out3)
+    # (ii) the hold is real: while the engine has the folders open, nobody can rename them
+    tried, times = {}, {}
+
+    def nosy(action, guard):
+        times[action["id"]] = times.get(action["id"], 0) + 1
+        if times[action["id"]] == 2:   # the engine asks a second time with the folders held, just before it acts
+            for which, folder in (("in", desk), ("to", pin_dst), ("above", root)):
+                try:
+                    os.rename(folder, folder + " x")
+                    os.rename(folder + " x", folder)
+                    tried[which] = "renamed"
+                except OSError as ex:
+                    tried[which] = ex.winerror
+        return None
+
+    logr = os.path.join(T, "log-pins-real")
+    out, code = in_process([pp, "--approve", just_the_move, "--root", root, "--log-dir", logr, "--apply"], check=nosy)
+    check("while the engine holds them, the folder a thing is in and the folder it goes to can't be renamed (a sharing error), nor can a "
+          "folder above them; then the move goes through", tried.get("in") == 32 and tried.get("to") == 32 and tried.get("above") in (5, 32)
+          and only(by_id(out), 1, "DONE") and os.path.exists(os.path.join(pin_dst, "plain.txt")), (tried, out))
+    try:   # (v) and nothing stays held afterwards
+        for folder in (desk, pin_dst, doc):
+            os.rename(folder, folder + " x")
+            os.rename(folder + " x", folder)
+        let_go = True
+    except OSError as ex:
+        let_go = str(ex)
+    tried.clear()
+    times.clear()
+    out, code = in_process(["--undo", logr, "--root", root, "--apply"], check=nosy)
+    check("nothing stays held: after the run the same folders can be renamed; the undo holds them the same way while it moves the file back, "
+          "then lets go and removes the folder the run made", let_go is True and tried.get("in") == 32 and tried.get("to") == 32
+          and tree(root) == start and not os.path.exists(pin_dst), (let_go, tried, out))
+    # (iii) a junction swapped in after the checks and before the folders are held
+    shared, private = os.path.join(doc, "Shared"), os.path.join(pics, "Private")
+    for d, words in ((shared, "decoy"), (private, "PRIVATE")):
+        os.makedirs(os.path.join(d, "papers"))
+        for f in (os.path.join(d, "plan.txt"), os.path.join(d, "papers", "plan.txt")):
+            open(f, "w").write(words)
+    drop, out_dir = os.path.join(doc, "Drop"), os.path.join(doc, "Out")
+    os.makedirs(drop)
+    sp, splan, _ = make_plan("plan-swap.json", [{"op": "move", "from": os.path.join(shared, "plan.txt"), "to": os.path.join(out_dir, "plan.txt")},
+                                                 {"op": "move", "from": os.path.join(shared, "papers", "plan.txt"), "to": os.path.join(out_dir, "plan 2.txt")},
+                                                 {"op": "move", "from": plain_txt, "to": os.path.join(drop, "plain.txt")}])
+    start = tree(root)
+    strays = ((os.path.join(out_dir, "plan.txt"), os.path.join(private, "plan.txt")),
+              (os.path.join(out_dir, "plan 2.txt"), os.path.join(private, "papers", "plan.txt")), (os.path.join(vids, "plain.txt"), plain_txt))
+
+    def swap_in(aid, made):
+        def hook(action, guard):
+            if action["id"] == aid and not made:   # once, after the engine's own checks have passed
+                if aid == 3:
+                    os.rmdir(drop)
+                    made.append(junction(drop, vids))
+                else:
+                    os.rename(shared, shared + " (the real one)")
+                    made.append(junction(shared, private))
+            return None
+        return hook
+
+    # Some volumes (RAM disks) have no drive name Windows can give for an open folder. Then the engine
+    # compares the folder's path from the top of its volume. The last round is run as if on one.
+    one_name = getattr(sa, "final_name", None)
+
+    def no_drive_name():
+        """As if Windows had no "X:\\..." name to give for an open folder."""
+        return patched(sa, "final_name", lambda h, how: None if how == 0 else one_name(h, how))
+
+    for aid, what, as_if in ((1, "the folder a file is in", False), (2, "a folder above the one a file is in", False),
+                             (3, "the folder a file is going to", False),
+                             (2, "a folder above, on a volume with no drive name (as if)", True)):
+        made = []
+        with no_drive_name() if as_if and one_name else contextlib.nullcontext():
+            out, code = in_process([sp, "--approve", "T-APPROVE plan=%s ids=%d" % (splan["plan_id"], aid), "--root", root,
+                                    "--log-dir", os.path.join(T, "log-swap-%d%s" % (aid, "n" if as_if else "")), "--apply"],
+                                   check=swap_in(aid, made))
+        # the swap undone (the link itself is removed, never what it leads to), then a look at what happened
+        if aid == 3:
+            if made == [True]:
+                os.rmdir(drop)
+            os.makedirs(drop, exist_ok=True)
+        else:
+            if made == [True]:
+                os.rmdir(shared)
+            if os.path.isdir(shared + " (the real one)"):
+                os.rename(shared + " (the real one)", shared)
+        astray = [a for a, b in strays if os.path.exists(a)]
+        for a, b in strays:
+            if os.path.exists(a) and not os.path.exists(b):
+                os.rename(a, b)
+        if os.path.isdir(out_dir):
+            os.rmdir(out_dir)
+        check("%s, swapped for a junction after the checks and before it is held: refused, and nothing leaves the folder the junction leads to" % what,
+              made == [True] and only(by_id(out), aid, "REFUSED", "swapped") and not astray and tree(root) == start
+              and open(os.path.join(private, "plan.txt")).read() == "PRIVATE", (made, astray, out))
+    # a junction that was there all along is another matter: where it leads is checked like any path, and followed
+    via = os.path.join(doc, "via link.txt")
+    jp, _, japprove = make_plan("plan-through.json", [{"op": "move", "from": os.path.join(jump, "victim.txt"), "to": via}])
+    logj = os.path.join(T, "log-through")
+    out, code = in_process([jp, "--approve", japprove, "--root", root, "--log-dir", logj, "--apply"])
+    went = only(by_id(out), 1, "DONE") and os.path.exists(via) and not os.path.exists(victim)
+    out2, code2 = in_process(["--undo", logj, "--root", root, "--apply"])
+    check("a path written through a junction that was there all along, and leads to an allowed place, is still followed: the file it really "
+          "names is moved, and comes back", went and code2 is None and os.path.exists(victim) and tree(root) == start, out + out2)
+    name = "on a volume with no drive name (as if), nothing is refused for that alone: a move is carried out and undone"
+    if one_name:
+        with no_drive_name():
+            out, code = in_process([pp, "--approve", just_the_move, "--root", root, "--log-dir", os.path.join(T, "log-no-name"), "--apply"])
+            went = only(by_id(out), 1, "DONE") and os.path.exists(os.path.join(pin_dst, "plain.txt"))
+            out2, code2 = in_process(["--undo", os.path.join(T, "log-no-name"), "--root", root, "--apply"])
+        check(name, went and code2 is None and tree(root) == start and not os.path.exists(pin_dst), out + out2)
+    else:
+        check(name, False, "this engine does not hold the folders open")
+    # (vi) the one thing a held folder can't stop: an empty folder turned into a link where it stands
+    quiet, later = os.path.join(doc, "Quiet"), os.path.join(doc, "Later", "c.pdf")
+    os.makedirs(quiet)
+    qp, qplan, qapprove = make_plan("plan-quiet.json", [{"op": "move", "from": plain_txt, "to": os.path.join(quiet, "plain.txt")},
+                                                          {"op": "move", "from": os.path.join(desk, names[0]), "to": later}])
+    turned = []
+    times.clear()
+
+    def turner(action, guard):
+        times[action["id"]] = times.get(action["id"], 0) + 1
+        if action["id"] == 1 and times[1] == 2:   # with the folders held, after each has said where it is
+            turned.append(turn_into_junction(quiet, vids))
+        return None
+
+    out, code = in_process([qp, "--approve", "T-APPROVE plan=%s ids=1" % qplan["plan_id"], "--root", root,
+                            "--log-dir", os.path.join(T, "log-quiet-1"), "--apply"], check=turner)
+    astray = [f for f in (os.path.join(vids, "plain.txt"), os.path.join(quiet, "plain.txt")) if os.path.exists(f)]
+    if astray:
+        os.rename(astray[0], plain_txt)
+    if turned == [True]:
+        os.rmdir(quiet)   # the link itself
+        os.makedirs(quiet)
+    check("an empty folder turned into a link while it is held, before the move: every held folder is asked again, and the move is refused",
+          turned == [True] and only(by_id(out), 1, "REFUSED", "turned into a link") and not astray and tree(root) == start, (turned, out))
+    del turned[:]
+    real_rename = os.rename
+
+    def sneaky(a, b, *args, **kw):
+        if not turned and str(b).endswith("plain.txt"):   # in the instant between the last look and the move itself
+            turned.append(turn_into_junction(quiet, vids))
+        return real_rename(a, b, *args, **kw)
+
+    with patched(os, "rename", sneaky):
+        out, code = in_process([qp, "--approve", qapprove, "--root", root, "--log-dir", os.path.join(T, "log-quiet-2"), "--apply"])
+    L = by_id(out)
+    landed = os.path.exists(os.path.join(vids, "plain.txt"))
+    if landed:
+        os.rename(os.path.join(vids, "plain.txt"), plain_txt)
+    if os.path.exists(later):   # only an engine that went on to the next action gets here
+        os.rename(later, os.path.join(desk, names[0]))
+        os.rmdir(os.path.dirname(later))
+    if turned == [True]:
+        os.rmdir(quiet)   # the link itself
+    elif os.path.isdir(quiet):
+        os.rmdir(quiet)
+    check("...and in the very instant of the move, which nothing here can stop: the file went where the link led, and the engine sees that at "
+          "once, marks the action failed, says to look for it, and stops before the next action",
+          turned == [True] and landed and only(L, 1, "FAILED", "look for it by hand") and 2 not in L and "Stopped" in out
+          and isinstance(code, str) and tree(root) == start, (turned, landed, code, out))
+    # a move to another drive, as if: copy, compare sizes, recycle the original, all with the folders held
+    with patched(sa, "same_volume", lambda a, b: False), patched(sa, "recycle", pretend_recycle):
+        out, code = in_process([pp, "--approve", just_the_move, "--root", root, "--log-dir", os.path.join(T, "log-far"), "--apply"])
+    copied = os.path.exists(os.path.join(pin_dst, "plain.txt")) and len(binned) == 1 and not os.path.exists(plain_txt)
+    if os.path.isdir(pin_dst):
+        shutil.rmtree(pin_dst)
+    empty_bin()
+    check("a move to another drive (as if: copy, compare sizes, recycle the original) is carried out with the folders held",
+          only(by_id(out), 1, "DONE") and copied and tree(root) == start, out)
+    for d in (shared, private, drop, hollow):
+        if os.path.isdir(d) and not sa.is_link(d):
+            shutil.rmtree(d)
+    os.remove(doomed)
+
+    # ------------------------------------------------------------ 14. odds and ends
+    print("\n-- 14. the rest")
     survey_py = os.path.join(SCRIPTS, "survey.py")
     if os.path.isfile(survey_py) and re.search(r"^def known_folders\(", open(survey_py, encoding="utf-8").read(), re.M):
         import survey  # noqa: E402  (the skill's own; read-only helpers)

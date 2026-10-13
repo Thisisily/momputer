@@ -84,7 +84,7 @@ The dry run prints WOULD, SKIP or REFUSED for each action and changes nothing. I
 python scripts/apply_plan.py "<out>/desktop-plan.json" --approve "DESKTOP-APPROVE plan=... ids=..." --apply
 ```
 
-- The undo log goes to `Documents\Tidy-up logs\<date time>\` (`undo-log.csv` and `revert.ps1`). Change it with `--log-dir`.
+- The undo log goes to `Documents\Tidy-up logs\<date time>\` (`undo-log.csv` and `revert.ps1`). Change it with `--log-dir`. It is always a new folder (a name that is taken gets " (2)"): use the one the command prints.
 - Names are never overwritten: a clash gets " (2)".
 - Links (symlinks, junctions) on the desktop are left alone, and so is anything that can't be examined.
 - Don't pass `--within`: the command sets its own limits.
@@ -98,10 +98,10 @@ Right-click an empty spot on the desktop > View > Auto arrange icons
 Right-click again > Sort by > Name (or Item type)
 ```
 
-Give the log folder and both ways to undo. Each has a preview: `-Preview` for the script, leaving out `--apply` for Python.
+Give the log folder and both ways to undo. Each has a preview: `-Preview` for the script, leaving out `--apply` for Python. Run the skill's own `revert.ps1`, as below; the copy next to the log is the same script, kept there for convenience. The Python undo also holds each row to this skill's own rule (only things that came off the Desktop), which `revert.ps1` can't know.
 
 ```
-powershell -ExecutionPolicy Bypass -File "<log folder>\revert.ps1"
+powershell -ExecutionPolicy Bypass -File "<skill folder>\scripts\revert.ps1" -Log "<log folder>"
 python scripts/apply_plan.py --undo "<log folder>" --apply
 ```
 

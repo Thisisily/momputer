@@ -17,10 +17,12 @@ file. This command adds what makes it a renaming skill:
   * the new name is checked again, with the same names.why_bad() that built the plan: a
     plain file name, no reserved or forbidden or invisible characters, the same extension
   * nothing inside a code project or a program's own folder is renamed
+  * --undo is held to the same rules: a log row that is not such a rename is refused
 
 Python 3.8+, standard library only. Windows only for --apply.
 """
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -31,15 +33,25 @@ import safe_apply  # noqa: E402  (the shared engine: guard rails, undo log, both
 
 
 def only_a_rename(action, guard):
-    """A reason to refuse `action`, or None. The engine has already checked both paths."""
+    """A reason to refuse `action`, or None. The engine has already checked both paths.
+    The engine asks about each row of an undo log as well (action["undo"]): the same rename,
+    already done, so the file is under its new name now."""
     src, dst = action["from"], action.get("to")
+    undo = bool(action.get("undo"))
     if action.get("op") != "move" or not isinstance(dst, str):
         return "not a rename: this skill only renames files"
     if safe_apply.norm(os.path.dirname(src)) != safe_apply.norm(os.path.dirname(dst)):
         return "not a rename: the file would leave its folder"
-    if os.path.isdir(safe_apply.xp(src)):
+    if os.path.isdir(safe_apply.xp(dst if undo else src)):
         return "a folder: this skill only renames files"
-    problem = names.why_bad(os.path.basename(src), os.path.basename(dst), os.path.dirname(dst))
+    old, new, folder = os.path.basename(src), os.path.basename(dst), os.path.dirname(dst)
+    problem = names.why_bad(old, new, folder)
+    if problem and undo:
+        # A name that got taken at the last moment is given " (2)" by the engine, and that is the
+        # name in the log: a few characters longer than the one that was checked
+        stem, ext = os.path.splitext(new)
+        if re.search(r" \(\d+\)$", stem):
+            problem = names.why_bad(old, re.sub(r" \(\d+\)$", "", stem) + ext, folder)
     if problem:
         return "the new name is " + problem
     where = names.off_limits(os.path.dirname(src), guard.kf["Profile"])

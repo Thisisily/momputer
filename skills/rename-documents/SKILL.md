@@ -104,15 +104,15 @@ python scripts/apply_plan.py "<out>/rename-plan.json" --approve "RENAME-APPROVE 
 
 The dry run prints WOULD, SKIP or REFUSED for each rename and changes nothing. If anything is REFUSED, tell the user why before going on. Otherwise add `--apply`.
 
-- The undo log goes to `Documents\Tidy-up logs\<date time>\` (`undo-log.csv` and `revert.ps1`). Change it with `--log-dir`.
+- The undo log goes to `Documents\Tidy-up logs\<date time>\` (`undo-log.csv` and `revert.ps1`). Change it with `--log-dir`. It is always a new folder (a name that is taken gets " (2)"): use the one the command prints.
 - A name is never overwritten: if it got taken since the page was built, the file gets " (2)".
 
 ### 7. Report, hand over the undo, clean up
 
-Tell the user how many files were renamed, which were skipped or refused and why, and which still have no name. Give the log folder and both ways to undo. Each has a preview: `-Preview` for the script, leaving out `--apply` for Python.
+Tell the user how many files were renamed, which were skipped or refused and why, and which still have no name. Give the log folder and both ways to undo. Each has a preview: `-Preview` for the script, leaving out `--apply` for Python. Run the skill's own `revert.ps1`, as below; the copy next to the log is the same script, kept there for convenience. The Python undo also holds each row to this skill's own rules (a rename of a file, in the folders given), which `revert.ps1` can't know.
 
 ```
-powershell -ExecutionPolicy Bypass -File "<log folder>\revert.ps1"
+powershell -ExecutionPolicy Bypass -File "<skill folder>\scripts\revert.ps1" -Log "<log folder>"
 python scripts/apply_plan.py --undo "<log folder>" --within "<folder>" --apply
 ```
 

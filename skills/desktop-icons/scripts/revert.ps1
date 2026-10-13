@@ -1,4 +1,4 @@
-# revert.ps1 - undoes a tidy-up recorded in undo-log.csv (the file next to this script).
+# revert.ps1 - undoes a tidy-up recorded in undo-log.csv.
 #
 # This script is the same for every run and contains no file names. Every path comes
 # from the CSV as data and is only ever handed to .NET file calls, never to a PowerShell
@@ -7,13 +7,20 @@
 #
 # The CSV is a file anyone could have edited, so each row is checked before anything
 # moves: only full paths on a local disk, nothing inside Windows, Program Files,
-# ProgramData or AppData, nothing through a link, never over an existing name. Anything
-# that can't be examined is refused, never treated as fine.
+# ProgramData or AppData, never a drive or one of your main folders itself (Desktop,
+# Documents, Downloads...), nothing through a link, never over an existing name. Anything
+# that can't be examined is refused, never treated as fine. This script does not know
+# which folders a run was limited to, or a skill's own rules: the skill's
+# "apply_plan.py --undo" checks those as well.
 #
-#   powershell -ExecutionPolicy Bypass -File revert.ps1            # revert
-#   powershell -ExecutionPolicy Bypass -File revert.ps1 -Preview   # only show what would happen
+# Run the copy in the skill's scripts folder and point it at the log folder. The copy kept
+# next to each log is the same script, there for convenience: without -Log it reads the
+# undo-log.csv next to it.
+#
+#   powershell -ExecutionPolicy Bypass -File revert.ps1 -Log <log folder> -Preview   # only show what would happen
+#   powershell -ExecutionPolicy Bypass -File revert.ps1 -Log <log folder>            # revert
 #   ... -Root <folder>   # only if the tidy-up was run with --root <folder> on a folder in a protected place
-param([switch]$Preview, [string]$Root)
+param([switch]$Preview, [string]$Root, [string]$Log)
 
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
@@ -89,7 +96,8 @@ function Under([string]$p, [string]$root) {
 }
 
 $rootDir = ''
-if ($Root) { $rootDir = [System.IO.Path]::GetFullPath($Root) }
+$rootGiven = ''
+if ($Root) { $rootGiven = [System.IO.Path]::GetFullPath($Root); $rootDir = $rootGiven }
 $protected = @()
 foreach ($v in @($env:SystemRoot, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData, $env:APPDATA, $env:LOCALAPPDATA)) {
     if ($v) { $protected += $v }
@@ -103,8 +111,46 @@ if ($rootDir) {
     if ($holds -or -not (Under $rootDir $temp) -or (Clean $rootDir) -eq (Clean $temp)) { $rootDir = '' }
 }
 
+# The person's main folders, wherever Windows says they are (one may be redirected, into
+# OneDrive say), and the Public ones. A tidy-up never moves one of these folders itself, so a
+# row that names one was not written by a tidy-up. Windows and the registry are asked: nothing
+# here comes from the log.
+$mains = @()
+foreach ($f in @('UserProfile', 'DesktopDirectory', 'MyDocuments', 'MyPictures', 'MyMusic', 'MyVideos',
+                 'CommonDesktopDirectory', 'CommonDocuments', 'CommonPictures', 'CommonMusic', 'CommonVideos')) {
+    $v = ''
+    try { $v = [Environment]::GetFolderPath([Environment+SpecialFolder]$f) } catch { $v = '' }
+    if ($v) { $mains += $v }
+}
+$downloads = ''
+try {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders')
+    if ($key) {
+        # The values the Python engine reads. Downloads has no name of its own there, only this id.
+        foreach ($n in @('Desktop', 'Personal', 'My Pictures', 'My Music', 'My Video', '{374DE290-123F-4565-9164-39C4925E467B}')) {
+            $v = [string]$key.GetValue($n, '')
+            if ($v) { $mains += $v }
+            if ($v -and $n.StartsWith('{')) { $downloads = $v }
+        }
+        $key.Close()
+    }
+} catch { }
+foreach ($v in @($env:USERPROFILE, $env:PUBLIC, $env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) {
+    if ($v) { $mains += $v }
+}
+if (-not $downloads -and $env:USERPROFILE) { $mains += [System.IO.Path]::Combine($env:USERPROFILE, 'Downloads') }
+if ($env:PUBLIC) { $mains += [System.IO.Path]::Combine($env:PUBLIC, 'Downloads') }
+# With -Root, that folder stands in for the profile: the same names inside it count too.
+if ($rootGiven) {
+    $mains += $rootGiven
+    foreach ($n in @('Desktop', 'Documents', 'Downloads', 'Pictures', 'Videos', 'Music')) {
+        $mains += [System.IO.Path]::Combine($rootGiven, $n)
+    }
+}
+
 function WhyNot([string]$p) {
     # $null if the path may be touched, else the reason it may not.
+    if ($p -match '^[A-Za-z]:\\?$') { return 'a drive root' }
     if ($p -notmatch '^[A-Za-z]:\\[^\\]') { return 'not a full path on a local disk' }
     if ($p.Substring(2).Contains(':')) { return 'a name with a colon in it' }
     if ($p.Contains('/')) { return 'a path with a forward slash' }
@@ -120,6 +166,9 @@ function WhyNot([string]$p) {
     }
     try { $kind = (New-Object System.IO.DriveInfo ($p.Substring(0, 3))).DriveType } catch { return 'an unknown drive' }
     if ($kind -ne [System.IO.DriveType]::Fixed -and $kind -ne [System.IO.DriveType]::Removable) { return 'on a network drive, not a local disk' }
+    foreach ($main in $mains) {
+        if ((Clean $p) -eq (Clean $main)) { return 'one of your main folders' }
+    }
     $exempt = $rootDir -and (Under $p $rootDir)
     foreach ($prot in $protected) {
         if ((Under $p $prot) -and -not $exempt) { return 'inside Windows, Program Files, ProgramData or AppData' }
@@ -146,12 +195,18 @@ function WhyNot([string]$p) {
     return $null
 }
 
-$log = [System.IO.Path]::Combine($PSScriptRoot, 'undo-log.csv')
-if (-not [System.IO.File]::Exists($log)) {
-    Write-Host 'undo-log.csv is not next to this script. Nothing to revert.'
+# -Log names the folder that holds undo-log.csv (or that file itself). Without it: the folder this script is in.
+$csv = [System.IO.Path]::Combine($PSScriptRoot, 'undo-log.csv')
+if ($Log) {
+    $csv = [System.IO.Path]::GetFullPath($Log)
+    if (-not [System.IO.File]::Exists($csv)) { $csv = [System.IO.Path]::Combine($csv, 'undo-log.csv') }
+}
+if (-not [System.IO.File]::Exists($csv)) {
+    if ($Log) { Write-Host 'There is no undo-log.csv in that folder. Nothing to revert.' }
+    else { Write-Host 'undo-log.csv is not next to this script. Nothing to revert.' }
     exit 1
 }
-$text = [System.IO.File]::ReadAllText($log, [System.Text.Encoding]::UTF8)
+$text = [System.IO.File]::ReadAllText($csv, [System.Text.Encoding]::UTF8)
 $rows = @()
 if ($text.Trim()) { $rows = @(ConvertFrom-Csv -InputObject $text) }
 [array]::Reverse($rows)

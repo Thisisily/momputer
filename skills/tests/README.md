@@ -7,6 +7,7 @@ These check the careful parts: the shared file-moving engine, each skill's surve
 **Only a scratch folder you name on the command line.** Each test makes its own work folder inside it, with a marker file, works there, and removes it at the end. A test refuses a work folder it didn't make. Nothing else on the PC is created, moved, renamed or deleted:
 
 - Every apply and undo runs on a made-up profile inside the work folder, using the scripts' `--root` test mode.
+- Plans and undo logs that name a real place (Windows' own folders, the real AppData, a drive's top) only ever go through a dry run or a preview, to check they are refused. The engine test stops before its first real run if any check has failed by then, and refuses to run a plan or log that names anything outside its work folder.
 - Nothing goes to the real Recycle Bin. Where a plan sends things there, the test swaps the engine's Recycle Bin call for one that moves the file to a folder inside the work folder.
 - A few checks only *look* outside it, and say so: the short names of `Program Files` and `AppData`, whether `C:\Windows\win.ini` is still there, this PC's all-users Start menu shortcuts (read to check the shortcut reader; no names kept), and a path on a second drive that is asked about, never created.
 - One check makes a folder unlistable with `icacls` and puts the permission back afterwards, whatever happens.

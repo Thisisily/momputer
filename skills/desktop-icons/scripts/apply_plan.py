@@ -15,6 +15,8 @@ file. This command adds what makes it a desktop skill:
     can be a source or a destination. The Public Desktop is never changed.
   * a source must be on the Desktop itself: this skill takes things off the Desktop, it
     doesn't rearrange the other folders
+  * --undo is held to the same rules: a log row for something that didn't come off the
+    Desktop is refused
 
 Python 3.8+, standard library only. Windows only for --apply.
 """

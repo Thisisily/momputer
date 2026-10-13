@@ -87,8 +87,8 @@ The dry run prints WOULD, SKIP or REFUSED for each action and changes nothing. I
 python scripts/apply_plan.py "<out>/plan.json" --approve "TIDY-APPROVE plan=... ids=..." --apply
 ```
 
-- The undo log goes to `Documents\Tidy-up logs\<date time>\` (`undo-log.csv` and `revert.ps1`). Change it with `--log-dir`.
-- `revert.ps1` is the same fixed script every time. It holds no file names; it reads `undo-log.csv` and moves things back only where the original place is still free. Both undo routes check every row like a plan (local disks only, nothing in Windows, Program Files, ProgramData or AppData, nothing through a link), so an edited log can't send a file somewhere it shouldn't go. Only undo a log this skill wrote on this PC.
+- The undo log goes to `Documents\Tidy-up logs\<date time>\` (`undo-log.csv` and `revert.ps1`). Change it with `--log-dir`. It is always a new folder (a name that is taken gets " (2)"): use the one the command prints.
+- `revert.ps1` is the same fixed script every time. It holds no file names; it reads `undo-log.csv` and moves things back only where the original place is still free. Both undo routes check every row like a plan (local disks only, nothing in Windows, Program Files, ProgramData or AppData, never a main folder itself, nothing through a link), so an edited log can't send a file somewhere it shouldn't go. Only undo a log this skill wrote on this PC.
 - Anything that can't be examined is refused, not guessed at: a folder that can't be listed, a path Windows can't resolve. Say so if it happens; don't work around it.
 - Links (symlinks, junctions) are never moved, recycled or walked through. A name that ends in a dot or a space is moved under its exact name but can't go to the Recycle Bin; it's skipped with a note.
 - Names are never overwritten: a clash gets " (2)".
@@ -97,10 +97,10 @@ python scripts/apply_plan.py "<out>/plan.json" --approve "TIDY-APPROVE plan=... 
 
 ### 6. Report, hand over the undo, clean up
 
-Tell the user: how many items moved, how much went to the Recycle Bin (it stays there until they empty it), anything skipped and why, and the launcher moves left for them to do. Give the log folder and both ways to undo. Each has a preview: `-Preview` for the script, leaving out `--apply` for Python.
+Tell the user: how many items moved, how much went to the Recycle Bin (it stays there until they empty it), anything skipped and why, and the launcher moves left for them to do. Give the log folder and both ways to undo. Each has a preview: `-Preview` for the script, leaving out `--apply` for Python. Run the skill's own `revert.ps1`, as below; the copy next to the log is the same script, kept there for convenience.
 
 ```
-powershell -ExecutionPolicy Bypass -File "<log folder>\revert.ps1"
+powershell -ExecutionPolicy Bypass -File "<skill folder>\scripts\revert.ps1" -Log "<log folder>"
 python scripts/apply_plan.py --undo "<log folder>" --apply
 ```
 
