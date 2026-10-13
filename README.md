@@ -294,4 +294,6 @@ momputer is free for personal use: at home, for hobby projects, if you're a stud
 
 If you use it for work at a company, you need a commercial license. [Open an issue with the Commercial license template](https://github.com/Thisisily/momputer/issues/new?template=commercial-license.yml), say a little about how you'd use it, and we'll sort it out.
 
+The skills in [`skills/`](skills) are separate: they're under the [Apache License 2.0](skills/LICENSE.txt), free for any use, companies included.
+
 The Marsell and Ilisium logos on the About page belong to those projects and aren't covered by this license.

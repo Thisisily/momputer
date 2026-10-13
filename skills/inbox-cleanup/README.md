@@ -35,4 +35,6 @@ Then ask: "clean up my Gmail", "what should I unsubscribe from?", "which emails 
 
 ## License
 
-No license has been chosen for this skill yet, so it falls under the license at the root of the repository it lives in (momputer), which is the PolyForm Noncommercial License 1.0.0 at the time of writing. That is not an open-source license. The example skills in [anthropics/skills](https://github.com/anthropics/skills) each ship a `LICENSE.txt` (Apache 2.0) and say `license: Complete terms in LICENSE.txt` in their frontmatter, and Claude's plugin directory needs a `LICENSE` file or a `license` field for every listing. Before this skill is submitted anywhere, the owner should decide its license and add it here.
+Apache License 2.0. Copyright 2026 Ilya Arbabi. See [LICENSE.txt](LICENSE.txt). Free for any use, companies included.
+
+(The momputer app this skill lives next to has its own, different license. The skills don't need it.)
