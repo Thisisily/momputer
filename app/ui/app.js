@@ -1967,6 +1967,9 @@ in ${x.cwd}`)}">
 
   const keptPath = (g) => state.filesKeep[g.hash] || (g.files.find((f) => f.keep) || g.files[0]).path;
 
+  /** The extra copies in a group: every one but the copy that stays and any you said to keep (Settings, "Always kept"). */
+  const extrasOf = (g) => g.files.filter((f) => f.path !== keptPath(g) && !f.kept);
+
   /** Everything ticked: extra copies (but never the one kept) and big files. */
   function filesChosen(r) {
     const paths = [];
@@ -1974,14 +1977,14 @@ in ${x.cwd}`)}">
     for (const g of r.groups) {
       const keep = keptPath(g);
       for (const f of g.files) {
-        if (f.path !== keep && !state.filesUntick.has(f.path)) {
+        if (f.path !== keep && !f.kept && !state.filesUntick.has(f.path)) {
           paths.push(f.path);
           size += g.size;
         }
       }
     }
     for (const b of r.big) {
-      if (state.bigTicked.has(b.path) && !paths.includes(b.path)) {
+      if (state.bigTicked.has(b.path) && !b.kept && !paths.includes(b.path)) {
         paths.push(b.path);
         size += b.size;
       }
@@ -1997,11 +2000,17 @@ in ${x.cwd}`)}">
         const keep = keptPath(g);
         const rows = g.files
           .map((f) => {
-            const isKeep = f.path === keep;
+            const isKeep = f.path === keep || !!f.kept;
             const on = !isKeep && !state.filesUntick.has(f.path);
             const sub = `${f.folder} · ${parentOf(f.path)} · changed ${ageLong(Math.max(0, now - f.modified))} ago`;
-            const box = isKeep ? `<span class="led green" title="This copy stays"></span>` : `<input type="checkbox" data-act="files-pick" data-path="${esc(f.path)}" ${on ? "checked" : ""} aria-label="Recycle this copy">`;
-            const swap = isKeep ? `<span class="keep-tag">Stays</span>` : `<button class="mini-btn wide" data-act="files-keep" data-hash="${esc(g.hash)}" data-path="${esc(f.path)}">Keep this</button>`;
+            const box = isKeep
+              ? `<span class="led green" title="${f.kept ? "You said to keep this (Settings, Always kept)" : "This copy stays"}"></span>`
+              : `<input type="checkbox" data-act="files-pick" data-path="${esc(f.path)}" ${on ? "checked" : ""} aria-label="Recycle this copy">`;
+            const swap = f.kept
+              ? `<span class="keep-tag" title="You said to keep this. Settings, Always kept, lets it go again.">Always kept</span>`
+              : isKeep
+                ? `<span class="keep-tag">Stays</span>`
+                : `<button class="mini-btn wide" data-act="files-keep" data-hash="${esc(g.hash)}" data-path="${esc(f.path)}">Keep this</button>`;
             return `<label class="item copy${isKeep ? " keep" : ""}" id="cp-${hash(f.path)}">${box}
               <span class="item-main"><span class="item-name" title="${esc(f.path)}">${esc(baseName(f.path))}</span><span class="item-sub" title="${esc(sub)}">${esc(sub)}</span></span>
               ${swap}<button class="mini-btn" data-act="reveal-path" data-path="${esc(f.path)}" title="Show in File Explorer">${ICON.folder}</button></label>`;
@@ -2023,10 +2032,14 @@ in ${x.cwd}`)}">
       .map((b) => {
         const when = r.accessTimes ? `opened ${ageLong(Math.max(0, now - b.accessed))} ago` : `changed ${ageLong(Math.max(0, now - b.modified))} ago`;
         const sub = `${b.folder} · ${parentOf(b.path)} · ${when}`;
-        return `<label class="item${state.bigTicked.has(b.path) ? " added" : " stays"}" id="bf-${hash(b.path)}">
-          <input type="checkbox" data-act="big-pick" data-path="${esc(b.path)}" ${state.bigTicked.has(b.path) ? "checked" : ""}>
+        const ticked = !b.kept && state.bigTicked.has(b.path);
+        const box = b.kept
+          ? `<span class="led green" title="You said to keep this (Settings, Always kept)"></span>`
+          : `<input type="checkbox" data-act="big-pick" data-path="${esc(b.path)}" ${ticked ? "checked" : ""}>`;
+        return `<label class="item${ticked ? " added" : " stays"}" id="bf-${hash(b.path)}">
+          ${box}
           <span class="item-main"><span class="item-name" title="${esc(b.path)}">${esc(baseName(b.path))}</span><span class="item-sub" title="${esc(sub)}">${esc(sub)}</span></span>
-          <span class="item-size num">${bytes(b.size)}</span>
+          ${b.kept ? `<span class="keep-tag" title="You said to keep this. Settings, Always kept, lets it go again.">Always kept</span>` : ""}<span class="item-size num">${bytes(b.size)}</span>
           <button class="mini-btn" data-act="reveal-path" data-path="${esc(b.path)}" title="Show in File Explorer">${ICON.folder}</button></label>`;
       })
       .join("")}</div>`;
@@ -2053,9 +2066,9 @@ in ${x.cwd}`)}">
     html += placesBox();
     if (!r || f.busy) return html;
     const note = `<p class="group-note">A copy is only ever another file with exactly the same contents: the same size, the same fingerprint (BLAKE3) and, right before anything goes, the same bytes as the copy that stays. Ticked ones go to the Recycle Bin, and mom never sends the last copy of anything.</p>`;
-    const extras = r.groups.flatMap((g) => g.files.filter((f) => f.path !== keptPath(g)).map((f) => f.path));
+    const extras = r.groups.flatMap((g) => extrasOf(g).map((f) => f.path));
     const allExtras = extras.every((x) => !state.filesUntick.has(x));
-    const allBig = r.big.every((b) => state.bigTicked.has(b.path));
+    const allBig = r.big.every((b) => b.kept || state.bigTicked.has(b.path));
     if (r.groups.length) html += section("copies", "Copies of the same file", tickAllButton("files-pick-all", allExtras), copiesList(r) + note);
     if (r.big.length) html += section("big", r.accessTimes ? "Big files nobody has opened in a year" : "Big files nobody has changed in a year", tickAllButton("big-pick-all", allBig), bigList(r));
     if (r.groups.length || r.big.length) {
@@ -2256,6 +2269,15 @@ in ${x.cwd}`)}">
 
   /** After keeping or letting go: if it didn't take, show what mom really has, not what was hoped. */
   async function keepSettled(ok) {
+    // What's kept is marked in the Files list too.
+    if (state.files && state.files.report && !state.files.busy) {
+      invoke("files_state")
+        .then((f) => {
+          state.files = f;
+          if (state.tab === "upkeep" && state.upkeepTab === "files") render();
+        })
+        .catch(() => {});
+    }
     if (ok !== null) return;
     try {
       state.trash = await invoke("get_trash");
@@ -3246,13 +3268,18 @@ in ${x.cwd}`)}">
       <p class="foot">momputer ${esc(st.version)}. Settings live in ${esc(st.configPath)}.</p>`;
   }
 
+  /** Changes the settings and saves them. What's shown changes only once the save has gone
+      through: if it didn't (true if it did), everything stays as it was and the reason is said. */
   async function saveSettings(mutate) {
     const st = state.settings;
-    mutate(st.config);
-    await act(invoke("set_settings", { config: st.config }), () => null);
+    const next = JSON.parse(JSON.stringify(st.config));
+    mutate(next);
+    const saved = (await act(invoke("set_settings", { config: next }), () => null)) !== null;
+    if (saved) st.config = next;
     renderSheet();
     $("#btn-pin").setAttribute("aria-pressed", String(st.config.ui.alwaysOnTop));
     renderNote();
+    return saved;
   }
 
   // ------------------------------------------------------------ the sheet (details and settings)
@@ -3585,7 +3612,7 @@ in ${x.cwd}`)}">
         break;
       case "keep":
         if (!g) return;
-        act(invoke("keep_group", { signature: g.signature, keep: !g.kept }), () => (g.kept ? "Fine, it can go when you say so." : "Got it. I'll leave that one alone."));
+        act(invoke("keep_group", { signature: g.signature, keep: !g.kept }), () => (g.kept ? "Okay, it can go when you say so." : "Got it. I'll leave that one alone."));
         if (!g.kept) react("wink");
         break;
       case "open-thread":
@@ -3865,7 +3892,7 @@ in ${x.cwd}`)}">
           const list = (state.settings.config.trash.keep || []).filter((k) => k !== i.path);
           state.settings.config.trash.keep = keep ? [...list, i.path] : list;
         }
-        act(invoke("keep_item", { path: i.path, keep, spot: s.id }), () => (keep ? "Got it. I'll leave that one alone." : "Fine, it can go when you say so.")).then(keepSettled);
+        act(invoke("keep_item", { path: i.path, keep, spot: s.id }), () => (keep ? "Got it. I'll leave that one alone." : "Okay, it can go when you say so.")).then(keepSettled);
         if (state.tab === "upkeep") render();
         renderSheet();
         break;
@@ -3873,13 +3900,13 @@ in ${x.cwd}`)}">
       case "unkeep": {
         const path = el.dataset.path;
         if (state.settings) state.settings.config.trash.keep = (state.settings.config.trash.keep || []).filter((k) => k !== path);
-        act(invoke("keep_item", { path, keep: false }), () => "Fine, it can go when you say so.").then(keepSettled);
+        act(invoke("keep_item", { path, keep: false }), () => "Okay, it can go when you say so.").then(keepSettled);
         renderSheet();
         break;
       }
       case "unkeep-all":
         if (state.settings) state.settings.config.trash.keep = [];
-        act(invoke("keep_nothing"), () => "Fine, they can go when you say so.").then(keepSettled);
+        act(invoke("keep_nothing"), () => "Okay, they can go when you say so.").then(keepSettled);
         renderSheet();
         break;
       case "stop-clean":
@@ -4187,7 +4214,7 @@ in ${x.cwd}`)}">
       case "files-pick-all": {
         const r = state.files && state.files.report;
         if (!r) return;
-        const extras = r.groups.flatMap((g) => g.files.filter((f) => f.path !== keptPath(g)).map((f) => f.path));
+        const extras = r.groups.flatMap((g) => extrasOf(g).map((f) => f.path));
         state.filesUntick = extras.every((x) => !state.filesUntick.has(x)) ? new Set(extras) : new Set();
         state.filesConfirm = false;
         render();
@@ -4196,7 +4223,8 @@ in ${x.cwd}`)}">
       case "big-pick-all": {
         const r = state.files && state.files.report;
         if (!r) return;
-        state.bigTicked = r.big.every((b) => state.bigTicked.has(b.path)) ? new Set() : new Set(r.big.map((b) => b.path));
+        const free = r.big.filter((b) => !b.kept);
+        state.bigTicked = free.every((b) => state.bigTicked.has(b.path)) ? new Set() : new Set(free.map((b) => b.path));
         state.filesConfirm = false;
         render();
         break;
@@ -4356,14 +4384,13 @@ in ${x.cwd}`)}">
       return;
     }
     if (key === "paused") {
-      state.paused = on;
-      await invoke("set_paused", { paused: on });
+      if ((await act(invoke("set_paused", { paused: on }), () => null)) !== null) state.paused = on;
       renderSheet();
       renderNote();
       renderChecked();
       return;
     }
-    await saveSettings((c) => {
+    const saved = await saveSettings((c) => {
       if (key === "autoStop") c.leftovers.autoStop = on;
       if (key === "autoStopOrphans") c.leftovers.autoStopOrphans = on;
       if (key === "includeOrphans") c.leftovers.includeUnknownOrphans = on;
@@ -4375,8 +4402,9 @@ in ${x.cwd}`)}">
       if (key === "alwaysOnTop") c.ui.alwaysOnTop = on;
       if (key === "checkUpdates") c.ui.checkUpdates = on;
     });
+    if (!saved) return;
     if (key === "checkUpdates" && on) loadUpdate();
-    if (key === "autoStop") toast(on ? "Deal. I'll clean up after them myself." : "Fine. I'll just tell you.");
+    if (key === "autoStop") toast(on ? "Deal. I'll clean up after them myself." : "Okay. I'll just tell you.");
     if (key === "notifications") toast(on ? "I'll let you know when it matters." : "Okay. Not a peep.");
   });
 
@@ -4395,9 +4423,9 @@ in ${x.cwd}`)}">
       if (key === "agentScratchDays") c.trash.agentScratchDays = Math.min(365, Math.max(1, Math.round(v)));
       if (key === "tempMinAgeDays") c.trash.tempMinAgeDays = Math.min(90, Math.max(1, Math.round(v)));
       if (key === "conversationsAfterDays") c.trash.conversationsAfterDays = Math.min(3650, Math.max(1, Math.round(v)));
-    }).then(() => {
+    }).then((saved) => {
       // What counts as old just changed, so the clean-ups need measuring again.
-      if (["agentScratchDays", "tempMinAgeDays", "conversationsAfterDays"].includes(input.dataset.num)) invoke("measure_trash");
+      if (saved && ["agentScratchDays", "tempMinAgeDays", "conversationsAfterDays"].includes(input.dataset.num)) invoke("measure_trash");
     });
   });
 

@@ -90,6 +90,11 @@ pub fn run(program: &str, args: &[&str], timeout: Duration) -> std::io::Result<C
 }
 
 /// `run`, started in a folder of your choosing.
+///
+/// The time limit is for the whole thing. When it's up, the program goes and so does everything
+/// it started (they'd otherwise carry on, holding the pipes its output comes through). And once
+/// the program itself has finished, mom waits only a moment for the rest of what it printed:
+/// something it left running with those pipes in hand can't keep her waiting.
 pub fn run_in(program: &str, args: &[&str], folder: Option<&std::path::Path>, timeout: Duration) -> std::io::Result<CmdOutput> {
     let mut cmd = Command::new(program);
     cmd.args(args)
@@ -106,42 +111,162 @@ pub fn run_in(program: &str, args: &[&str], folder: Option<&std::path::Path>, ti
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     let mut child = cmd.spawn()?;
-    let mut out = child.stdout.take();
-    let mut err = child.stderr.take();
-    let out_t = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(o) = out.as_mut() {
-            let _ = o.read_to_end(&mut buf);
-        }
-        buf
-    });
-    let err_t = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(e) = err.as_mut() {
-            let _ = e.read_to_end(&mut buf);
-        }
-        buf
-    });
+    let family = Family::of(&child);
+    let (out, out_done) = gather(child.stdout.take());
+    let (err, err_done) = gather(child.stderr.take());
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
     let status = loop {
-        match child.try_wait()? {
-            Some(s) => break s.code(),
-            None if Instant::now() >= deadline => {
+        match child.try_wait() {
+            Ok(Some(s)) => break s.code(),
+            Ok(None) if Instant::now() >= deadline => {
                 timed_out = true;
+                family.end();
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
             }
-            None => std::thread::sleep(Duration::from_millis(25)),
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(e) => {
+                family.end();
+                let _ = child.kill();
+                return Err(e);
+            }
         }
     };
-    Ok(CmdOutput {
-        status,
-        stdout: out_t.join().unwrap_or_default(),
-        stderr: err_t.join().unwrap_or_default(),
-        timed_out,
-    })
+    // What it printed is all there as soon as the pipes close, which is at once unless something
+    // it started still holds them.
+    let until = Instant::now() + LINGER;
+    for done in [out_done, err_done] {
+        let _ = done.recv_timeout(until.saturating_duration_since(Instant::now()));
+    }
+    let take = |buf: &std::sync::Mutex<Vec<u8>>| std::mem::take(&mut *buf.lock().unwrap_or_else(|e| e.into_inner()));
+    Ok(CmdOutput { status, stdout: take(&out), stderr: take(&err), timed_out })
+}
+
+/// How long mom waits for the rest of a program's output once the program itself has finished.
+const LINGER: Duration = Duration::from_secs(2);
+
+/// Reads a pipe to its end on a thread of its own, into a buffer that can be taken before the
+/// end comes; the receiver hears when it has.
+fn gather<P: Read + Send + 'static>(pipe: Option<P>) -> (std::sync::Arc<std::sync::Mutex<Vec<u8>>>, std::sync::mpsc::Receiver<()>) {
+    let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (done, heard) = std::sync::mpsc::channel();
+    let into = buf.clone();
+    std::thread::spawn(move || {
+        if let Some(mut pipe) = pipe {
+            let mut chunk = vec![0u8; 16 * 1024];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => into.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&chunk[..n]),
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
+        }
+        let _ = done.send(());
+    });
+    (buf, heard)
+}
+
+/// A program mom started, together with whatever it starts in turn, so that all of it can be
+/// ended at once. (On Windows, a job; elsewhere there's only the program itself.) Dropping it
+/// ends nothing: what a program leaves running on purpose stays.
+struct Family {
+    #[cfg(windows)]
+    job: windows_sys::Win32::Foundation::HANDLE,
+}
+
+impl Family {
+    fn of(child: &std::process::Child) -> Family {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+            // SAFETY: a new, unnamed job; the child's handle is open for the length of the call.
+            // If either call fails there's no job, and only the program itself can be ended.
+            let job = unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if !job.is_null() && AssignProcessToJobObject(job, child.as_raw_handle() as _) == 0 {
+                    windows_sys::Win32::Foundation::CloseHandle(job);
+                    std::ptr::null_mut()
+                } else {
+                    job
+                }
+            };
+            Family { job }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = child;
+            Family {}
+        }
+    }
+
+    /// Ends the program and everything it started.
+    fn end(&self) {
+        #[cfg(windows)]
+        if !self.job.is_null() {
+            // SAFETY: the job handle is ours and open.
+            unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1) };
+        }
+    }
+}
+
+impl Drop for Family {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if !self.job.is_null() {
+            // SAFETY: the job handle is ours; closing it leaves what's in the job running.
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.job) };
+        }
+    }
+}
+
+/// Moves (or renames) `from` to `to` only if nothing is at `to`. The check and the move are one
+/// step, done by the system, so something that turns up there in the meantime is never
+/// replaced. (`std::fs::rename` replaces a file that's in the way.)
+pub fn move_new(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+        let wide = |p: &Path| -> Vec<u16> { long_path(p).as_os_str().encode_wide().chain(Some(0)).collect() };
+        let (from, to) = (wide(from), wide(to));
+        // SAFETY: both are NUL-terminated and outlive the call. No flags: not onto anything that's there.
+        if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        if to.symlink_metadata().is_ok() {
+            return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "something is already there"));
+        }
+        std::fs::rename(from, to)
+    }
+}
+
+/// Did a move fail because something is already where the thing was going?
+pub fn in_the_way(e: &std::io::Error) -> bool {
+    // ERROR_FILE_EXISTS and ERROR_ALREADY_EXISTS.
+    e.kind() == std::io::ErrorKind::AlreadyExists || matches!(e.raw_os_error(), Some(80 | 183) if cfg!(windows))
+}
+
+/// A path over Windows' usual 260 characters, spelled the way that lifts the limit (`\\?\`).
+/// Only a whole, plain path can be: one with a drive letter, backslashes and no `.` or `..`.
+#[cfg(windows)]
+fn long_path(p: &Path) -> PathBuf {
+    use std::path::Component;
+    let s = p.to_string_lossy();
+    let plain = p.components().all(|c| matches!(c, Component::Prefix(_) | Component::RootDir | Component::Normal(_)));
+    let lettered = s.len() > 3 && s.as_bytes()[1] == b':' && s.as_bytes()[2] == b'\\';
+    if s.len() >= 240 && plain && lettered && !s.contains('/') {
+        return PathBuf::from(format!(r"\\?\{s}"));
+    }
+    p.to_path_buf()
 }
 
 /// Windows tools like `wsl.exe` print UTF-16; everything else prints UTF-8.
@@ -414,6 +539,74 @@ pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_move_never_replaces_what_is_there() {
+        let dir = std::env::temp_dir().join(format!("mom-move-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder")).unwrap();
+        let (a, b) = (dir.join("a.txt"), dir.join("b.txt"));
+        std::fs::write(&a, "first").unwrap();
+        std::fs::write(&b, "second").unwrap();
+        // Onto a file, onto a folder, and a folder onto a file: refused, and both are as they were.
+        for (from, to) in [(&a, &b), (&a, &dir.join("folder")), (&dir.join("folder"), &b)] {
+            let e = move_new(from, to).unwrap_err();
+            assert!(in_the_way(&e), "{e}");
+        }
+        assert_eq!((std::fs::read_to_string(&a).unwrap(), std::fs::read_to_string(&b).unwrap()), ("first".to_string(), "second".to_string()));
+        assert!(dir.join("folder").is_dir());
+        // To a free name it's an ordinary move, for a file and for a folder with things in it.
+        move_new(&a, &dir.join("c.txt")).unwrap();
+        assert!(!a.exists() && std::fs::read_to_string(dir.join("c.txt")).unwrap() == "first");
+        std::fs::write(dir.join("folder").join("inside.txt"), "x").unwrap();
+        move_new(&dir.join("folder"), &dir.join("moved")).unwrap();
+        assert!(dir.join("moved").join("inside.txt").is_file() && !dir.join("folder").exists());
+        // Something that isn't there can't be moved, and that isn't "in the way".
+        assert!(!in_the_way(&move_new(&dir.join("nothing"), &dir.join("d.txt")).unwrap_err()));
+        // A very long path moves like any other.
+        let deep = (0..12).fold(dir.join("deep"), |p, i| p.join(format!("a-folder-with-a-long-name-{i:02}")));
+        std::fs::create_dir_all(&deep).unwrap();
+        assert!(deep.to_string_lossy().len() > 300);
+        std::fs::write(deep.join("here.txt"), "deep").unwrap();
+        move_new(&deep.join("here.txt"), &deep.join("there.txt")).unwrap();
+        assert!(move_new(&dir.join("c.txt"), &deep.join("there.txt")).is_err());
+        assert_eq!(std::fs::read_to_string(deep.join("there.txt")).unwrap(), "deep");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// How many programs are running with `mark` somewhere in their command line.
+    #[cfg(windows)]
+    fn running_with(mark: &str) -> usize {
+        let ask = format!("@(Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{mark}*' -and $_.Name -eq 'ping.exe' }}).Count");
+        run("powershell", &["-NoProfile", "-Command", &ask], Duration::from_secs(60)).map(|o| o.text().trim().parse().unwrap_or(99)).unwrap_or(99)
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_time_limit_ends_everything_the_program_started() {
+        // cmd starts a second program that holds the same pipes and would run for a minute.
+        let mark = format!("127.0.0.{}", 2 + std::process::id() % 200);
+        let began = Instant::now();
+        let out = run("cmd", &["/d", "/c", &format!("ping -n 60 {mark} & rem")], Duration::from_millis(600)).unwrap();
+        assert!(out.timed_out && out.status.is_none());
+        assert!(began.elapsed() < Duration::from_secs(5), "took {:?}", began.elapsed());
+        assert!(out.text().contains("Pinging"), "what it printed before the limit is kept: {:?}", out.text());
+        assert_eq!(running_with(&format!("-n 60 {mark}")), 0, "the program cmd started went with it");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn output_left_open_by_something_still_running_isnt_waited_for() {
+        // cmd finishes at once; what it started in the background keeps the pipes for a while.
+        let mark = format!("127.0.1.{}", 2 + std::process::id() % 200);
+        let began = Instant::now();
+        let out = run("cmd", &["/d", "/c", &format!("echo done & start /b ping -n 30 {mark}")], Duration::from_secs(60)).unwrap();
+        assert!(!out.timed_out && out.status == Some(0));
+        assert!(out.text().contains("done"));
+        assert!(began.elapsed() < Duration::from_secs(6), "took {:?}", began.elapsed());
+        // It wasn't ended either: only a time limit does that.
+        assert_eq!(running_with(&format!("-n 30 {mark}")), 1);
+    }
 
     #[test]
     fn bytes_read_like_a_human_wrote_them() {

@@ -164,7 +164,7 @@ Listing the machine costs a single `NtQuerySystemInformation` call. Only runtime
 - Stop a recycled PID: she re-checks every process's start time right before stopping it.
 - Move your conversations without asking. They only move when you press the button, a folder at a time: copied, checked file by file, linked, and only then removed from where they were. If anything goes wrong on the way, it's all put back.
 - Delete anything without showing you first. Every clean-up lists what goes and what stays, and nothing happens until you press its button and then press again to confirm. Anything in use can't be ticked at all.
-  - Tidying moves things, and undo is one click.
+  - Tidying moves things, and undo is one click. Neither ever replaces a file that is in the way.
   - Your own files, like old installers, go to the Recycle Bin.
   - Temp folders, caches and build folders are deleted for real, because they come back.
   - The Recycle Bin is only emptied when you ask.

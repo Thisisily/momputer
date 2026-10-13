@@ -24,6 +24,10 @@ pub struct DupeFile {
     pub keep: bool,
     /// Which of your folders it's in ("Downloads", "Pictures", ...).
     pub folder: String,
+    /// You said to keep it (Settings, "Always kept"), so it can't be ticked. Worked out each
+    /// time the scan is shown (`mark_kept`), never saved.
+    #[serde(default, skip_deserializing)]
+    pub kept: bool,
 }
 
 /// Files with exactly the same contents.
@@ -49,6 +53,9 @@ pub struct BigFile {
     pub modified: u64,
     pub kind: String,
     pub folder: String,
+    /// You said to keep it (see `DupeFile.kept`).
+    #[serde(default, skip_deserializing)]
+    pub kept: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -366,6 +373,7 @@ pub fn scan(paths: &Paths, opts: &ScanOpts, cancel: &AtomicBool, progress: &dyn 
                             modified,
                             kind: kind_of(&path).into(),
                             folder: names[folder].1.clone(),
+                            kept: false,
                         });
                     }
                 }
@@ -456,7 +464,7 @@ fn group(seen: &[Seen], names: &[(String, String)], size: u64, hash: &[u8; 32], 
     };
     let mut files: Vec<DupeFile> = copies
         .iter()
-        .map(|&i| DupeFile { path: seen[i].path.clone(), modified: seen[i].modified, keep: false, folder: names[seen[i].folder].1.clone() })
+        .map(|&i| DupeFile { path: seen[i].path.clone(), modified: seen[i].modified, keep: false, folder: names[seen[i].folder].1.clone(), kept: false })
         .collect();
     files.sort_by(|a, b| {
         rank(&a.folder)
@@ -621,13 +629,33 @@ fn full_hash(path: &Path, cancel: &AtomicBool, read: &mut dyn FnMut(u64)) -> Has
 
 /// Sends ticked files to the Recycle Bin, checked against the last scan first: a copy only if
 /// it still has the same contents and another copy with them stays (one not ticked too), a big
-/// file only if it's unchanged. Never deletes anything for good. The saved scan is updated.
-pub fn recycle(paths: &Paths, files: &[PathBuf]) -> RecycleReport {
+/// file only if it's unchanged. Nothing you said to keep (`keep`: `TrashConfig.keep`) goes,
+/// whatever is ticked. Never deletes anything for good. The saved scan is updated.
+pub fn recycle(paths: &Paths, files: &[PathBuf], keep: &[String]) -> RecycleReport {
     let mut room = crate::trash::bin::Room::default();
-    recycle_with(paths, files, &mut |p, size| room.fits(p, size), &mut |p| ::trash::delete(p).is_ok())
+    recycle_with(paths, files, keep, &mut |p, size| room.fits(p, size), &mut |p| ::trash::delete(p).is_ok())
 }
 
-fn recycle_with(paths: &Paths, files: &[PathBuf], fits: &mut dyn FnMut(&Path, u64) -> bool, remove: &mut dyn FnMut(&Path) -> bool) -> RecycleReport {
+/// Marks what you said to keep in a scan that's about to be shown, so it can't be ticked. In a
+/// group of copies, a kept one is a copy that stays.
+pub fn mark_kept(report: &mut FilesReport, keep: &[String]) {
+    for g in &mut report.groups {
+        for f in &mut g.files {
+            f.kept = crate::trash::is_kept(&f.path, keep);
+        }
+        if g.files.iter().any(|f| f.kept) {
+            for f in &mut g.files {
+                f.keep = f.kept;
+            }
+        }
+    }
+    report.wasted = report.groups.iter().map(waste).sum();
+    for b in &mut report.big {
+        b.kept = crate::trash::is_kept(&b.path, keep);
+    }
+}
+
+fn recycle_with(paths: &Paths, files: &[PathBuf], keep: &[String], fits: &mut dyn FnMut(&Path, u64) -> bool, remove: &mut dyn FnMut(&Path) -> bool) -> RecycleReport {
     let mut report = load_saved(paths).unwrap_or_default();
     let mut r = RecycleReport::default();
     let ticked: HashSet<String> = files.iter().map(|f| norm_path(&f.to_string_lossy())).collect();
@@ -638,6 +666,10 @@ fn recycle_with(paths: &Paths, files: &[PathBuf], fits: &mut dyn FnMut(&Path, u6
     for file in files {
         let key = norm_path(&file.to_string_lossy());
         let skip = |why: &str| Skipped { path: file.clone(), why: why.into() };
+        if crate::trash::is_kept(file, keep) {
+            r.skipped.push(skip("You said to keep this (Settings, Always kept), so it stays."));
+            continue;
+        }
         let in_group = report.groups.iter().enumerate().find_map(|(gi, g)| {
             g.files.iter().find(|f| norm_path(&f.path.to_string_lossy()) == key).map(|f| (gi, f.modified))
         });
@@ -983,12 +1015,12 @@ mod tests {
             std::fs::remove_file(p).is_ok()
         };
         // Every copy ticked: none goes.
-        let r = recycle_with(&paths, &[keep.clone(), extra.clone(), extra2.clone()], &mut |_, _| true, &mut fake);
+        let r = recycle_with(&paths, &[keep.clone(), extra.clone(), extra2.clone()], &[], &mut |_, _| true, &mut fake);
         assert!(r.recycled.is_empty() && r.skipped.len() == 3, "{r:?}");
         assert!(keep.exists() && extra.exists() && extra2.exists());
         // One extra changed since: it stays; the other goes, and the saved scan drops it.
         std::fs::write(&extra2, stuff(20_000, 12)).unwrap();
-        let r = recycle_with(&paths, &[extra.clone(), extra2.clone()], &mut |_, _| true, &mut fake);
+        let r = recycle_with(&paths, &[extra.clone(), extra2.clone()], &[], &mut |_, _| true, &mut fake);
         assert_eq!(r.recycled, vec![extra.clone()], "{r:?}");
         assert_eq!(r.freed, 20_000);
         assert!(r.skipped[0].why.contains("changed"));
@@ -998,12 +1030,57 @@ mod tests {
         assert_eq!(saved.groups[0].files.len(), 2, "{:?}", saved.groups);
         // With the staying copy changed, the last unchanged one stays too.
         std::fs::write(&keep, stuff(20_000, 13)).unwrap();
-        let r = recycle_with(&paths, std::slice::from_ref(&extra2), &mut |_, _| true, &mut fake);
+        let r = recycle_with(&paths, std::slice::from_ref(&extra2), &[], &mut |_, _| true, &mut fake);
         assert!(r.recycled.is_empty(), "{r:?}");
         // Something mom never found isn't touched.
-        let r = recycle_with(&paths, &[root.join("whatever.txt")], &mut |_, _| true, &mut fake);
+        let r = recycle_with(&paths, &[root.join("whatever.txt")], &[], &mut |_, _| true, &mut fake);
         assert!(r.recycled.is_empty() && r.skipped[0].why.contains("didn't find"));
         assert_eq!(removed, vec![extra.clone()]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn what_you_said_to_keep_never_goes_whatever_is_ticked() {
+        let root = fixture("kept");
+        let paths = Paths::under(&root);
+        let a = stuff(20_000, 21);
+        let first = paths.home.join("Documents").join("notes.pdf");
+        let kept_copy = paths.home.join("Pictures").join("album").join("notes.pdf");
+        let extra = paths.downloads.join("notes.pdf");
+        put(&first, &a);
+        put(&kept_copy, &a);
+        put(&extra, &a);
+        let old = paths.home.join("Videos").join("holiday.mp4");
+        put(&old, &stuff(30_000, 22));
+        let mut report = look(&paths);
+        save(&paths, &report);
+        // You said to keep a whole folder (spelled your own way) and one file.
+        let keep = vec![paths.home.join("Pictures").join("ALBUM").to_string_lossy().replace('\\', "/"), old.to_string_lossy().to_string(), "  ".to_string()];
+        let mut removed = Vec::new();
+        let mut fake = |p: &Path| {
+            removed.push(p.to_path_buf());
+            std::fs::remove_file(p).is_ok()
+        };
+        // Ticked or not, what's kept stays, and says why; the copy that isn't kept still goes.
+        let r = recycle_with(&paths, &[kept_copy.clone(), old.clone(), extra.clone()], &keep, &mut |_, _| true, &mut fake);
+        assert_eq!(r.recycled, vec![extra.clone()], "{r:?}");
+        assert_eq!(r.skipped.iter().map(|s| s.path.clone()).collect::<Vec<_>>(), [kept_copy.clone(), old.clone()]);
+        assert!(r.skipped.iter().all(|s| s.why.contains("You said to keep this")), "{:?}", r.skipped);
+        assert!(kept_copy.exists() && old.exists() && first.exists() && !extra.exists());
+        // Shown, a kept copy is the one that stays and can't be ticked; so is a kept big file.
+        mark_kept(&mut report, &keep);
+        let g = &report.groups[0];
+        let of = |p: &Path| g.files.iter().find(|f| f.path == p).unwrap();
+        assert!(of(&kept_copy).kept && of(&kept_copy).keep && !of(&first).kept && !of(&first).keep && !of(&extra).kept);
+        assert!(report.big.iter().filter(|b| b.path == old).all(|b| b.kept));
+        // With nothing kept, nothing is marked, and the first choice of a copy to keep stands.
+        let mut plain = look(&paths);
+        mark_kept(&mut plain, &[]);
+        assert!(plain.groups.iter().flat_map(|g| &g.files).all(|f| !f.kept) && plain.groups.iter().all(|g| g.files.iter().filter(|f| f.keep).count() == 1));
+        // The mark is worked out when the scan is shown, never read back from the saved one.
+        save(&paths, &report);
+        assert!(load_saved(&paths).unwrap().groups.iter().flat_map(|g| &g.files).all(|f| !f.kept));
+        assert_eq!(removed, vec![extra]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

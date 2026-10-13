@@ -277,6 +277,20 @@ const RUN_32: &str = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run
 
 const ENV_EDITOR: &str = "rundll32.exe sysdm.cpl,EditEnvironmentVariables";
 const PERFORMANCE: &str = "SystemPropertiesPerformance.exe";
+
+/// Windows' own settings programs (in System32) that a finding's button may open: the ones the
+/// checkups name, and no others. A finding that names one that isn't here has a button that
+/// does nothing, so a test reads the checkups for every name.
+pub const PROGRAMS: &[&str] = &[
+    "SystemPropertiesPerformance.exe",
+    "SystemPropertiesAdvanced.exe",
+    "UserAccountControlSettings.exe",
+    "cttune.exe",
+    "eventvwr.exe",
+    "dfrgui.exe",
+    "devmgmt.msc",
+    "services.msc",
+];
 const AFTER_RESTART: &str = "Takes effect after a restart.";
 const AFTER_SIGN_IN: &str = "Takes effect the next time you sign in.";
 
@@ -1784,6 +1798,31 @@ mod os {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_settings_program_a_finding_names_can_be_opened() {
+        // Read from the checkups themselves: `.settings("x.exe")` here, and `kind: "launch", value: "x.msc"` elsewhere.
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let named = regex::Regex::new(r#"(?:\.settings\(|kind: "launch", value: )"([^"]+)""#).unwrap();
+        let mut seen = Vec::new();
+        for file in std::fs::read_dir(&src).unwrap().filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "rs")) {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let body = text.split("#[cfg(test)]").next().unwrap_or(&text).to_string();
+            for m in named.captures_iter(&body) {
+                let name = m[1].to_string();
+                if !name.starts_with("ms-settings:") {
+                    assert!(PROGRAMS.contains(&name.as_str()), "{} names {name}, which the button isn't allowed to open", file.display());
+                    seen.push(name);
+                }
+            }
+        }
+        assert!(PROGRAMS.contains(&PERFORMANCE));
+        for name in ["services.msc", "cttune.exe", "devmgmt.msc", "eventvwr.exe", "dfrgui.exe"] {
+            assert!(seen.iter().any(|s| s == name), "the test no longer finds {name}: has the way findings name programs changed?");
+        }
+        // Only bare names of programs: never a path, never anything with arguments.
+        assert!(PROGRAMS.iter().all(|p| p.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') && (p.ends_with(".exe") || p.ends_with(".msc"))));
+    }
     use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
 

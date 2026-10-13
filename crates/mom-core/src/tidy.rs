@@ -1012,8 +1012,24 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
         r.message = "Mom doesn't tidy a whole drive.".into();
         return r;
     }
+    // The undo record comes first: without somewhere to write down what moved, nothing moves.
+    let file = match start_journal(journal_dir, &journal) {
+        Ok(file) => file,
+        Err(e) => {
+            r.failed.push(format!("{}: {e}", journal_dir.display()));
+            r.message = "Mom couldn't start her undo record, so she left everything where it is.".into();
+            return r;
+        }
+    };
+    let mut saved = true;
+    let mut written = 0;
     let outside = |t: &str| format!("{t}: outside the room, so mom left it alone");
     for a in report.actions.iter().filter(|a| ids.contains(&a.id)) {
+        // What the last action did is on record before the next one starts.
+        if journal.entries.len() > written {
+            saved = save_journal(&file, &journal);
+            written = journal.entries.len();
+        }
         match a.op {
             Op::Move => {
                 let Some(to) = &a.to else { continue };
@@ -1037,7 +1053,7 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
                         continue;
                     }
                     let dest = unique_dest(&to, name);
-                    match std::fs::rename(&src, &dest) {
+                    match crate::util::move_new(&src, &dest) {
                         Ok(()) => {
                             r.moved += 1;
                             journal.entries.push(JournalEntry { op: Op::Move, from: t.clone(), to: Some(dest.to_string_lossy().to_string()) });
@@ -1056,7 +1072,7 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
                     r.failed.push(format!("{to} already exists"));
                     continue;
                 }
-                match std::fs::rename(t, to) {
+                match crate::util::move_new(Path::new(t), Path::new(to)) {
                     Ok(()) => {
                         r.moved += 1;
                         journal.entries.push(JournalEntry { op: Op::Rename, from: t.clone(), to: Some(to.clone()) });
@@ -1111,14 +1127,14 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
             }
         }
     }
-    if !journal.entries.is_empty() {
-        let file = journal_dir.join(format!("tidy-{}.json", journal.at));
-        if std::fs::create_dir_all(journal_dir).is_ok() {
-            if let Ok(text) = serde_json::to_string_pretty(&journal) {
-                if std::fs::write(&file, text).is_ok() {
-                    r.journal = Some(file.to_string_lossy().to_string());
-                }
-            }
+    if journal.entries.is_empty() {
+        let _ = std::fs::remove_file(&file);
+    } else {
+        if journal.entries.len() > written {
+            saved = save_journal(&file, &journal);
+        }
+        if saved {
+            r.journal = Some(file.to_string_lossy().to_string());
         }
     }
     let mut parts = Vec::new();
@@ -1134,68 +1150,144 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
     r.message = if parts.is_empty() {
         "Nothing to do.".to_string()
     } else {
-        let mut m = parts.join(", ");
-        m = format!("{}{}. Changed your mind? Undo is right there.", m[..1].to_uppercase(), &m[1..]);
-        m
+        let m = parts.join(", ");
+        let undo = if saved { "Changed your mind? Undo is right there." } else { "Mom couldn't finish her undo record, so Undo may not put all of it back." };
+        format!("{}{}. {undo}", m[..1].to_uppercase(), &m[1..])
     };
     r
+}
+
+/// Starts the record a tidy-up is undone from, in a file of its own: `tidy-<when>-<which>.json`,
+/// made only if nothing by that name is there, so two tidy-ups in the same second each keep
+/// theirs (the widget and `mom` can both be at it).
+fn start_journal(dir: &Path, journal: &Journal) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir)?;
+    let text = serde_json::to_string_pretty(journal)?;
+    for which in 1..1000 {
+        let file = dir.join(format!("tidy-{}-{which:03}.json", journal.at));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&file) {
+            Ok(mut f) => return f.write_all(text.as_bytes()).map(|()| file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "too many tidy-ups in one second"))
+}
+
+fn save_journal(file: &Path, journal: &Journal) -> bool {
+    serde_json::to_string_pretty(journal).is_ok_and(|text| crate::util::write_atomic(file, &text).is_ok())
+}
+
+/// When a record was made and which one of that second it is, from its name. (Older versions
+/// called theirs `tidy-<when>.json`.) Nothing for one that's been undone, or isn't a record.
+fn journal_order(file: &Path) -> Option<(u64, u32)> {
+    let name = file.file_name()?.to_str()?;
+    let stem = name.strip_prefix("tidy-")?.strip_suffix(".json")?;
+    let (when, which) = stem.split_once('-').unwrap_or((stem, "0"));
+    Some((when.parse().ok()?, which.parse().ok()?))
+}
+
+/// The last part of a path, for a sentence: on one line, in quotes.
+fn named(path: &str) -> String {
+    let name = Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
+    format!("\"{}\"", one_line(&name))
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UndoReport {
     pub restored: u32,
+    /// Still to put back: something was in the way this time. Undoing again tries these again.
+    pub pending: u32,
     pub failed: Vec<String>,
     pub message: String,
 }
 
-/// Reverses the most recent tidy-up.
+/// How putting one thing back went.
+enum Back {
+    Done,
+    /// It can't go back, now or later (it isn't where mom left it any more): why.
+    Gone(String),
+    /// Not this time, but it may next time (something is in the way, or has it open): why.
+    Waiting(String),
+}
+
+/// Reverses the most recent tidy-up that still has something to put back.
+///
+/// Nothing is ever replaced: if something new has turned up where a thing used to be, both stay
+/// where they are. And what couldn't go back this time stays on the record, so undoing again,
+/// once the way is clear, finishes the job without redoing what's done.
 pub fn undo_last(journal_dir: &Path) -> UndoReport {
     let mut r = UndoReport::default();
-    let mut files: Vec<PathBuf> = std::fs::read_dir(journal_dir)
-        .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).collect())
+    let mut files: Vec<((u64, u32), PathBuf)> = std::fs::read_dir(journal_dir)
+        .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).filter_map(|f| journal_order(&f).map(|order| (order, f))).collect())
         .unwrap_or_default();
-    files.retain(|f| {
-        let n = f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        n.starts_with("tidy-") && n.ends_with(".json") && !n.ends_with(".undone.json")
-    });
     files.sort();
-    let Some(file) = files.pop() else {
+    // The newest record with anything in it. An empty one is a tidy-up that's only just begun.
+    let mut last = None;
+    while let Some(((when, _), file)) = files.pop() {
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        // (One that's still empty an hour on is from a tidy-up that never got anywhere.)
+        let begun_only = |file: &Path| {
+            if when + 3600 < now_secs() {
+                let _ = std::fs::remove_file(file);
+            }
+        };
+        if text.trim().is_empty() {
+            begun_only(&file);
+            continue;
+        }
+        match serde_json::from_str::<Journal>(&text) {
+            Ok(j) if j.entries.is_empty() => {
+                begun_only(&file);
+                continue;
+            }
+            Ok(j) => {
+                last = Some((file, j));
+                break;
+            }
+            Err(_) => {
+                r.message = "Couldn't read the last tidy-up's journal.".into();
+                return r;
+            }
+        }
+    }
+    let Some((file, journal)) = last else {
         r.message = "Nothing to undo.".into();
         return r;
     };
-    let journal: Journal = match std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str(&t).ok()) {
-        Some(j) => j,
-        None => {
-            r.message = "Couldn't read the last tidy-up's journal.".into();
-            return r;
-        }
-    };
-    let recycled: Vec<&JournalEntry> = journal.entries.iter().filter(|e| e.op == Op::Recycle).collect();
-    for e in journal.entries.iter().rev() {
-        match e.op {
+    let mut went: Vec<Option<Back>> = journal.entries.iter().map(|_| None).collect();
+    for (i, e) in journal.entries.iter().enumerate().rev() {
+        went[i] = match e.op {
             Op::Move | Op::Rename => {
                 let Some(to) = &e.to else { continue };
-                if let Some(parent) = Path::new(&e.from).parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                match std::fs::rename(to, &e.from) {
-                    Ok(()) => r.restored += 1,
-                    Err(err) => r.failed.push(format!("{to}: {err}")),
+                if Path::new(to).symlink_metadata().is_err() {
+                    Some(Back::Gone(format!("{} isn't where mom put it any more", named(to))))
+                } else {
+                    if let Some(parent) = Path::new(&e.from).parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    Some(match crate::util::move_new(Path::new(to), Path::new(&e.from)) {
+                        Ok(()) => Back::Done,
+                        Err(err) if crate::util::in_the_way(&err) => Back::Waiting(format!("something new is where {} was", named(&e.from))),
+                        Err(err) => Back::Waiting(format!("{} wouldn't move ({})", named(to), one_line(&err.to_string()))),
+                    })
                 }
             }
-            Op::RemoveEmpty => {
-                if std::fs::create_dir_all(&e.from).is_ok() {
-                    r.restored += 1;
-                }
-            }
-            Op::Recycle => {}
-        }
+            Op::RemoveEmpty => Some(match std::fs::create_dir_all(&e.from) {
+                Ok(()) => Back::Done,
+                Err(_) => Back::Waiting(format!("the folder {} couldn't be made again", named(&e.from))),
+            }),
+            Op::Recycle => None,
+        };
     }
+    let recycled: Vec<usize> = (0..journal.entries.len()).filter(|&i| journal.entries[i].op == Op::Recycle).collect();
     if !recycled.is_empty() {
-        let (ok, failed) = restore_from_recycle_bin(&recycled, journal.at);
-        r.restored += ok;
-        r.failed.extend(failed);
+        let entries: Vec<&JournalEntry> = recycled.iter().map(|&i| &journal.entries[i]).collect();
+        for (i, back) in recycled.iter().zip(restore_from_recycle_bin(&entries, journal.at)) {
+            went[*i] = Some(back);
+        }
     }
     // Remove folders the tidy-up created that are now empty again.
     for e in &journal.entries {
@@ -1207,48 +1299,80 @@ pub fn undo_last(journal_dir: &Path) -> UndoReport {
             }
         }
     }
-    let _ = std::fs::rename(&file, file.with_extension("undone.json"));
-    r.message = if r.failed.is_empty() {
-        format!("Put back {}, exactly as they were.", plural(r.restored as u64, "thing"))
+    let mut left = Vec::new();
+    let (mut gone, mut why) = (0u64, None);
+    for (e, back) in journal.entries.iter().zip(went) {
+        match back {
+            Some(Back::Done) => r.restored += 1,
+            Some(Back::Gone(reason)) => {
+                gone += 1;
+                r.failed.push(format!("{}: {reason}", e.from));
+            }
+            Some(Back::Waiting(reason)) => {
+                r.failed.push(format!("{}: {reason}", e.from));
+                why.get_or_insert(reason);
+                left.push(e.clone());
+            }
+            None => {}
+        }
+    }
+    r.pending = left.len() as u32;
+    // Done with, once nothing is left to put back; until then the record holds what is.
+    if left.is_empty() {
+        let _ = std::fs::rename(&file, file.with_extension("undone.json"));
     } else {
-        format!("Put back {}; {} couldn't be restored.", plural(r.restored as u64, "thing"), r.failed.len())
+        save_journal(&file, &Journal { room: journal.room.clone(), at: journal.at, entries: left });
+    }
+    let put = format!("Put back {}", plural(r.restored as u64, "thing"));
+    r.message = match (why, gone) {
+        (None, 0) => format!("{put}, exactly as they were."),
+        (None, _) => format!("{put}. {} had moved since, so mom left {} alone.", plural(gone, "thing"), if gone == 1 { "it" } else { "them" }),
+        (Some(why), _) => {
+            let first = if r.restored == 0 { "Nothing could go back yet".to_string() } else { format!("{put}, {} still to go", r.pending) };
+            format!("{first}: {why}. Sort that out and undo again.")
+        }
     };
     r
 }
 
 #[cfg(any(windows, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-fn restore_from_recycle_bin(entries: &[&JournalEntry], since: u64) -> (u32, Vec<String>) {
+fn restore_from_recycle_bin(entries: &[&JournalEntry], since: u64) -> Vec<Back> {
     use trash::os_limited;
-    let Ok(items) = os_limited::list() else {
-        return (0, vec!["couldn't read the Recycle Bin; restore recycled items from it by hand".into()]);
+    let Ok(mut items) = os_limited::list() else {
+        return entries.iter().map(|_| Back::Waiting("mom couldn't read the Recycle Bin".into())).collect();
     };
-    let wanted: HashSet<String> = entries.iter().map(|e| crate::util::norm_path(&e.from)).collect();
-    let mut matches = Vec::new();
-    for item in items {
-        let original = item.original_path();
-        let key = crate::util::norm_path(&original.to_string_lossy());
-        if wanted.contains(&key) && item.time_deleted >= since as i64 - 5 {
-            matches.push(item);
+    let mut out = Vec::new();
+    let (mut restore, mut theirs) = (Vec::new(), Vec::new());
+    for (n, e) in entries.iter().enumerate() {
+        let key = crate::util::norm_path(&e.from);
+        // The newest thing in the Bin that was deleted from there since the tidy-up.
+        let found = (0..items.len())
+            .filter(|&i| items[i].time_deleted >= since as i64 - 5 && crate::util::norm_path(&items[i].original_path().to_string_lossy()) == key)
+            .max_by_key(|&i| items[i].time_deleted);
+        out.push(match found {
+            None => Back::Gone(format!("{} isn't in the Recycle Bin any more", named(&e.from))),
+            Some(_) if Path::new(&e.from).symlink_metadata().is_ok() => Back::Waiting(format!("something new is where {} was", named(&e.from))),
+            Some(i) => {
+                restore.push(items.swap_remove(i));
+                theirs.push(n);
+                Back::Done
+            }
+        });
+    }
+    if !restore.is_empty() && os_limited::restore_all(restore).is_err() {
+        // Some may have made it back before it failed: what's there again is done.
+        for n in theirs {
+            if Path::new(&entries[n].from).symlink_metadata().is_err() {
+                out[n] = Back::Waiting(format!("{} couldn't come back from the Recycle Bin", named(&entries[n].from)));
+            }
         }
     }
-    let n = matches.len() as u32;
-    let mut failed = Vec::new();
-    if n < entries.len() as u32 {
-        let missing = entries.len() as u64 - n as u64;
-        failed.push(format!("{} {} found in the Recycle Bin", plural(missing, "recycled item"), if missing == 1 { "wasn't" } else { "weren't" }));
-    }
-    match os_limited::restore_all(matches) {
-        Ok(()) => (n, failed),
-        Err(e) => {
-            failed.push(format!("restoring from the Recycle Bin failed: {e}"));
-            (0, failed)
-        }
-    }
+    out
 }
 
 #[cfg(not(any(windows, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
-fn restore_from_recycle_bin(entries: &[&JournalEntry], _since: u64) -> (u32, Vec<String>) {
-    (0, vec![format!("{} in the Trash; restore {} from there", plural(entries.len() as u64, "item"), if entries.len() == 1 { "it" } else { "them" })])
+fn restore_from_recycle_bin(entries: &[&JournalEntry], _since: u64) -> Vec<Back> {
+    entries.iter().map(|e| Back::Gone(format!("{} is in the Trash: put it back from there", named(&e.from)))).collect()
 }
 
 /// A message to paste to an agent so it tidies up (and fixes any paths that referenced the mess).
@@ -1450,6 +1574,138 @@ mod tests {
         let root = std::env::temp_dir().join(format!("mom-tidy-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         root
+    }
+
+    /// A plan nobody had to think up: every one of `files` (in `room`) goes into `room\Documents`.
+    fn plan(room: &Path, files: &[&str]) -> (RoomReport, Vec<String>) {
+        let report: RoomReport = serde_json::from_value(serde_json::json!({
+            "path": room.to_string_lossy(), "name": "room", "grade": "C", "score": 10, "line": "", "entries": files.len(), "codeProject": false,
+            "findings": [], "scannedAt": 0,
+            "actions": [{
+                "id": "put-away", "op": "move", "to": room.join("Documents").to_string_lossy(), "title": "", "reason": "", "bytes": 0, "selected": true,
+                "targets": files.iter().map(|f| room.join(f).to_string_lossy().to_string()).collect::<Vec<_>>(),
+            }],
+        }))
+        .unwrap();
+        (report, vec!["put-away".to_string()])
+    }
+
+    fn text(p: &Path) -> String {
+        std::fs::read_to_string(p).unwrap()
+    }
+
+    #[test]
+    fn undo_never_replaces_what_has_turned_up_in_a_things_old_place() {
+        let root = tmp("undo-new");
+        let room = root.join("room");
+        write(&room.join("report.md"), "the first report");
+        write(&room.join("notes.md"), "notes");
+        let journal = root.join("journal");
+        let (report, ids) = plan(&room, &["report.md", "notes.md"]);
+        let applied = apply(&report, &ids, &journal);
+        assert!(applied.failed.is_empty() && applied.moved == 2 && applied.journal.is_some(), "{applied:?}");
+        // Something new is written where the report used to be.
+        write(&room.join("report.md"), "a new report, written since");
+        let undone = undo_last(&journal);
+        assert_eq!((undone.restored, undone.pending), (1, 1), "{undone:?}");
+        assert_eq!(text(&room.join("report.md")), "a new report, written since", "the new one is untouched");
+        assert_eq!(text(&room.join("Documents").join("report.md")), "the first report", "and the one mom moved is still where she put it");
+        assert_eq!(text(&room.join("notes.md")), "notes");
+        assert!(undone.message.contains("1 still to go") && undone.message.contains("something new is where \"report.md\" was"), "{}", undone.message);
+        // Undoing again changes nothing while it's still in the way...
+        let again = undo_last(&journal);
+        assert_eq!((again.restored, again.pending), (0, 1), "{again:?}");
+        assert!(again.message.starts_with("Nothing could go back yet"), "{}", again.message);
+        assert_eq!(text(&room.join("report.md")), "a new report, written since");
+        // ...and finishes the job once it's out of the way, without redoing what was done.
+        std::fs::rename(room.join("report.md"), room.join("report (new).md")).unwrap();
+        let last = undo_last(&journal);
+        assert_eq!((last.restored, last.pending, last.failed.len()), (1, 0, 0), "{last:?}");
+        assert_eq!(text(&room.join("report.md")), "the first report");
+        assert!(!room.join("Documents").exists(), "the folder mom made is gone again");
+        assert_eq!(undo_last(&journal).message, "Nothing to undo.");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn what_couldnt_go_back_is_tried_again_next_time() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tmp("undo-again");
+        let room = root.join("room");
+        write(&room.join("report.md"), "report");
+        write(&room.join("notes.md"), "notes");
+        let journal = root.join("journal");
+        let (report, ids) = plan(&room, &["report.md", "notes.md"]);
+        assert_eq!(apply(&report, &ids, &journal).moved, 2);
+        // Another program has the moved report open in a way that doesn't let it be moved.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(1).open(room.join("Documents").join("report.md")).unwrap();
+        let undone = undo_last(&journal);
+        assert_eq!((undone.restored, undone.pending), (1, 1), "{undone:?}");
+        assert!(undone.message.contains("\"report.md\" wouldn't move"), "{}", undone.message);
+        assert!(room.join("notes.md").is_file() && !room.join("report.md").exists());
+        drop(held);
+        let again = undo_last(&journal);
+        assert_eq!((again.restored, again.pending, again.failed.len()), (1, 0, 0), "{again:?}");
+        assert_eq!(text(&room.join("report.md")), "report");
+        assert_eq!(undo_last(&journal).message, "Nothing to undo.");
+        // What isn't where mom put it any more can't go back: it's said once and then let go.
+        let (report, ids) = plan(&room, &["report.md", "notes.md"]);
+        assert_eq!(apply(&report, &ids, &journal).moved, 2);
+        std::fs::rename(room.join("Documents").join("notes.md"), root.join("taken-elsewhere.md")).unwrap();
+        let undone = undo_last(&journal);
+        assert_eq!((undone.restored, undone.pending, undone.failed.len()), (1, 0, 1), "{undone:?}");
+        assert!(undone.message.contains("1 thing had moved since"), "{}", undone.message);
+        assert_eq!(undo_last(&journal).message, "Nothing to undo.");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn every_tidy_up_keeps_an_undo_record_of_its_own() {
+        let root = tmp("undo-records");
+        let journal = root.join("journal");
+        // Two rooms tidied one right after the other (in the same second, as good as always).
+        let mut records = Vec::new();
+        for name in ["first", "second", "third"] {
+            let room = root.join(name);
+            write(&room.join("report.md"), name);
+            let (report, ids) = plan(&room, &["report.md"]);
+            let applied = apply(&report, &ids, &journal);
+            assert_eq!(applied.moved, 1, "{applied:?}");
+            records.push(applied.journal.unwrap());
+        }
+        assert!(records[0] != records[1] && records[1] != records[2] && records.iter().all(|r| Path::new(r).is_file()), "{records:?}");
+        // Undone newest first, each from its own record.
+        for (name, others) in [("third", 2), ("second", 1), ("first", 0)] {
+            let undone = undo_last(&journal);
+            assert_eq!((undone.restored, undone.pending), (1, 0), "{name}: {undone:?}");
+            assert_eq!(text(&root.join(name).join("report.md")), name);
+            let still_away = ["first", "second", "third"].iter().filter(|n| !root.join(n).join("report.md").exists()).count();
+            assert_eq!(still_away, others, "after undoing {name}");
+        }
+        assert_eq!(undo_last(&journal).message, "Nothing to undo.");
+        // Records of one second are told apart by which they were, and an older mom's (no number) comes first.
+        let order = |name: &str| journal_order(Path::new(name));
+        assert!(order("tidy-170.json") < order("tidy-170-001.json") && order("tidy-170-002.json") < order("tidy-170-010.json") && order("tidy-170-999.json") < order("tidy-171.json"));
+        assert!(order("tidy-99-001.json") < order("tidy-170.json"), "by number, not by spelling");
+        for not_one in ["tidy-170.undone.json", "tidy-170-001.undone.json", "tidy-170-001.json.momtmp", "notes.json", "tidy-x.json"] {
+            assert_eq!(order(not_one), None, "{not_one}");
+        }
+        // A record that's only been started holds nothing to undo, and isn't in the way of the one before it.
+        let room = root.join("first");
+        let (report, ids) = plan(&room, &["report.md"]);
+        assert_eq!(apply(&report, &ids, &journal).moved, 1);
+        start_journal(&journal, &Journal { room: "x".into(), at: now_secs() + 5, entries: vec![] }).unwrap();
+        std::fs::write(journal.join(format!("tidy-{}-001.json", now_secs() + 9)), "").unwrap();
+        assert_eq!(undo_last(&journal).restored, 1);
+        assert!(room.join("report.md").is_file());
+        // Without anywhere to keep the record, nothing moves at all.
+        let blocked = root.join("not-a-folder");
+        std::fs::write(&blocked, "a file where the records should go").unwrap();
+        let applied = apply(&report, &ids, &blocked);
+        assert!(applied.moved == 0 && applied.journal.is_none() && applied.message.contains("left everything where it is"), "{applied:?}");
+        assert!(room.join("report.md").is_file());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

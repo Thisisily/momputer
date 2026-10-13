@@ -329,6 +329,14 @@
     };
   };
   let filesReport = null;
+  /** ?kept: one extra copy and the big file are things you said to keep (Settings, "Always kept"). */
+  const markKept = (r) => {
+    if (!location.search.includes("kept")) return r;
+    const g = r.groups[1];
+    g.files.forEach((f, i) => Object.assign(f, { kept: i === 2, keep: i === 2 }));
+    r.big.forEach((b) => (b.kept = true));
+    return r;
+  };
 
   // Servers mom stopped earlier, with how they were started.
   let stopped = [
@@ -856,7 +864,7 @@
         await wait(250);
         emit("files-progress", { files: n * 1040, bytes: n * 3.6 * GB, stage: n < 6 ? "listing" : "comparing" });
       }
-      filesReport = filesReport || mockFiles();
+      filesReport = filesReport || markKept(mockFiles());
       filesReport.measuredAt = Math.floor(Date.now() / 1000);
       emit("files", { report: JSON.parse(JSON.stringify(filesReport)), busy: false });
     },
@@ -1002,6 +1010,8 @@
     },
     get_settings: () => JSON.parse(JSON.stringify(settings)),
     set_settings: ({ config }) => {
+      // ?nosave: the settings file can't be written, to see that nothing is shown as changed.
+      if (location.search.includes("nosave")) throw "Access is denied. (os error 5)";
       settings.config = config;
       return null;
     },

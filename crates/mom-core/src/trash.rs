@@ -999,6 +999,13 @@ fn within(inner: &str, outer: &str) -> bool {
     inner == outer || (inner.len() > outer.len() && inner.starts_with(outer) && (outer.ends_with('\\') || inner.as_bytes()[outer.len()] == b'\\'))
 }
 
+/// Did you say to keep `path`: the thing itself, or something it's inside of? (`keep` is
+/// `TrashConfig.keep`.) Every clean-up asks, right before it takes anything.
+pub fn is_kept(path: &Path, keep: &[String]) -> bool {
+    let p = norm_path(&path.to_string_lossy());
+    keep.iter().filter(|k| !k.trim().is_empty()).any(|k| within(&p, &norm_path(k)))
+}
+
 /// What you said to keep never goes and can't be ticked: the thing itself, anything inside it,
 /// and anything it is inside of (deleting that would take it along).
 fn keep_yours(mut f: Found, keep: &[String]) -> Found {

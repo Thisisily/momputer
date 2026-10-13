@@ -903,7 +903,11 @@ struct FilesState {
 
 #[tauri::command(async)]
 fn files_state(s: State<'_, S>) -> FilesState {
-    FilesState { report: mom_core::files::load_saved(&s.paths), busy: s.files_busy.load(Ordering::Relaxed) }
+    let mut report = mom_core::files::load_saved(&s.paths);
+    if let Some(r) = report.as_mut() {
+        mom_core::files::mark_kept(r, &s.cfg().trash.keep);
+    }
+    FilesState { report, busy: s.files_busy.load(Ordering::Relaxed) }
 }
 
 /// Looks through your folders on its own thread: "files-progress" while it works, "files" when
@@ -920,8 +924,9 @@ fn scan_files(app: AppHandle, s: State<'_, S>) {
         let progress = |p: mom_core::files::Progress| {
             let _ = app.emit("files-progress", p);
         };
-        let r = mom_core::files::scan(&s.paths, &opts, &s.files_stop, &progress);
+        let mut r = mom_core::files::scan(&s.paths, &opts, &s.files_stop, &progress);
         mom_core::files::save(&s.paths, &r);
+        mom_core::files::mark_kept(&mut r, &s.cfg().trash.keep);
         s.files_busy.store(false, Ordering::SeqCst);
         let _ = app.emit("files", FilesState { report: Some(r), busy: false });
     });
@@ -932,11 +937,12 @@ fn stop_files_scan(s: State<'_, S>) {
     s.files_stop.store(true, Ordering::SeqCst);
 }
 
-/// Sends what's ticked to the Recycle Bin, never the last copy of anything (see files::recycle).
+/// Sends what's ticked to the Recycle Bin, never the last copy of anything and nothing you said
+/// to keep (see files::recycle).
 #[tauri::command(async)]
 fn recycle_files(paths: Vec<String>, s: State<'_, S>) -> mom_core::files::RecycleReport {
     let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-    let r = mom_core::files::recycle(&s.paths, &files);
+    let r = mom_core::files::recycle(&s.paths, &files, &s.cfg().trash.keep);
     if r.freed > 0 {
         s.note(format!("Moved {} of copies and old files to the Recycle Bin.", human_bytes(r.freed)));
     }
@@ -992,11 +998,10 @@ fn undo_setting(id: String, s: State<'_, S>) -> Res<String> {
 /// the graphics card maker's app.
 #[tauri::command(async)]
 fn open_program(name: String) -> Res<()> {
-    const ALLOWED: &[&str] = &["SystemPropertiesPerformance.exe", "SystemPropertiesAdvanced.exe", "UserAccountControlSettings.exe", "cttune.exe", "eventvwr.exe", "dfrgui.exe", "devmgmt.msc"];
     if let Some(app) = mom_core::speed::gpu_app_path(&name) {
         return mom_core::elevate::open(&app, "");
     }
-    if !ALLOWED.contains(&name.as_str()) {
+    if !mom_core::winsettings::PROGRAMS.contains(&name.as_str()) {
         return Err("mom only opens Windows' own settings programs".into());
     }
     let windows = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
