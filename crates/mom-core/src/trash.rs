@@ -729,18 +729,30 @@ fn saved_file(paths: &Paths) -> PathBuf {
     paths.state_dir().join("trash.json")
 }
 
+/// The mom that's running. What goes, what stays and what can be ticked is her verdict, and a
+/// newer mom may judge differently, so a measurement is saved with the version that made it.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub fn save(paths: &Paths, spots: &[Spot]) {
-    if let Ok(json) = serde_json::to_string(spots) {
+    save_as(paths, spots, VERSION);
+}
+
+fn save_as(paths: &Paths, spots: &[Spot], version: &str) {
+    if let Ok(json) = serde_json::to_string(&serde_json::json!({ "version": version, "spots": spots })) {
         let _ = crate::util::write_atomic(&saved_file(paths), &json);
     }
 }
 
-/// What was measured last time (each spot says when). Spots mom no longer has are dropped.
+/// What was measured last time (each spot says when). Spots mom no longer has are dropped, and
+/// so is everything another version measured: after an update she looks again, or the widget
+/// would go on showing the old version's verdicts.
 pub fn load_saved(paths: &Paths) -> Vec<Spot> {
     let ids = spot_ids();
     std::fs::read_to_string(saved_file(paths))
         .ok()
-        .and_then(|s| serde_json::from_str::<Vec<Spot>>(&s).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .filter(|v| v.get("version").and_then(serde_json::Value::as_str) == Some(VERSION))
+        .and_then(|mut v| serde_json::from_value::<Vec<Spot>>(v["spots"].take()).ok())
         .map(|v| v.into_iter().filter(|s| ids.contains(&s.id.as_str())).collect())
         .unwrap_or_default()
 }
@@ -2476,6 +2488,28 @@ mod tests {
         assert_eq!(back.len(), 1);
         assert_eq!((back[0].id.as_str(), back[0].reclaimable_bytes, back[0].measured_at), ("old-temp", 100, spots[0].measured_at));
         assert_eq!(back[0].items[0].name, "old-a");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_measurement_from_another_version_is_measured_again() {
+        let root = fixture("saved-by-another");
+        let paths = Paths::under(&root);
+        write(&paths.temp.join("old-a").join("a.log"), 100, 30);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spots = vec![measure("old-temp", &ctx).unwrap()];
+        // Saved by the version before: its verdicts aren't this one's.
+        save_as(&paths, &spots, "0.0.1");
+        assert!(load_saved(&paths).is_empty());
+        // Saved the way mom used to, as a bare list with no version.
+        crate::util::write_atomic(&saved_file(&paths), &serde_json::to_string(&spots).unwrap()).unwrap();
+        assert!(load_saved(&paths).is_empty());
+        // Anything else that isn't a measurement.
+        crate::util::write_atomic(&saved_file(&paths), "{\"version\":7,\"spots\":\"x\"}").unwrap();
+        assert!(load_saved(&paths).is_empty());
+        save(&paths, &spots);
+        assert_eq!(load_saved(&paths).len(), 1);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
