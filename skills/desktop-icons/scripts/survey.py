@@ -318,17 +318,14 @@ class Prober:
 
     def __init__(self):
         self.windows = norm(os.environ.get("SystemRoot", r"C:\Windows"))
-        self.drive_kind = {}
         self.folders = set()
 
     def fixed(self, path):
         if not IS_WIN:
             return True
-        d = path[:3].upper()
-        if d not in self.drive_kind:
-            import ctypes
-            self.drive_kind[d] = ctypes.windll.kernel32.GetDriveTypeW(d)
-        return self.drive_kind[d] == 3  # DRIVE_FIXED
+        import ctypes
+        # Asked afresh every time, never remembered: what a drive letter stands for can change.
+        return ctypes.windll.kernel32.GetDriveTypeW(path[:3].upper()) == 3  # DRIVE_FIXED
 
     def look(self, path):
         """('ok' | 'dead' | 'unknown', why). Dead only when a fixed disk in this PC says the name isn't there."""

@@ -316,7 +316,6 @@ def drive_list(only=None, include_removable=False):
 # checked to be a real folder, and kept open until the looking is done, which stops any of them
 # being renamed, replaced or deleted meanwhile. Whatever can't be opened or examined, or isn't
 # there, is "no".
-_DRIVE_KINDS = {}
 _WIN = {}
 
 
@@ -333,11 +332,9 @@ def on_this_pc(path):
         return False
     if any(part != part.rstrip(". ") for part in rest.split("\\")):
         return False
-    root = path[:3].upper()
-    if root not in _DRIVE_KINDS:
-        import ctypes
-        _DRIVE_KINDS[root] = ctypes.windll.kernel32.GetDriveTypeW(root)
-    return _DRIVE_KINDS[root] in (2, 3)  # removable, fixed. Not a network drive, not unknown
+    import ctypes
+    # Asked afresh every time, never remembered: what a drive letter stands for can change.
+    return ctypes.windll.kernel32.GetDriveTypeW(path[:3].upper()) in (2, 3)  # removable, fixed. Not a network drive, not unknown
 
 
 def _win():
@@ -451,14 +448,19 @@ def installed_programs(never=()):
     return out
 
 
-def read_text(path, limit=2_000_000, folder_held=False):
+def read_text(path, limit=2_000_000, held=None):
     """The start of a small text file in a place other accounts may be able to write to, or "".
-    Its folder is held as in hold() (or already is, by the caller: `folder_held`); the file is
-    opened as itself and read only if it is a plain file. A file that is a link is never opened."""
+    Its folder is held as in hold(): by this call, or by the caller, who then passes the handles
+    hold() gave for that very folder. The file is opened as itself and read only if it is a plain
+    file. A file that is a link is never opened. Without a held folder nothing is read."""
     if not on_this_pc(path):
         return ""
-    held = [] if folder_held else hold(os.path.dirname(path))
-    if held is None:
+    folder = os.path.dirname(path)
+    mine = held is None
+    if mine:
+        held = hold(folder)
+    # One handle for the drive and one for each folder below it: anything else isn't this file's folder, held
+    if not held or len(held) != 1 + len([p for p in folder[3:].split("\\") if p]):
         return ""
     try:
         got = _opened(path, 0x80000000, 0x1 | 0x2 | 0x4)  # GENERIC_READ; nobody else is kept out
@@ -473,7 +475,8 @@ def read_text(path, limit=2_000_000, folder_held=False):
     except OSError:
         return ""
     finally:
-        release(held)
+        if mine:
+            release(held)
 
 
 def launchers(drives):
@@ -503,7 +506,7 @@ def launchers(drives):
                 roots.append(lib)
                 for n in names:
                     if n.startswith("appmanifest_") and n.endswith(".acf"):
-                        t = read_text(os.path.join(sa, n), 200_000, folder_held=True)
+                        t = read_text(os.path.join(sa, n), 200_000, held=held)
                         g = {k: (re.search(r'"%s"\s+"([^"]*)"' % k, t) or [None, None])[1]
                              for k in ("name", "installdir", "SizeOnDisk")}
                         if g["installdir"] and not re.search(r'[\\/:*?"<>|]', g["installdir"]):
@@ -524,7 +527,7 @@ def launchers(drives):
         try:  # held once: for the listing, and for every manifest read out of it
             for n in sorted(os.listdir("\\\\?\\" + epic_dir)):
                 if n.endswith(".item"):
-                    items.append((n, read_text(os.path.join(epic_dir, n), 2_000_000, folder_held=True)))
+                    items.append((n, read_text(os.path.join(epic_dir, n), 2_000_000, held=held)))
         except OSError:
             pass
         finally:

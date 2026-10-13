@@ -138,6 +138,9 @@ try:
               inner, os.path.join(moved, "missing"), os.path.join(moved, "a file.txt"), os.path.join(moved, "a file.txt", "below"),
               "\\\\files.example\\share", "moved\\inner", ""))
           and tidy_survey.listed(os.path.join(moved, "missing")) is None and tidy_survey.read_text(os.path.join(moved, "missing.txt")) == ""
+          and tidy_survey.read_text(os.path.join(moved, "a file.txt")) == "x"
+          and tidy_survey.read_text(os.path.join(moved, "a file.txt"), held=[]) == ""        # "it's held" with nothing held: not read
+          and tidy_survey.read_text(os.path.join(moved, "a file.txt"), held=[0, 0]) == ""    # nor with another folder's handles
           and tidy_survey.listed(moved) == ["a file.txt"])
     sys.path.remove(S)
     shutil.rmtree(os.path.join(T, "launchers"))  # this test's own fixture, inside its own work folder
