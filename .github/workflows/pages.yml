@@ -3,12 +3,16 @@ name: pages
 # Publishes the install page in site/ to GitHub Pages, when site/ changes on main or by hand.
 # Pages has to be switched on once first: Settings > Pages > Source: GitHub Actions.
 #
+# The page shows a live widget: the widget's own page (app/ui), which runs on made-up data when
+# it isn't inside the app. It's copied in as site/demo/ here, so there is one copy of it in the
+# repository, and the page is published again when it changes.
+#
 # Every action is pinned to a commit, not a tag (Dependabot proposes updates).
 
 on:
   push:
     branches: [main]
-    paths: ['site/**']
+    paths: ['site/**', 'app/ui/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -28,6 +32,8 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Put the widget's own page in as the live demo
+        run: cp -r app/ui site/demo
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:

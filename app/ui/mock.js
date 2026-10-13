@@ -3,6 +3,22 @@
    on a real Tuesday on a machine running far too many agents. */
 (() => {
   if (window.__TAURI__) return;
+  // ?demo, inside a frame: the widget as the live demo on momputer's web page (site/). It tells the
+  // page around it when it wants to be BIG and waits for the page to make room, the way the real one
+  // waits for its window; and its links open in a new tab.
+  const DEMO = location.search.includes("demo") && window.parent !== window;
+  const toPage = (word) => window.parent.postMessage({ momputer: word }, location.origin);
+  const fromPage = (fn) => addEventListener("message", (e) => e.origin === location.origin && e.data && typeof e.data.momputer === "string" && fn(e.data.momputer));
+  if (DEMO) {
+    document.documentElement.classList.add("demo");
+    addEventListener("load", () => setTimeout(() => toPage("ready"), 300));
+    // The page asks for BIG MODE (its "See it live" button) or for the widget back (Esc, a click beside it).
+    fromPage((word) => {
+      const button = document.querySelector("#btn-big");
+      const big = button && button.getAttribute("aria-pressed") === "true";
+      if (button && ((word === "go-big" && !big) || (word === "go-small" && big))) button.click();
+    });
+  }
   const now = Math.floor(Date.now() / 1000);
   const H = 3600;
   const D = 86400;
@@ -1017,10 +1033,22 @@
     },
     set_autostart: ({ on }) => on,
     get_diary: () => [],
-    open_url: () => null,
+    open_url: ({ url }) => {
+      if (DEMO && /^https:\/\//.test(String(url))) window.open(url, "_blank", "noopener");
+      return null;
+    },
     reveal: () => null,
     hide_window: () => null,
-    set_big: () => false,
+    // In the demo the page around the widget grows the frame; the widget waits to hear it has.
+    set_big: ({ on }) =>
+      !DEMO
+        ? false
+        : new Promise((done) => {
+            const finish = () => (clearTimeout(timer), done(false));
+            const timer = setTimeout(finish, 2000);
+            fromPage((word) => word === "sized" && finish());
+            toPage(on ? "big" : "small");
+          }),
     big_arrived: () => null,
     card_away: () => null,
     set_paused: () => null,
