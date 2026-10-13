@@ -35,6 +35,9 @@ const MAX_DEPTH: usize = 3;
 /// Files mom will count across all build folders before she stops measuring the rest.
 const BUDGET: u64 = 10_000_000;
 
+/// Folder names people keep code under at the top of a drive.
+const DRIVE_ROOTS: &[&str] = &["Workspace", "Projects", "Code", "dev", "Development", "src", "repos", "GitHub", "git", "work"];
+
 /// The config's rooms plus the usual places people keep code, if they exist.
 pub(super) fn default_roots(paths: &Paths, rooms: &[PathBuf]) -> Vec<PathBuf> {
     // Only rooms that are rooms: a whole drive (say) would mean walking everything on it.
@@ -55,9 +58,12 @@ pub(super) fn default_roots(paths: &Paths, rooms: &[PathBuf]) -> Vec<PathBuf> {
     ] {
         v.push(paths.home.join(rel));
     }
-    if cfg!(windows) {
-        v.push(PathBuf::from(r"C:\Workspace"));
-        v.push(PathBuf::from(r"D:\Workspace"));
+    // And the same names at the top of every drive that's built in: code often lives on a second
+    // disk (D:\Workspace, E:\Projects). Only those names: a whole drive is never walked.
+    for drive in crate::util::fixed_drives() {
+        for name in DRIVE_ROOTS {
+            v.push(Path::new(&drive).join(name));
+        }
     }
     let mut seen = HashSet::new();
     v.into_iter().filter(|p| p.is_dir() && seen.insert(norm_path(&p.to_string_lossy()))).collect()
