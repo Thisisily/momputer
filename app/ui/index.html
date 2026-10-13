@@ -45,6 +45,8 @@
       <div class="stage-tip" id="stage-tip" hidden></div>
     </section>
 
+    <section class="reader" id="reader" aria-label="Reading" hidden></section>
+
     <section class="note" aria-live="polite">
       <div class="screen" id="face" tabindex="0" role="button" aria-label="Mom. Click to boop her, drag to move the widget."></div>
       <div class="readout">
@@ -64,7 +66,7 @@
       <button class="tab" role="tab" data-tab="running" aria-selected="true">Running<span class="count num" id="count-running"></span></button>
       <button class="tab" role="tab" data-tab="upkeep" aria-selected="false">Upkeep</button>
       <button class="tab" role="tab" data-tab="rooms" aria-selected="false">Rooms</button>
-      <button class="tab" role="tab" data-tab="rules" aria-selected="false">House rules</button>
+      <button class="tab" role="tab" data-tab="rules" aria-selected="false">House rules<span class="count num" id="count-rules"></span></button>
     </nav>
 
     <main class="page" id="page" role="tabpanel"></main>

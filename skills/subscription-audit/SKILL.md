@@ -3,6 +3,8 @@ name: subscription-audit
 description: Finds what a person pays for again and again and what it costs a year, read-only, from receipts and renewal notices in Gmail (through a Gmail connector or MCP server, or browser automation) and from bank or card statement CSV files they export. Detects recurring charges, price rises, two plans for the same thing, free trials about to start charging and yearly renewals coming up, and builds a private HTML report with monthly and yearly totals, a category chart, a renewal calendar, each subscription's amount history and a plan the user ticks (cancel, draft a cancellation e-mail, downgrade, switch to yearly, check it's still used). Use when the user asks to audit, find, list or cut their subscriptions or recurring payments, asks what they pay for every month, what renews soon, or which free trials are about to charge. Never cancels, pays, logs in or types card details; the user does the cancelling. Not for budgeting or tax, one-off spending, disputing a charge, or anything that needs online-banking access.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Needs at least one source. Statement CSV files the user exports, or a Gmail connector, MCP server or browser tool signed in to Gmail, or both. Python 3.8+ (standard library only) reads the statements and builds the report.
+metadata:
+  version: "1.0.0"
 ---
 
 # Subscription audit

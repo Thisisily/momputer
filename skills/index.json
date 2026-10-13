@@ -4,76 +4,132 @@
     "title": "Mom",
     "what": "Teaches your agent to clean up after itself.",
     "more": "Before it says it's done, it stops what it started, bins its own temp files and puts reports where they belong. It loads by itself; you don't have to ask.",
-    "prompts": ["Clean up after yourself", "What did you leave running?"]
+    "prompts": [
+      "Clean up after yourself",
+      "What did you leave running?"
+    ],
+    "version": "1.0.0",
+    "hash": "c46ad0b2a65097c9"
   },
   {
     "name": "tidy-folders",
     "title": "Tidy folders",
     "what": "Puts loose papers, old installers and stray games where they belong.",
     "more": "It looks first, shows one page of what it found, and moves only what you tick. Every move is logged and can be undone.",
-    "prompts": ["Tidy up my Downloads", "Where are my tax papers?", "Are all my games in the Games folder?"]
+    "prompts": [
+      "Tidy up my Downloads",
+      "Where are my tax papers?",
+      "Are all my games in the Games folder?"
+    ],
+    "version": "1.0.0",
+    "hash": "dd5bdc4dc56f9d70"
   },
   {
     "name": "desktop-icons",
     "title": "Desktop icons",
     "what": "Clears dead shortcuts, duplicates and loose files off your desktop.",
     "more": "It reads shortcuts without ever running one. Shortcuts go to the Recycle Bin, files move into folders, and there's an undo.",
-    "prompts": ["Clean up my desktop", "Which of my desktop shortcuts are broken?"]
+    "prompts": [
+      "Clean up my desktop",
+      "Which of my desktop shortcuts are broken?"
+    ],
+    "version": "1.0.0",
+    "hash": "5d3df131949652d3"
   },
   {
     "name": "rename-documents",
     "title": "Rename documents",
     "what": "Gives scans and downloads names you can find later.",
     "more": "scan0001.pdf becomes 2024-03-14 Lanternfall invoice 1182.pdf. You see old and new side by side and tick the ones you want; there's an undo.",
-    "prompts": ["Rename my scans so I can find them", "Give the PDFs in Downloads proper names"]
+    "prompts": [
+      "Rename my scans so I can find them",
+      "Give the PDFs in Downloads proper names"
+    ],
+    "version": "1.0.0",
+    "hash": "83c94499694e8fb7"
   },
   {
     "name": "disk-space-report",
     "title": "Disk space report",
     "what": "Shows where your disk space went and the safe way to get it back.",
     "more": "A page with what fills each drive and what each part is. It deletes nothing itself.",
-    "prompts": ["Where did my disk space go?", "Why is C: full?"]
+    "prompts": [
+      "Where did my disk space go?",
+      "Why is C: full?"
+    ],
+    "version": "1.0.0",
+    "hash": "f62ab068137dff87"
   },
   {
     "name": "backup-checkup",
     "title": "Backup checkup",
     "what": "Tells you what you'd lose if this disk died today.",
     "more": "Which folders and code have a second copy somewhere, and which don't. It only looks.",
-    "prompts": ["Are my files backed up?", "What would I lose if this disk died?"]
+    "prompts": [
+      "Are my files backed up?",
+      "What would I lose if this disk died?"
+    ],
+    "version": "1.0.0",
+    "hash": "d2a09486c316e4a7"
   },
   {
     "name": "inbox-cleanup",
     "title": "Inbox cleanup",
     "what": "Reviews two months of Gmail and shows what to unsubscribe from.",
     "more": "Who fills your inbox, what you never open, likely phishing, and a plan to declutter. It reads only; nothing is deleted or sent.",
-    "prompts": ["Clean up my Gmail", "What should I unsubscribe from?"]
+    "prompts": [
+      "Clean up my Gmail",
+      "What should I unsubscribe from?"
+    ],
+    "version": "1.0.0",
+    "hash": "2bb9456b6980556b"
   },
   {
     "name": "calendar-fixer",
     "title": "Calendar fixer",
     "what": "Finds double bookings, days with no breaks and stale recurring meetings.",
     "more": "It reviews the next four weeks of Google Calendar and fixes only what you tick.",
-    "prompts": ["Fix my calendar", "Where am I double booked?"]
+    "prompts": [
+      "Fix my calendar",
+      "Where am I double booked?"
+    ],
+    "version": "1.0.0",
+    "hash": "05893163902bc17b"
   },
   {
     "name": "drive-audit",
     "title": "Drive audit",
     "what": "Shows what you share with anyone on Google Drive, and what fills it.",
     "more": "Public links, the biggest files, duplicates, and files nobody touched in a year. It only looks.",
-    "prompts": ["Audit my Google Drive", "What am I sharing publicly?"]
+    "prompts": [
+      "Audit my Google Drive",
+      "What am I sharing publicly?"
+    ],
+    "version": "1.0.0",
+    "hash": "1300e4e5f91afc83"
   },
   {
     "name": "subscription-audit",
     "title": "Subscription audit",
     "what": "Finds what you pay for every month and what it costs a year.",
     "more": "From Gmail receipts and bank statements you export: price rises, things paid twice, trials about to charge. It never cancels or pays; you do the cancelling.",
-    "prompts": ["What am I subscribed to?", "Which free trials are about to charge me?"]
+    "prompts": [
+      "What am I subscribed to?",
+      "Which free trials are about to charge me?"
+    ],
+    "version": "1.0.0",
+    "hash": "5a7aa6ae5dccd0aa"
   },
   {
     "name": "bookmark-cleanup",
     "title": "Bookmark cleanup",
     "what": "Finds duplicate, dead and never-opened bookmarks.",
     "more": "It reads a copy of your bookmarks and writes a tidy file for you to import. Your browser's own files are never touched.",
-    "prompts": ["Clean up my bookmarks", "Which of my bookmarks are dead?"]
+    "prompts": [
+      "Clean up my bookmarks",
+      "Which of my bookmarks are dead?"
+    ],
+    "version": "1.0.0",
+    "hash": "fcb10555c93b6673"
   }
 ]

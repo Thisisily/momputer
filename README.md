@@ -96,7 +96,8 @@ Run from a folder of your own like this, it all works except the clean-ups that 
 - **The `mom` command**: `mom leftovers`, `mom stop mine`, `mom trash`, `mom pc` and more, with `--json` for scripts. [Every command](docs/in-detail.md#the-mom-command).
 - **Hooks**: she checks in before an agent says it's done, and asks it to stop what it started. [How](docs/in-detail.md#give-every-agent-a-mom).
 - **Skills**: eleven of them. Tidy your folders, desktop, inbox, calendar, bookmarks and subscriptions, in Claude Code or Codex. They work without momputer. [All of them](skills).
-  In Claude Code: `/plugin install momputer-skills --marketplace Thisisily/momputer`. The widget lists them, with what to say, under House rules > Skills.
+  In Claude Code: `/plugin install momputer-skills --marketplace Thisisily/momputer`. The widget lists them, with what to say, under House rules > Skills, and tells you when your agent's copy is behind.
+- **Agent health**: every MCP server, hook and setting your agents have, checked without starting anything. Tap one to read its file in BIG MODE, with keys blanked. [How](docs/in-detail.md#agent-health).
 
 ## What mom will never do
 

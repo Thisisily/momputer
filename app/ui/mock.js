@@ -566,7 +566,7 @@
       hooks: { enabled: true, nagProcesses: true, nagClutter: true, shareRules: true, stopOnSessionEnd: false, minAgeSecs: 5 },
       tidy: { reportsFolder: "Documents", minFamily: 3, screenshotPile: 10 },
       trash: { tempMinAgeDays: 7, agentScratchDays: 67, archiveDir: null, conversationsAfterDays: 67, keep: [] },
-      ui: { alwaysOnTop: false, notifications: true, notifyLeftovers: true, notifyMeltdown: true, notifyCleanups: true, notifyAfterMinutes: 10, notifyEveryMinutes: 30, scanIntervalSecs: 3, cpuAlertPercent: 25, checkUpdates: true },
+      ui: { alwaysOnTop: false, notifications: true, notifyLeftovers: true, notifyMeltdown: true, notifyCleanups: true, notifySkills: true, notifyAfterMinutes: 10, notifyEveryMinutes: 30, scanIntervalSecs: 3, cpuAlertPercent: 25, checkUpdates: true },
       protect: [],
       kept: [],
     },
@@ -575,10 +575,88 @@
     configPath: "C:\\Users\\me\\.momputer\\config.toml",
   };
 
+  // How the agents are set up: made-up servers, hooks and files, with a few things worth a look.
+  const askAgent = (text) => ({ label: "Copy for your agent", text });
+  const agentSetups = [
+    {
+      id: "claude", name: "Claude Code", problems: 3,
+      settings: [
+        { title: "Runs everything without asking", detail: "permissions.defaultMode is bypassPermissions: commands, edits and downloads all go ahead.", level: "warn", fix: null, doc: "d-set" },
+        { title: "Model", detail: "claude-opus-5-5", level: "ok", fix: null, doc: "d-set" },
+        { title: "Holds a key in plain text", detail: "In settings.json, under env. Anything running as you can read it.", level: "note", fix: null, doc: "d-set" },
+        { title: "Plugins", detail: "4, 3 switched on.", level: "ok", fix: null, doc: "d-set" },
+      ],
+      servers: [
+        { name: "notes", kind: "program", what: "node C:\\Users\\me\\tools\\notes-server.js", from: "your settings", level: "ok", problem: null, fix: null, doc: "d-mcp" },
+        { name: "copperline", kind: "web", what: "https://mcp.copperline.example/v1", from: "your settings", level: "ok", problem: null, fix: null, doc: "d-mcp" },
+        { name: "old-search", kind: "program", what: "search-server.exe --index docs", from: "your settings", level: "warn", problem: "It starts search-server.exe, and that file isn't there any more.", fix: askAgent("My Claude Code MCP server `old-search` (set up in `C:\\Users\\me\\.claude.json`) may not start. It starts `search-server.exe`, and that file isn't there any more. Find out whether it still works, and either fix it or tell me how to take the server out. Show me any change before you make it."), doc: "d-mcp" },
+        { name: "atlas", kind: "web", what: "https://mcp.atlas.example/mcp", from: "plugin atlas", level: "warn", problem: "It's waiting for you to sign in. Type /mcp in Claude Code and pick it.", fix: { label: "Copy /mcp", text: "/mcp" }, doc: "d-atlas" },
+        { name: "shop", kind: "program", what: "nimbus-shop-mcp --token •••", from: "project storefront", level: "note", problem: "Mom can't find nimbus-shop-mcp on this PC's PATH. If it works in your agent, that's fine.", fix: null, doc: "d-mcp" },
+        { name: "lanternfall", kind: "web", what: "https://mcp.lanternfall.example/sse", from: "your settings", level: "off", problem: "Switched off.", fix: null, doc: "d-mcp" },
+      ],
+      hooks: [
+        { event: "Stop", matcher: "", what: "mom.exe hook claude stop", from: "your settings", mine: true, count: 1, level: "ok", problem: null, fix: null, doc: "d-set" },
+        { event: "SessionStart", matcher: "", what: "mom.exe hook claude session-start", from: "your settings", mine: true, count: 1, level: "ok", problem: null, fix: null, doc: "d-set" },
+        { event: "PostToolUse", matcher: "Bash", what: "bash hooks/guard.sh hooks/remind.py", from: "plugin guard", mine: false, count: 7, level: "ok", problem: null, fix: null, doc: "d-guard" },
+        { event: "PreToolUse", matcher: "Edit|Write", what: "node scripts/lint.js", from: "plugin atlas", mine: false, count: 1, level: "ok", problem: null, fix: null, doc: "d-atlas-hooks" },
+      ],
+      skills: [
+        { name: "tidy-folders", what: "Surveys a Windows PC's personal folders read-only", from: "plugin momputer-skills", doc: "d-skill-tidy" },
+        { name: "inbox-cleanup", what: "Reviews the last two months of Gmail", from: "plugin momputer-skills", doc: "d-skill-inbox" },
+        { name: "atlas-maps", what: "Draws maps of a codebase", from: "plugin atlas", doc: "d-skill-maps" },
+        { name: "release-notes", what: "Writes release notes from the commits since the last tag", from: "yours", doc: "d-skill-notes" },
+      ],
+      docs: [
+        { id: "d-set", title: "settings.json", kind: "json", path: "C:\\Users\\me\\.claude\\settings.json", bytes: 2140 },
+        { id: "d-memory", title: "CLAUDE.md", kind: "markdown", path: "C:\\Users\\me\\.claude\\CLAUDE.md", bytes: 3120 },
+        { id: "d-mcp", title: "MCP servers", kind: "json", path: "C:\\Users\\me\\.claude.json", bytes: 48200 },
+        { id: "d-atlas", title: "atlas: MCP servers", kind: "json", path: "C:\\Users\\me\\.claude\\plugins\\cache\\shop\\atlas\\1.2.0\\.mcp.json", bytes: 180 },
+        { id: "d-atlas-hooks", title: "atlas: hooks", kind: "json", path: "C:\\Users\\me\\.claude\\plugins\\cache\\shop\\atlas\\1.2.0\\hooks\\hooks.json", bytes: 420 },
+        { id: "d-guard", title: "guard: hooks", kind: "json", path: "C:\\Users\\me\\.claude\\plugins\\cache\\shop\\guard\\2.0.1\\hooks\\hooks.json", bytes: 2400 },
+        { id: "d-skill-tidy", title: "tidy-folders", kind: "markdown", path: "C:\\Users\\me\\.claude\\plugins\\cache\\momputer\\momputer-skills\\6dd3d270c6cd\\tidy-folders\\SKILL.md", bytes: 9100 },
+        { id: "d-skill-inbox", title: "inbox-cleanup", kind: "markdown", path: "C:\\Users\\me\\.claude\\plugins\\cache\\momputer\\momputer-skills\\6dd3d270c6cd\\inbox-cleanup\\SKILL.md", bytes: 8700 },
+        { id: "d-skill-maps", title: "atlas-maps", kind: "markdown", path: "C:\\Users\\me\\.claude\\plugins\\cache\\shop\\atlas\\1.2.0\\skills\\atlas-maps\\SKILL.md", bytes: 2100 },
+        { id: "d-skill-notes", title: "release-notes", kind: "markdown", path: "C:\\Users\\me\\.claude\\skills\\release-notes\\SKILL.md", bytes: 1900 },
+        { id: "d-agent", title: "reviewer (subagent)", kind: "markdown", path: "C:\\Users\\me\\.claude\\agents\\reviewer.md", bytes: 900 },
+      ],
+    },
+    {
+      id: "codex", name: "Codex", problems: 0,
+      settings: [
+        { title: "Asks, and keeps commands in a sandbox", detail: "The usual way.", level: "ok", fix: null, doc: "d-codex" },
+        { title: "Model", detail: "gpt-5.5", level: "ok", fix: null, doc: "d-codex" },
+        { title: "Trusted folders", detail: "6, where it works without asking as much.", level: "ok", fix: null, doc: "d-codex" },
+      ],
+      servers: [{ name: "docs", kind: "web", what: "https://docs.copperline.example/mcp", from: "your settings", level: "ok", problem: null, fix: null, doc: "d-codex" }],
+      hooks: [{ event: "Stop", matcher: "", what: "mom.exe hook codex stop", from: "your settings", mine: true, count: 1, level: "ok", problem: null, fix: null, doc: "d-codex-hooks" }],
+      skills: [{ name: "find-skills", what: "Helps find and install agent skills", from: "shared with other agents", doc: "d-skill-find" }],
+      docs: [
+        { id: "d-codex", title: "config.toml", kind: "toml", path: "C:\\Users\\me\\.codex\\config.toml", bytes: 1800 },
+        { id: "d-codex-hooks", title: "hooks.json", kind: "json", path: "C:\\Users\\me\\.codex\\hooks.json", bytes: 600 },
+        { id: "d-skill-find", title: "find-skills", kind: "markdown", path: "C:\\Users\\me\\.agents\\skills\\find-skills\\SKILL.md", bytes: 1500 },
+      ],
+    },
+    {
+      id: "cursor", name: "Cursor", problems: 0, settings: [], hooks: [], skills: [],
+      servers: [{ name: "motion", kind: "program", what: "npx -y motion-mcp", from: "your settings", level: "ok", problem: null, fix: null, doc: "d-cursor" }],
+      docs: [{ id: "d-cursor", title: "mcp.json", kind: "json", path: "C:\\Users\\me\\.cursor\\mcp.json", bytes: 300 }],
+    },
+  ];
+  const agentDocs = {
+    markdown: {
+      text: "---\nname: tidy-folders\ndescription: Surveys a Windows PC's personal folders read-only, finds papers lying loose, games outside a Games folder, duplicates and old installers, and builds a tidy plan page the user ticks item by item. Use when the user asks to tidy, organize or declutter their folders.\nlicense: Apache-2.0 (complete terms in LICENSE.txt)\ncompatibility: Windows 10 or 11 with Python 3.8+ (standard library only).\nmetadata:\n  version: \"1.0.0\"\n---\n\n# Tidy folders\n\nFind what's out of place in the user's folders, show it on one page they can tick through, then move only what they approved, with an undo.\n\n## Hard rules\n\n1. **Look first.** The survey reads; it never moves, renames or deletes.\n2. **Nothing moves without a tick.** The plan page is the only way in: what isn't ticked stays where it is.\n3. **Deletions go to the Recycle Bin.** Never `del`, never `rm`.\n4. Every step is logged, and `revert.ps1` puts it back.\n\n## The flow\n\n| Step | What happens | Changes anything? |\n| --- | --- | --- |\n| Survey | `python scripts/survey.py` lists what's out of place | No |\n| Plan | One page, grouped, with charts | No |\n| Apply | Moves what was ticked, writes the log | Yes |\n\n```\npython scripts/survey.py --out plan.json\npython scripts/safe_apply.py plan.json --approved approved.json\n```\n\n> If anything looks like keys, wallets or passports, say so and leave it alone.\n\nMore in [the reference](references/rules.md).\n",
+    },
+    json: { text: '{\n  "mcpServers": {\n    "notes": {\n      "type": "stdio",\n      "command": "node",\n      "args": ["C:\\\\Users\\\\me\\\\tools\\\\notes-server.js"],\n      "env": {\n        "NOTES_TOKEN": "•••"\n      }\n    },\n    "copperline": {\n      "type": "http",\n      "url": "https://mcp.copperline.example/v1",\n      "headers": {\n        "Authorization": "•••"\n      }\n    }\n  }\n}', hidden: 2 },
+    toml: { text: 'model = "gpt-5.5"\napproval_policy = "on-request"\nsandbox_mode = "workspace-write"\n\n[mcp_servers.docs]\nurl = "https://docs.copperline.example/mcp"\n\n[mcp_servers.docs.env_http_headers]\n"X-Api-Key" = "•••"\n', hidden: 1 },
+    "d-memory": { text: "# How I like things done\n\n- Reports go in `Documents/`.\n- Ask before installing anything.\n- Stop what you start.\n" },
+  };
+
   const rules = {
-    skills: [{"name": "mom", "title": "Mom", "what": "Teaches your agent to clean up after itself.", "more": "Before it says it's done, it stops what it started, bins its own temp files and puts reports where they belong. It loads by itself; you don't have to ask.", "prompts": ["Clean up after yourself", "What did you leave running?"], "has": ["Claude Code", "Codex"], "page": "https://github.com/Thisisily/momputer/tree/main/skills/mom"}, {"name": "tidy-folders", "title": "Tidy folders", "what": "Puts loose papers, old installers and stray games where they belong.", "more": "It looks first, shows one page of what it found, and moves only what you tick. Every move is logged and can be undone.", "prompts": ["Tidy up my Downloads", "Where are my tax papers?", "Are all my games in the Games folder?"], "has": ["Claude Code"], "page": "https://github.com/Thisisily/momputer/tree/main/skills/tidy-folders"}, {"name": "desktop-icons", "title": "Desktop icons", "what": "Clears dead shortcuts, duplicates and loose files off your desktop.", "more": "It reads shortcuts without ever running one. Shortcuts go to the Recycle Bin, files move into folders, and there's an undo.", "prompts": ["Clean up my desktop", "Which of my desktop shortcuts are broken?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/desktop-icons"}, {"name": "rename-documents", "title": "Rename documents", "what": "Gives scans and downloads names you can find later.", "more": "scan0001.pdf becomes 2024-03-14 Lanternfall invoice 1182.pdf. You see old and new side by side and tick the ones you want; there's an undo.", "prompts": ["Rename my scans so I can find them", "Give the PDFs in Downloads proper names"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/rename-documents"}, {"name": "disk-space-report", "title": "Disk space report", "what": "Shows where your disk space went and the safe way to get it back.", "more": "A page with what fills each drive and what each part is. It deletes nothing itself.", "prompts": ["Where did my disk space go?", "Why is C: full?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/disk-space-report"}, {"name": "backup-checkup", "title": "Backup checkup", "what": "Tells you what you'd lose if this disk died today.", "more": "Which folders and code have a second copy somewhere, and which don't. It only looks.", "prompts": ["Are my files backed up?", "What would I lose if this disk died?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/backup-checkup"}, {"name": "inbox-cleanup", "title": "Inbox cleanup", "what": "Reviews two months of Gmail and shows what to unsubscribe from.", "more": "Who fills your inbox, what you never open, likely phishing, and a plan to declutter. It reads only; nothing is deleted or sent.", "prompts": ["Clean up my Gmail", "What should I unsubscribe from?"], "has": ["Claude Code"], "page": "https://github.com/Thisisily/momputer/tree/main/skills/inbox-cleanup"}, {"name": "calendar-fixer", "title": "Calendar fixer", "what": "Finds double bookings, days with no breaks and stale recurring meetings.", "more": "It reviews the next four weeks of Google Calendar and fixes only what you tick.", "prompts": ["Fix my calendar", "Where am I double booked?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/calendar-fixer"}, {"name": "drive-audit", "title": "Drive audit", "what": "Shows what you share with anyone on Google Drive, and what fills it.", "more": "Public links, the biggest files, duplicates, and files nobody touched in a year. It only looks.", "prompts": ["Audit my Google Drive", "What am I sharing publicly?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/drive-audit"}, {"name": "subscription-audit", "title": "Subscription audit", "what": "Finds what you pay for every month and what it costs a year.", "more": "From Gmail receipts and bank statements you export: price rises, things paid twice, trials about to charge. It never cancels or pays; you do the cancelling.", "prompts": ["What am I subscribed to?", "Which free trials are about to charge me?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/subscription-audit"}, {"name": "bookmark-cleanup", "title": "Bookmark cleanup", "what": "Finds duplicate, dead and never-opened bookmarks.", "more": "It reads a copy of your bookmarks and writes a tidy file for you to import. Your browser's own files are never touched.", "prompts": ["Clean up my bookmarks", "Which of my bookmarks are dead?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/bookmark-cleanup"}],
+    skills: [{"name": "mom", "title": "Mom", "what": "Teaches your agent to clean up after itself.", "more": "Before it says it's done, it stops what it started, bins its own temp files and puts reports where they belong. It loads by itself; you don't have to ask.", "prompts": ["Clean up after yourself", "What did you leave running?"], "has": ["Claude Code", "Codex"], "page": "https://github.com/Thisisily/momputer/tree/main/skills/mom", "version": "1.0.0", "copies": [{"who": "Claude Code", "how": "plugin", "version": "1.0.0", "path": "C:\\Users\\me\\.claude\\plugins\\cache\\momputer\\momputer-skills\\6dd3d270c6cd\\mom", "behind": false, "update": null}, {"who": "Codex", "how": "folder", "version": "", "path": "C:\\Users\\me\\.agents\\skills\\mom", "behind": true, "update": null}], "behind": true}, {"name": "tidy-folders", "title": "Tidy folders", "what": "Puts loose papers, old installers and stray games where they belong.", "more": "It looks first, shows one page of what it found, and moves only what you tick. Every move is logged and can be undone.", "prompts": ["Tidy up my Downloads", "Where are my tax papers?", "Are all my games in the Games folder?"], "has": ["Claude Code"], "page": "https://github.com/Thisisily/momputer/tree/main/skills/tidy-folders", "version": "1.0.0", "copies": [{"who": "Claude Code", "how": "plugin", "version": "0.9.0", "path": "C:\\Users\\me\\.claude\\plugins\\cache\\momputer\\momputer-skills\\6dd3d270c6cd\\tidy-folders", "behind": true, "update": "claude plugin update momputer-skills@momputer"}], "behind": true}, {"name": "desktop-icons", "title": "Desktop icons", "what": "Clears dead shortcuts, duplicates and loose files off your desktop.", "more": "It reads shortcuts without ever running one. Shortcuts go to the Recycle Bin, files move into folders, and there's an undo.", "prompts": ["Clean up my desktop", "Which of my desktop shortcuts are broken?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/desktop-icons", "version": "1.0.0", "copies": [], "behind": false}, {"name": "rename-documents", "title": "Rename documents", "what": "Gives scans and downloads names you can find later.", "more": "scan0001.pdf becomes 2024-03-14 Lanternfall invoice 1182.pdf. You see old and new side by side and tick the ones you want; there's an undo.", "prompts": ["Rename my scans so I can find them", "Give the PDFs in Downloads proper names"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/rename-documents", "version": "1.0.0", "copies": [], "behind": false}, {"name": "disk-space-report", "title": "Disk space report", "what": "Shows where your disk space went and the safe way to get it back.", "more": "A page with what fills each drive and what each part is. It deletes nothing itself.", "prompts": ["Where did my disk space go?", "Why is C: full?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/disk-space-report", "version": "1.0.0", "copies": [], "behind": false}, {"name": "backup-checkup", "title": "Backup checkup", "what": "Tells you what you'd lose if this disk died today.", "more": "Which folders and code have a second copy somewhere, and which don't. It only looks.", "prompts": ["Are my files backed up?", "What would I lose if this disk died?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/backup-checkup", "version": "1.0.0", "copies": [], "behind": false}, {"name": "inbox-cleanup", "title": "Inbox cleanup", "what": "Reviews two months of Gmail and shows what to unsubscribe from.", "more": "Who fills your inbox, what you never open, likely phishing, and a plan to declutter. It reads only; nothing is deleted or sent.", "prompts": ["Clean up my Gmail", "What should I unsubscribe from?"], "has": ["Claude Code"], "page": "https://github.com/Thisisily/momputer/tree/main/skills/inbox-cleanup", "version": "1.0.0", "copies": [{"who": "Claude Code", "how": "plugin", "version": "1.0.0", "path": "C:\\Users\\me\\.claude\\plugins\\cache\\momputer\\momputer-skills\\6dd3d270c6cd\\inbox-cleanup", "behind": false, "update": null}], "behind": false}, {"name": "calendar-fixer", "title": "Calendar fixer", "what": "Finds double bookings, days with no breaks and stale recurring meetings.", "more": "It reviews the next four weeks of Google Calendar and fixes only what you tick.", "prompts": ["Fix my calendar", "Where am I double booked?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/calendar-fixer", "version": "1.0.0", "copies": [], "behind": false}, {"name": "drive-audit", "title": "Drive audit", "what": "Shows what you share with anyone on Google Drive, and what fills it.", "more": "Public links, the biggest files, duplicates, and files nobody touched in a year. It only looks.", "prompts": ["Audit my Google Drive", "What am I sharing publicly?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/drive-audit", "version": "1.0.0", "copies": [], "behind": false}, {"name": "subscription-audit", "title": "Subscription audit", "what": "Finds what you pay for every month and what it costs a year.", "more": "From Gmail receipts and bank statements you export: price rises, things paid twice, trials about to charge. It never cancels or pays; you do the cancelling.", "prompts": ["What am I subscribed to?", "Which free trials are about to charge me?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/subscription-audit", "version": "1.0.0", "copies": [], "behind": false}, {"name": "bookmark-cleanup", "title": "Bookmark cleanup", "what": "Finds duplicate, dead and never-opened bookmarks.", "more": "It reads a copy of your bookmarks and writes a tidy file for you to import. Your browser's own files are never touched.", "prompts": ["Clean up my bookmarks", "Which of my bookmarks are dead?"], "has": [], "page": "https://github.com/Thisisily/momputer/tree/main/skills/bookmark-cleanup", "version": "1.0.0", "copies": [], "behind": false}],
     skillsInstall: "/plugin install momputer-skills --marketplace Thisisily/momputer",
     skillsPage: "https://github.com/Thisisily/momputer/tree/main/skills",
+    skillsUpdate: ["claude plugin update momputer-skills@momputer"],
+    skillsCatchUp: "These Agent Skills on my PC are older copies. For each one, download the newest folder from the GitHub page next to it and replace the old folder with it, keeping the folder's name. Don't change anything else, and tell me what you replaced.\n\n- mom in `C:\\Users\\me\\.agents\\skills\\mom` (no version; the newest is 1.0.0): https://github.com/Thisisily/momputer/tree/main/skills/mom\n",
     text: "# Mom's house rules\n\nYou share this computer with a human and a lot of other agents. Clean up after yourself.\n\n1. **Stop what you start.** Before you finish, stop every dev server, watcher, headless browser, `tail -f`, container and VM you started, unless the user asked you to keep it running. If you leave something running on purpose, say what it is, where it lives (URL or port) and how to stop it.\n2. **Don't start a second copy.** Check whether it's already running (the port is taken, `mom ps`) before you start a server again.\n3. **Temp files are temporary.** Keep scratch work in one temp folder and delete it when you're done. Delete screenshots, renders and intermediate files once they've done their job (the video is uploaded and backed up, the bug is fixed).\n4. **Reports go in `Documents/`.** Put reports, plans, summaries and logs in a `Documents/` folder in the project, with names that say what they are. Never scatter dated folders or report files across the project root.\n5. **One thing, one folder.** Keep related work together in one clearly named folder. No sibling sprawl like `thing-v2`, `thing-v3`, `thing-trial`, `thing-final`: version inside the folder, or replace the old one.\n6. **Leave no empty folders.** If you move or delete files, remove the folders you emptied.\n7. **Label everything.** Names say what something is, not just when it was made.\n8. **If cleanup is blocked, say so.** Tell the user exactly what's left and give them a one-line command to finish it.\n",
     customized: false,
     targets: [
@@ -626,6 +704,14 @@
     forget_stopped: async ({ id }) => ((stopped = stopped.filter((s) => s.id !== id)), null),
     stop_leftovers: async () => (await wait(700), stop(snapshot.groups.filter((x) => x.status === "left-behind" || x.status === "orphaned").map((x) => x.id))),
     keep_group: () => null,
+    get_agents: async () => (await wait(500), JSON.parse(JSON.stringify(agentSetups))),
+    read_doc: async ({ id }) => {
+      await wait(250);
+      const doc = agentSetups.flatMap((a) => a.docs).find((d) => d.id === id);
+      if (!doc) throw "That file isn't one of your agents' any more. Look again.";
+      const made = agentDocs[id] || agentDocs[doc.kind];
+      return { id, title: doc.title, kind: doc.kind, path: doc.path, text: made.text, hidden: made.hidden || 0, cut: false };
+    },
     get_trash: () => ({ spots: [], busy: false }),
     measure_trash: async () => {
       const list = [];
@@ -878,7 +964,16 @@
     apply_tidy: async () => (await wait(500), { moved: 18, recycled: 40, removed: 2, failed: [], journal: null, message: "Put away 18 things, recycled 40. Changed your mind? Undo is right there." }),
     undo_tidy: async () => ({ restored: 18, failed: [], message: "Put back 18 things, exactly as they were." }),
     chore_prompt: () => "Mom here. Your room got an F...",
-    get_rules: () => rules,
+    // "?late" in the address shows skills that are behind; otherwise every copy is the newest.
+    get_rules: () => {
+      if (location.search.includes("late")) return rules;
+      const fresh = JSON.parse(JSON.stringify(rules));
+      for (const s of fresh.skills) {
+        s.behind = false;
+        for (const c of s.copies) Object.assign(c, { behind: false, version: s.version, update: null });
+      }
+      return { ...fresh, skillsUpdate: [], skillsCatchUp: null };
+    },
     save_rules: () => "Saved. Mom will hold everyone to it.",
     reset_rules: () => "Back to mom's original rules.",
     teach_rules: ({ agent, on }) => {

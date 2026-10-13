@@ -85,6 +85,12 @@
     showAllStartup: false,
     upkeepTab: "storage", // storage | apps | windows | files
     rulesTab: "rules", // House rules' two views: rules | skills
+    agents: null, // how each agent is set up (get_agents); null until mom has looked
+    agentsLoading: false,
+    agentsAt: 0,
+    showAllAgent: new Set(), // "<agent>:<list>": the sheet's lists shown in full
+    reader: null, // the file open in BIG MODE's reader: { id, title, doc, error }
+    readerWasSmall: false, // BIG MODE was switched on just to read, so closing goes back
     listView: loadView(), // how a clean-up's lists are shown: sort, grouped, filter
     groupOpen: {}, // "<spot>:<list>:<group>" -> open or shut, where the user changed it
     doesOpen: false, // the full text under "What the button does"
@@ -548,6 +554,7 @@
   /** Opens one of Running's views, loading what it shows if it's stale. */
   function openRunningTab(tab) {
     state.runningTab = tab;
+    if (tab === "agents" && Date.now() - state.agentsAt > 60000) loadAgents();
     if (tab === "speed" && Date.now() - state.speedAt > 10000) loadSpeed();
     if (tab === "programs") {
       state.progOrder = null;
@@ -592,6 +599,7 @@
       return `<button class="secondary" data-act="copy-fix" data-text="${esc(f.value)}" data-hint="${esc(f.hint || "Copied.")}">${ICON.copy}${esc(f.label)}</button>`;
     if (f.kind === "open") return `<button class="secondary" data-act="open-uri" data-url="${esc(f.value)}">${esc(f.label)}${ICON.out}</button>`;
     if (f.kind === "tab") return `<button class="secondary" data-act="go-tab" data-to="${esc(f.value)}">${esc(f.label)}</button>`;
+    if (f.kind === "read") return `<button class="secondary" data-act="open-doc" data-id="${esc(f.value)}">${esc(f.label)}</button>`;
     if (f.kind === "launch") return `<button class="secondary" data-act="open-program" data-url="${esc(f.value)}">${esc(f.label)}${ICON.out}</button>`;
     if (f.kind === "regfix") {
       const armed = state.regConfirm === f.value;
@@ -1122,6 +1130,7 @@ in ${x.cwd}`)}">
         : "";
       html += section("awake", "Agents awake", `${s.sessions.length + threads.length}`, threadRows + lines + helperToggle);
     }
+    html += agentHealth();
 
     if (yours.length) html += section("yours", "Started by you", total(yours), yours.map((g) => row(g)).join(""));
     if (kept.length) html += section("kept", "Kept on purpose", total(kept), kept.map((g) => row(g)).join(""));
@@ -1171,6 +1180,168 @@ in ${x.cwd}`)}">
     }
     if (machines) html += section("machines", "Containers and VMs", "", machines);
     return html;
+  }
+
+  // ------------------------------------------------------------ how the agents are set up
+
+  async function loadAgents() {
+    if (state.agentsLoading) return;
+    state.agentsLoading = true;
+    try {
+      state.agents = await invoke("get_agents");
+    } catch (e) {
+      console.warn("couldn't look at the agents' set-up", e);
+      state.agents = state.agents || [];
+    }
+    state.agentsAt = Date.now();
+    state.agentsLoading = false;
+    if (state.tab === "running" && state.runningTab === "agents") render();
+    if (state.sheet && state.sheet.kind === "agent") renderSheet();
+  }
+
+  /** In the Agents tab: a row an agent, with a light for whether its set-up holds together. */
+  function agentHealth() {
+    const list = state.agents;
+    if (!list) return section("setup", "Agent health", "", `<p class="empty">Looking at their servers, hooks and settings…</p>`);
+    if (!list.length) return "";
+    const rows = list
+      .map((a) => {
+        const has = [a.servers.length && plural(a.servers.length, "MCP server"), a.hooks.length && plural(a.hooks.length, "hook"), a.skills.length && plural(a.skills.length, "skill")].filter(Boolean);
+        return `<div class="row spot-row" id="setup-${esc(a.id)}" role="button" tabindex="0" data-act="open-agent" data-id="${esc(a.id)}" data-led="${a.problems ? "red" : "green"}"
+            aria-label="${esc(`${a.name}: ${a.problems ? `${a.problems} to look at` : "all in order"}. Show details`)}">
+          <span class="row-name">${esc(a.name)}</span>
+          <div class="row-meta"><span class="why">${esc(has.join(" · ") || "Nothing set up yet")}</span></div>
+          <div class="row-nums num">${a.problems ? `<strong>${a.problems}</strong>` : ""}</div>
+          <div class="row-nums2 num">${a.problems ? "to look at" : "in order"}</div>
+          <div class="row-act">${ICON.chevron}</div>
+        </div>`;
+      })
+      .join("");
+    const worth = list.reduce((n, a) => n + a.problems, 0);
+    return section("setup", "Agent health", worth ? `${worth} to look at` : "", rows);
+  }
+
+  const SETUP_LED = { warn: "red", ok: "green" };
+
+  /** One agent's set-up: what's worth a look first, then its servers, hooks, settings, skills
+      and files. Every row opens the file behind it, to read. */
+  function renderAgentSheet(id) {
+    const a = (state.agents || []).find((x) => x.id === id);
+    const acts = `<div class="head-acts">
+        <button class="icon-btn${state.agentsLoading ? " spinning" : ""}" data-act="agents-refresh" title="${state.agentsLoading ? "Looking…" : "Look again"}" aria-label="Look again" ${state.agentsLoading ? "disabled" : ""}>${ICON.refresh}</button>
+        <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button></div>`;
+    if (!a) return `<div class="sheet-head"><h2 id="sheet-title">Gone</h2>${acts}</div><p class="empty">That agent has no set-up here any more.</p>`;
+    const said = (f) => (f && f.label === "Copy for your agent" ? "Copied. Paste it to your agent." : "Copied.");
+    // What's worth a look: a sentence each, and something to do.
+    const finding = (kind, title, x) => ({
+      id: `${a.id}:${kind}:${title}`,
+      title,
+      detail: x.problem || x.detail || "",
+      level: "warn",
+      fix: x.fix ? { kind: "copy", label: x.fix.label, value: x.fix.text, hint: said(x.fix) } : null,
+      more: x.doc ? [{ kind: "read", label: "Read the file", value: x.doc }] : [],
+    });
+    const worth = [
+      ...a.settings.filter((f) => f.level === "warn").map((f) => finding("set", f.title, f)),
+      ...a.servers.filter((s) => s.level === "warn").map((s) => finding("mcp", `MCP server ${s.name}`, s)),
+      ...a.hooks.filter((h) => h.level === "warn").map((h) => finding("hook", `Hook for ${h.event}`, h)),
+    ];
+    // Everything else: a row each, that opens its file.
+    const row = (key, led, name, sub, doc, extra = "") =>
+      `<div class="item moved${doc ? " doc-row" : ""}" id="as-${hash(`${a.id}:${key}`)}" ${doc ? `role="button" tabindex="0" data-act="open-doc" data-id="${esc(doc)}" data-title="${esc(name)}"` : ""}>
+        <span class="led ${led}"></span>
+        <span class="item-main"><span class="item-name">${esc(name)}${extra}</span>${sub ? `<span class="item-sub" title="${esc(sub)}">${esc(sub)}</span>` : ""}</span>
+        <span class="moved-acts">${doc ? `<span class="doc-open" aria-hidden="true">${ICON.chevron}</span>` : ""}</span></div>`;
+    const list = (key, title, rows, aside = "") => {
+      if (!rows.length) return "";
+      const k = `${a.id}:${key}`;
+      const all = state.showAllAgent.has(k);
+      const more = rows.length > 6 ? `<button class="quiet-toggle" data-act="toggle-agent-list" data-key="${esc(k)}">${all ? "Show fewer" : `Show all ${rows.length}`}</button>` : "";
+      return section(`as-${key}`, title, aside || String(rows.length), (all ? rows : rows.slice(0, 6)).join("") + more);
+    };
+    const badge = (text) => ` <span class="badge look">${esc(text)}</span>`;
+    const servers = a.servers.map((s, i) => row(`mcp${i}`, SETUP_LED[s.level] || "", s.name, [s.level === "ok" ? "" : s.problem, s.what, s.from].filter(Boolean).join(" · "), s.doc, s.level === "off" ? badge("off") : ""));
+    const hooks = a.hooks.map((h, i) =>
+      row(`hook${i}`, SETUP_LED[h.level] || "", h.matcher ? `${h.event} (${h.matcher})` : h.event, [h.level === "ok" ? "" : h.problem, h.what, h.mine ? "mom's check-in" : h.from, h.count > 1 ? `${h.count} times` : ""].filter(Boolean).join(" · "), h.doc)
+    );
+    const settings = a.settings.filter((f) => f.level !== "warn").map((f, i) => row(`set${i}`, SETUP_LED[f.level] || "", f.title, f.detail, f.doc));
+    const skills = a.skills.map((s, i) => row(`skill${i}`, "green", s.name, [s.what, s.from].filter(Boolean).join(" · "), s.doc));
+    const listed = new Set(a.skills.map((s) => s.doc));
+    const files = a.docs.filter((d) => !listed.has(d.id)).map((d, i) => row(`doc${i}`, "", d.title, d.path, d.id));
+    return `<div class="sheet-head">
+        <div><h2 id="sheet-title">${esc(a.name)}</h2>
+          <div class="pills"><span class="pill"><span class="led ${a.problems ? "red" : "green"}"></span>${a.problems ? `${a.problems} to look at` : "All in order"}</span>
+          <span class="pill">Mom only reads</span></div></div>${acts}</div>
+      <p class="sheet-what">How ${esc(a.name)} is set up on this PC. Tap a row to read the file behind it. Keys are never shown.</p>
+      ${worth.length ? section("as-worth", "Worth a look", String(worth.length), worth.map((w) => checkRow(w, "asw")).join("")) : ""}
+      ${list("settings", "Settings", settings)}
+      ${list("servers", "MCP servers", servers)}
+      ${list("hooks", "Hooks", hooks)}
+      ${list("skills", "Skills", skills)}
+      ${list("files", "Files", files)}`;
+  }
+
+  // ------------------------------------------------------------ the reader (BIG MODE)
+
+  /** Opens one of an agent's files to read, in BIG MODE: there's room for a page there. */
+  async function openDoc(id, title) {
+    state.reader = { id, title: title || "", doc: null, error: null };
+    if (!state.big) {
+      state.readerWasSmall = true;
+      await setBigMode(true);
+    }
+    renderReader();
+    try {
+      const doc = await invoke("read_doc", { id });
+      if (state.reader && state.reader.id === id) state.reader.doc = doc;
+    } catch (e) {
+      if (state.reader && state.reader.id === id) state.reader.error = String(e);
+    }
+    renderReader();
+  }
+
+  function closeReader() {
+    if (!state.reader) return;
+    state.reader = null;
+    renderReader();
+    if (state.readerWasSmall) {
+      state.readerWasSmall = false;
+      setBigMode(false);
+    }
+  }
+
+  function renderReader() {
+    const el = $("#reader");
+    const r = state.reader;
+    $(".app").classList.toggle("reading", !!r);
+    el.hidden = !r;
+    if (!r) {
+      el.innerHTML = "";
+      return;
+    }
+    const d = r.doc;
+    const notes = [];
+    if (d && d.hidden) notes.push(`${plural(d.hidden, "key")} blanked. Mom doesn't show keys.`);
+    if (d && d.cut) notes.push("The rest is longer than mom shows.");
+    const body = r.error
+      ? `<p class="empty">${esc(r.error)}</p>`
+      : !d
+        ? `<p class="empty">Opening…</p>`
+        : d.kind === "markdown"
+          ? `<article class="md reader-md">${markdown(d.text, true)}</article>`
+          : `<pre class="reader-code"><code>${esc(d.text)}</code></pre>`;
+    morph(
+      el,
+      `<header class="reader-head">
+        <div class="reader-title"><h2>${esc(d ? d.title : r.title || "Opening…")}</h2>${d ? `<span class="reader-path" title="${esc(d.path)}">${esc(d.path)}</span>` : ""}</div>
+        <div class="head-acts">
+          ${d ? `<button class="link-btn" data-act="reveal-path" data-path="${esc(d.path)}">${ICON.folder}Show folder</button>` : ""}
+          <button class="icon-btn" data-act="close-reader" title="Close" aria-label="Close the reader">${ICON.close}</button>
+        </div>
+      </header>
+      ${notes.length ? `<p class="reader-note"><span class="led green"></span>${esc(notes.join(" "))}</p>` : ""}
+      <div class="reader-body" id="reader-body" tabindex="0">${body}</div>`
+    );
   }
 
   // ------------------------------------------------------------ upkeep: the PC's health and its trash
@@ -1663,6 +1834,9 @@ in ${x.cwd}`)}">
       await openStage();
       say("BIG MODE. Look at you, with a whole desk.", 3600);
     } else {
+      state.reader = null;
+      state.readerWasSmall = false;
+      renderReader();
       if (stage) stage.close();
       stage = null;
       state.bigPart = null;
@@ -2634,11 +2808,41 @@ in ${x.cwd}`)}">
       .replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
   }
 
-  function markdown(src) {
+  /** `front`: the file may start with a block of facts between two --- lines (a skill does);
+      show it as a small table instead of as text. */
+  function markdown(src, front = false) {
     const out = [];
     let para = [];
     let list = null;
     let fence = null;
+    let table = null;
+    src = String(src).replace(/\r/g, "");
+    if (front && /^---\n/.test(src)) {
+      const end = src.indexOf("\n---", 3);
+      if (end > 0) {
+        // "key: value" lines; an indented line belongs to the key above it.
+        const facts = [];
+        const clean = (v) => v.trim().replace(/^(["'])(.*)\1$/, "$2");
+        const pair = /^([A-Za-z][\w-]*):\s*(.*)$/;
+        for (const line of src.slice(4, end).split("\n")) {
+          const m = line.match(pair);
+          const inner = line.trim().match(pair);
+          if (m) facts.push([m[1], clean(m[2])]);
+          else if (facts.length && line.trim()) facts[facts.length - 1][1] += `${facts[facts.length - 1][1] ? " · " : ""}${inner ? `${inner[1]} ${clean(inner[2])}` : line.trim()}`;
+        }
+        if (facts.length) out.push(`<dl class="md-front">${facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`);
+        src = src.slice(end + 4).replace(/^[^\n]*\n?/, "");
+      }
+    }
+    const cells = (line) => line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+    const flushTable = () => {
+      if (table) {
+        const [head, ...rows] = table.rows;
+        const tr = (r, tag) => `<tr>${r.map((c) => `<${tag}>${inline(c)}</${tag}>`).join("")}</tr>`;
+        out.push(`<div class="md-table"><table>${table.headed ? `<thead>${tr(head, "th")}</thead>` : ""}<tbody>${(table.headed ? rows : table.rows).map((r) => tr(r, "td")).join("")}</tbody></table></div>`);
+      }
+      table = null;
+    };
     const flushPara = () => {
       if (para.length) out.push(`<p>${inline(para.join(" "))}</p>`);
       para = [];
@@ -2653,8 +2857,9 @@ in ${x.cwd}`)}">
     const flush = () => {
       flushPara();
       flushList();
+      flushTable();
     };
-    for (const raw of String(src).replace(/\r/g, "").split("\n")) {
+    for (const raw of src.split("\n")) {
       if (fence) {
         if (/^\s*```/.test(raw)) {
           out.push(`<pre><code>${esc(fence.join("\n"))}</code></pre>`);
@@ -2669,6 +2874,13 @@ in ${x.cwd}`)}">
         fence = [];
       } else if (!line.trim()) {
         flush();
+      } else if (/^\s*\|.*\|\s*$/.test(line)) {
+        // A table: rows between bars, with a row of dashes under the heading.
+        flushPara();
+        flushList();
+        if (!table) table = { rows: [], headed: false };
+        if (/^[\s|:-]+$/.test(line) && line.includes("-")) table.headed = table.rows.length === 1;
+        else table.rows.push(cells(line));
       } else if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
         flush();
         const n = Math.min(6, m[1].length + 2);
@@ -2711,8 +2923,10 @@ in ${x.cwd}`)}">
   ];
 
   function rulesTabs() {
+    const late = state.rules ? (state.rules.skills || []).filter((s) => s.behind).length : 0;
+    const dot = (k) => (k === "skills" && late ? `<span class="count num">${late}</span>` : "");
     return `<div class="subtabs" role="tablist" aria-label="House rules">${RULES_TABS.map(
-      ([k, label]) => `<button class="subtab" role="tab" data-act="rules-tab" data-tab="${k}" aria-selected="${state.rulesTab === k}">${label}</button>`
+      ([k, label]) => `<button class="subtab" role="tab" data-act="rules-tab" data-tab="${k}" aria-selected="${state.rulesTab === k}">${label}${dot(k)}</button>`
     ).join("")}</div>`;
   }
 
@@ -2765,8 +2979,19 @@ in ${x.cwd}`)}">
   function renderSkills(r) {
     const skills = r.skills || [];
     const have = skills.filter((s) => (s.has || []).length).length;
+    const late = skills.filter((s) => s.behind).length;
+    // Behind: what to type to catch up, and what to hand an agent for the ones copied by hand.
+    const lines = r.skillsUpdate || [];
+    const catchUp = late
+      ? `<div class="lead is-late"><div class="lead-text"><p><span class="led red"></span>${late === 1 ? "A skill has" : `${late} skills have`} a newer version than the copy your agent has.</p></div>
+          <div class="button-row">
+            ${lines.length ? `<button class="secondary" data-act="copy-say" data-text="${esc(lines.join("\n"))}" data-said="Copied. Run it in a terminal, then start your agent again.">${ICON.copy}Copy the update command</button>` : ""}
+            ${r.skillsCatchUp ? `<button class="secondary" data-act="copy-say" data-text="${esc(r.skillsCatchUp)}">${ICON.copy}Copy for your agent</button>` : ""}
+          </div></div>`
+      : "";
     return `<div class="lead"><span class="lead-note">Jobs you can hand your agent. Say it your own way, or copy a line.</span></div>
-      ${section("skills", "Skills", have ? `${have} of ${skills.length} installed` : String(skills.length), skills.map(skillRow).join(""))}
+      ${catchUp}
+      ${section("skills", "Skills", late ? `${late} behind` : have ? `${have} of ${skills.length} installed` : String(skills.length), skills.map(skillRow).join(""))}
       <div class="button-row">
         <button class="secondary" data-act="copy-say" data-text="${esc(r.skillsInstall)}" data-said="Copied. Paste it into Claude Code to get all ${skills.length}.">Copy the install line</button>
         <button class="link-btn" data-act="open-uri" data-url="${esc(r.skillsPage)}">On GitHub${ICON.out}</button>
@@ -2782,9 +3007,17 @@ in ${x.cwd}`)}">
     const has = s.has || [];
     const say = (p) => `<div class="say-row"><span class="say">&ldquo;${esc(p)}&rdquo;</span>
         <button class="link-btn" data-act="copy-say" data-text="${esc(p)}" title="Copy it, then paste it to your agent">Copy</button></div>`;
+    // A copy that's older than the newest mom knows: who has it, and which version.
+    const late = (s.copies || []).filter((c) => c.behind);
+    const behind = late.length
+      ? `<p class="skill-late"><span class="led red"></span>${esc(
+          `${[...new Set(late.map((c) => c.who))].join(" and ")} ${late.length === 1 ? "has" : "have"} ${late[0].version ? `version ${late[0].version}` : "an older copy"}. The newest is ${s.version}.`
+        )}</p>`
+      : "";
     return `<div class="skill" id="skill-${hash(s.name)}">
-      <div class="skill-head"><span class="led ${has.length ? "green" : ""}"></span><strong>${esc(s.title)}</strong>
-        <small>${esc(has.length ? `in ${has.join(" and ")}` : "not installed")}</small></div>
+      <div class="skill-head"><span class="led ${late.length ? "red" : has.length ? "green" : ""}"></span><strong>${esc(s.title)}</strong>
+        <small>${esc([has.length ? `in ${has.join(" and ")}` : "not installed", s.version ? `v${s.version}` : ""].filter(Boolean).join(" · "))}</small></div>
+      ${behind}
       <p class="skill-what">${esc(s.what)}${open ? ` ${esc(s.more)}` : ""} <button class="more-btn" data-act="more" data-key="${esc(key)}" aria-expanded="${open}">${open ? "Less" : "More"}</button></p>
       ${(open ? s.prompts : s.prompts.slice(0, 1)).map(say).join("")}
       ${open ? `<div class="skill-read"><button class="link-btn" data-act="open-uri" data-url="${esc(s.page)}">Read the skill${ICON.out}</button></div>` : ""}
@@ -2793,6 +3026,13 @@ in ${x.cwd}`)}">
 
   async function loadRules() {
     state.rules = await invoke("get_rules");
+    // The tab says how many skills are behind, so it shows without opening it.
+    const late = (state.rules.skills || []).filter((s) => s.behind).length;
+    const count = late ? String(late) : "";
+    if ($("#count-rules").textContent !== count) {
+      $("#count-rules").textContent = count;
+      moveThumb(false);
+    }
     render();
   }
 
@@ -2923,7 +3163,8 @@ in ${x.cwd}`)}">
             !c.ui.notifications
           ) +
           sw("notifyMeltdown", c.ui.notifyMeltdown, "CPU alarm", `When leftovers burn more than ${num("cpuAlertPercent", c.ui.cpuAlertPercent, 5, 100)}% CPU for two minutes. At most once an hour.`, !c.ui.notifications) +
-          sw("notifyCleanups", c.ui.notifyCleanups, "Clean-up reports", "When mom turns things off by herself.", !c.ui.notifications)
+          sw("notifyCleanups", c.ui.notifyCleanups, "Clean-up reports", "When mom turns things off by herself.", !c.ui.notifications) +
+          sw("notifySkills", c.ui.notifySkills !== false, "Skills", "When a skill has a newer version than the copy your agent has.", !c.ui.notifications)
       )}
       ${section(
         "s-widget",
@@ -2950,7 +3191,8 @@ in ${x.cwd}`)}">
 
   function renderSheet() {
     if (!state.sheet) return;
-    const html = state.sheet.kind === "spot" ? renderSpot(state.sheet.id) : state.sheet.kind === "about" ? renderAbout() : renderSettings();
+    const kind = state.sheet.kind;
+    const html = kind === "spot" ? renderSpot(state.sheet.id) : kind === "agent" ? renderAgentSheet(state.sheet.id) : kind === "about" ? renderAbout() : renderSettings();
     morph($("#sheet-body"), html);
   }
 
@@ -3331,6 +3573,23 @@ in ${x.cwd}`)}">
         break;
       case "open-spot":
         openSheet({ kind: "spot", id: el.dataset.spot });
+        break;
+      case "open-agent":
+        openSheet({ kind: "agent", id: el.dataset.id });
+        break;
+      case "agents-refresh":
+        loadAgents();
+        renderSheet();
+        break;
+      case "toggle-agent-list":
+        if (!state.showAllAgent.delete(el.dataset.key)) state.showAllAgent.add(el.dataset.key);
+        renderSheet();
+        break;
+      case "open-doc":
+        openDoc(el.dataset.id, el.dataset.title);
+        break;
+      case "close-reader":
+        closeReader();
         break;
       case "running-tab":
         if (state.runningTab === el.dataset.tab) break;
@@ -3955,6 +4214,7 @@ in ${x.cwd}`)}">
     }
     if (e.key === "Escape" && playroom) leaveRoom();
     else if (e.key === "Escape" && state.sheet) closeSheet();
+    else if (e.key === "Escape" && state.reader) closeReader();
   });
 
   // The scrollbar shows while you scroll, then fades away.
@@ -4029,6 +4289,7 @@ in ${x.cwd}`)}">
       if (key === "notifyLeftovers") c.ui.notifyLeftovers = on;
       if (key === "notifyMeltdown") c.ui.notifyMeltdown = on;
       if (key === "notifyCleanups") c.ui.notifyCleanups = on;
+      if (key === "notifySkills") c.ui.notifySkills = on;
       if (key === "alwaysOnTop") c.ui.alwaysOnTop = on;
       if (key === "checkUpdates") c.ui.checkUpdates = on;
     });
@@ -4136,6 +4397,9 @@ in ${x.cwd}`)}">
     applySnap(await invoke("get_snapshot"));
     state.ready = true;
     loadStopped();
+    loadAgents();
+    loadRules().catch(() => {});
+    bridge.listen("skills", () => loadRules().catch(() => {}));
     // New versions: a first look once things have settled, then now and then (she asks GitHub at
     // most once a day, however often this runs).
     setTimeout(loadUpdate, 20000);

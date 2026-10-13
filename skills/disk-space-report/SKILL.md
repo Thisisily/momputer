@@ -3,6 +3,8 @@ name: disk-space-report
 description: Surveys a Windows PC's local drives read-only and shows where the disk space went. Reports space used and free per drive, the biggest folders and files, and the usual suspects by name and size (node_modules, virtual environments, build folders, Docker and WSL disk images, package and AI-model caches, browser caches, Windows' Temp and update leftovers, the hibernation and page files, the Recycle Bin, games, old installers, big videos, big things untouched for a year). Builds one page with per-drive bars, a chart of what fills each drive, and a plan the user ticks. The skill never deletes anything itself. A ticked item is a fixed cleanup command of the tool that owns the data, one of Windows' own tools opened for the user, or a list for the user. Use when the user asks where their disk space went, why a drive is full, what is taking up space, or how to free space on Windows. Not for moving or deleting personal files (use tidy-folders), uninstalling programs, or registry cleanup.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline.
+metadata:
+  version: "1.0.0"
 ---
 
 # Disk space report

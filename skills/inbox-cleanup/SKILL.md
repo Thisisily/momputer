@@ -3,6 +3,8 @@ name: inbox-cleanup
 description: Reviews the last two months of a Gmail inbox read-only, through a Gmail connector or MCP server, browser automation (Claude in Chrome, Codex's browser), or both, and builds a private HTML report with charts. The report shows senders by volume, how much of each sender's mail gets opened, newsletters worth unsubscribing from, senders never opened, likely spam and phishing, big attachments, and a step-by-step declutter plan with Gmail search queries and filter suggestions that the user ticks to approve. Use when the user asks to clean up, declutter, audit or review their Gmail or inbox, find what to unsubscribe from, see which emails they never open, cut email noise or free Gmail storage. Never sends, deletes, archives, unsubscribes or creates filters without the user's approval of that specific action. Not for writing or answering email, and not for mailboxes other than Gmail.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Needs a Gmail connector or MCP server, or a browser tool signed in to Gmail. Python 3.8+ (standard library only) builds the report.
+metadata:
+  version: "1.0.0"
 ---
 
 # Inbox cleanup

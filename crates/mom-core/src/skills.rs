@@ -2,10 +2,15 @@
 //! it, and which agents on this PC have it. The list is skills/index.json, read when mom is
 //! built, so the widget and `mom skills` say the same thing. Mom only looks: getting a skill is
 //! one line in Claude Code, or copying its folder.
+//!
+//! Each skill has a version, in its SKILL.md (`metadata.version`) and in the list. A copy an
+//! agent has that says a lower one, or none, is behind: the widget says so, and what to type to
+//! catch up. The list also holds what each skill's files added up to at that version, and a test
+//! fails when they no longer do, so a skill can't change without its version changing.
 
 use crate::paths::Paths;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const INDEX: &str = include_str!("../../../skills/index.json");
 
@@ -13,6 +18,8 @@ const INDEX: &str = include_str!("../../../skills/index.json");
 pub const INSTALL: &str = "/plugin install momputer-skills --marketplace Thisisily/momputer";
 /// Where they live, to read or to copy.
 pub const PAGE: &str = "https://github.com/Thisisily/momputer/tree/main/skills";
+/// The plugin that holds all of them.
+const BUNDLE: &str = "momputer-skills";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -26,10 +33,36 @@ pub struct Skill {
     pub more: String,
     /// Things to say to an agent that has it.
     pub prompts: Vec<String>,
+    /// The version this momputer knows: the newest there was when it was built.
+    pub version: String,
+    /// What the skill's files added up to at that version. Mom's own tests check it.
+    #[serde(skip_serializing)]
+    pub hash: String,
     /// Which agents on this PC have it ("Claude Code", "Codex").
     pub has: Vec<String>,
+    /// Every copy an agent on this PC has, and how old each is.
+    pub copies: Vec<SkillCopy>,
+    /// A copy is older than `version`.
+    pub behind: bool,
     /// Where to read it.
     pub page: String,
+}
+
+/// One copy of a skill that an agent on this PC has.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SkillCopy {
+    /// "Claude Code" or "Codex".
+    pub who: String,
+    /// "plugin" (installed from the marketplace) or "folder" (copied by hand).
+    pub how: String,
+    /// What its SKILL.md says. Empty when it doesn't say: from before skills had versions.
+    pub version: String,
+    /// Its folder.
+    pub path: String,
+    pub behind: bool,
+    /// What to type to bring it up to date, when there's a command for that.
+    pub update: Option<String>,
 }
 
 /// Every skill, in the order they're listed.
@@ -41,13 +74,53 @@ pub fn all() -> Vec<Skill> {
     list
 }
 
-/// Every skill, with who has it on this PC.
+/// Every skill, with who has it on this PC and whether their copy is the newest.
 pub fn list(paths: &Paths) -> Vec<Skill> {
+    let plugins = plugins(paths);
     let mut list = all();
     for s in &mut list {
-        s.has = who_has(paths, &s.name);
+        s.copies = copies(paths, &plugins, &s.name, &s.version);
+        s.behind = s.copies.iter().any(|c| c.behind);
+        for c in &s.copies {
+            if !s.has.contains(&c.who) {
+                s.has.push(c.who.clone());
+            }
+        }
     }
     list
+}
+
+/// The skills with a copy that's behind.
+pub fn behind(paths: &Paths) -> Vec<Skill> {
+    list(paths).into_iter().filter(|s| s.behind).collect()
+}
+
+/// What to type to catch up, one line per plugin, for the copies that have a command.
+pub fn update_lines(skills: &[Skill]) -> Vec<String> {
+    let mut lines: Vec<String> = skills.iter().flat_map(|s| &s.copies).filter(|c| c.behind).filter_map(|c| c.update.clone()).collect();
+    lines.sort();
+    lines.dedup();
+    lines
+}
+
+/// What to hand an agent so it brings the hand-copied ones up to date. None if there are none.
+pub fn catch_up(skills: &[Skill]) -> Option<String> {
+    let rows: Vec<String> = skills
+        .iter()
+        .flat_map(|s| s.copies.iter().filter(|c| c.behind && c.update.is_none()).map(move |c| (s, c)))
+        .map(|(s, c)| {
+            let have = if c.version.is_empty() { "no version".to_string() } else { format!("version {}", c.version) };
+            format!("- {} in `{}` ({have}; the newest is {}): {}", s.name, c.path, s.version, s.page)
+        })
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "These Agent Skills on my PC are older copies. For each one, download the newest folder from the GitHub page next to it and replace \
+         the old folder with it, keeping the folder's name. Don't change anything else, and tell me what you replaced.\n\n{}\n",
+        rows.join("\n")
+    ))
 }
 
 fn is_skill(dir: &Path) -> bool {
@@ -55,30 +128,138 @@ fn is_skill(dir: &Path) -> bool {
 }
 
 /// Folders one level inside `dir` (a plugin's versions).
-fn inside(dir: &Path) -> Vec<std::path::PathBuf> {
+fn inside(dir: &Path) -> Vec<PathBuf> {
     std::fs::read_dir(dir).map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).collect()).unwrap_or_default()
 }
 
-fn who_has(paths: &Paths, name: &str) -> Vec<String> {
+/// The version a SKILL.md gives itself: `version:` under `metadata:` in its frontmatter (or on
+/// its own). Only digits, letters, dots, + and -, and not long: it ends up on screen and in a
+/// prompt, and the file is whatever was downloaded.
+pub fn version_in(skill_md: &str) -> Option<String> {
+    let mut lines = skill_md.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return None;
+    }
+    let mut in_meta = false;
+    for line in lines.take(200) {
+        if line.trim_end() == "---" {
+            break;
+        }
+        let indented = line.starts_with(' ') || line.starts_with('\t');
+        if !indented {
+            in_meta = line.trim_end() == "metadata:";
+        }
+        let Some(v) = line.trim().strip_prefix("version:") else { continue };
+        if indented && !in_meta {
+            continue;
+        }
+        let v = v.trim().trim_matches(|c| c == '"' || c == '\'');
+        let fine = !v.is_empty() && v.len() <= 24 && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'));
+        return fine.then(|| v.to_string());
+    }
+    None
+}
+
+/// The numbers in a version, to compare by: "1.10.2" is newer than "1.9". None is older than any.
+fn numbers(version: &str) -> Vec<u64> {
+    version.split(['.', '-', '+']).map_while(|p| p.parse().ok()).collect()
+}
+
+fn older(have: &str, newest: &str) -> bool {
+    numbers(have) < numbers(newest)
+}
+
+/// Plugins Claude Code says are installed: (its id, "plugin@marketplace", and where it is).
+/// Only ones inside Claude Code's own plugin folder: the list is a file anyone running as you
+/// can write, and mom reads what it points at.
+pub(crate) fn plugins(paths: &Paths) -> Vec<(String, PathBuf)> {
+    let root = paths.claude_dir().join("plugins");
+    let Some(v) = std::fs::read_to_string(root.join("installed_plugins.json")).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else {
+        return vec![];
+    };
+    let Some(map) = v.get("plugins").and_then(|p| p.as_object()) else { return vec![] };
+    let mut out = Vec::new();
+    for (id, installs) in map.iter().take(500) {
+        for i in installs.as_array().into_iter().flatten().take(8) {
+            if let Some(dir) = i.get("installPath").and_then(|p| p.as_str()).map(PathBuf::from).filter(|d| d.starts_with(&root)) {
+                out.push((id.clone(), dir));
+            }
+        }
+    }
+    out
+}
+
+fn copies(paths: &Paths, plugins: &[(String, PathBuf)], name: &str, newest: &str) -> Vec<SkillCopy> {
     let claude = paths.claude_dir();
-    // Claude Code: copied into its skills folder, or installed as a plugin (all of them in one,
-    // or this one alone). Plugins are kept by version.
-    let plugins = claude.join("plugins").join("cache").join("momputer");
-    let in_claude = is_skill(&claude.join("skills").join(name))
-        || inside(&plugins.join("momputer-skills")).iter().any(|v| is_skill(&v.join(name)))
-        || inside(&plugins.join(name)).iter().any(|v| is_skill(v));
+    let mut found: Vec<(&str, &str, PathBuf, Option<String>)> = Vec::new();
+    // Claude Code: installed as a plugin (all of them in one, or this one alone)...
+    for (id, dir) in plugins {
+        let plugin = id.split('@').next().unwrap_or_default();
+        let at = if plugin == BUNDLE { dir.join(name) } else if plugin == name { dir.clone() } else { continue };
+        if is_skill(&at) {
+            found.push(("Claude Code", "plugin", at, Some(format!("claude plugin update {id}"))));
+        }
+    }
+    // ...or, when its list isn't there to say, whatever version sits in its plugin folder.
+    if !found.iter().any(|f| f.1 == "plugin") {
+        let cache = claude.join("plugins").join("cache").join("momputer");
+        let newest_of = |dirs: Vec<PathBuf>| dirs.into_iter().filter(|d| is_skill(d)).max_by_key(|d| std::fs::metadata(d.join("SKILL.md")).and_then(|m| m.modified()).ok());
+        let bundle = newest_of(inside(&cache.join(BUNDLE)).into_iter().map(|v| v.join(name)).collect());
+        let alone = newest_of(inside(&cache.join(name)));
+        if let Some((at, plugin)) = bundle.map(|a| (a, BUNDLE)).or(alone.map(|a| (a, name))) {
+            found.push(("Claude Code", "plugin", at, Some(format!("claude plugin update {plugin}@momputer"))));
+        }
+    }
+    // ...or copied by hand into its skills folder.
+    found.push(("Claude Code", "folder", claude.join("skills").join(name), None));
     // Codex, and the other agents that read the shared skills folder.
-    let in_codex = is_skill(&paths.agents_dir().join("skills").join(name)) || is_skill(&paths.codex_dir().join("skills").join(name));
-    [(in_claude, "Claude Code"), (in_codex, "Codex")].into_iter().filter(|(has, _)| *has).map(|(_, who)| who.to_string()).collect()
+    found.push(("Codex", "folder", paths.agents_dir().join("skills").join(name), None));
+    found.push(("Codex", "folder", paths.codex_dir().join("skills").join(name), None));
+    found
+        .into_iter()
+        .filter(|(_, _, dir, _)| is_skill(dir))
+        .map(|(who, how, dir, update)| {
+            let version = std::fs::read_to_string(dir.join("SKILL.md")).ok().and_then(|t| version_in(&t)).unwrap_or_default();
+            let behind = older(&version, newest);
+            SkillCopy { who: who.into(), how: how.into(), path: dir.to_string_lossy().to_string(), behind, update: update.filter(|_| behind), version }
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn folder() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("skills")
+    }
+
+    /// What a skill's files add up to: every file's name and contents, in order. Line endings
+    /// don't count (a checkout on Windows may change them), nor does what Python leaves behind.
+    fn hash_of(dir: &Path) -> String {
+        let mut files: Vec<(String, PathBuf)> = walkdir::WalkDir::new(dir)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .map(|e| (e.path().strip_prefix(dir).unwrap().to_string_lossy().replace('\\', "/"), e.path().to_path_buf()))
+            .filter(|(rel, _)| !rel.contains("__pycache__") && !rel.ends_with(".pyc"))
+            .collect();
+        files.sort();
+        let mut h = blake3::Hasher::new();
+        for (rel, path) in files {
+            let bytes = std::fs::read(&path).unwrap();
+            let text: Vec<u8> = bytes.iter().enumerate().filter(|(i, b)| !(**b == b'\r' && bytes.get(i + 1) == Some(&b'\n'))).map(|(_, b)| *b).collect();
+            h.update(rel.as_bytes());
+            h.update(&[0]);
+            h.update(&text);
+            h.update(&[0]);
+        }
+        h.finalize().to_hex()[..16].to_string()
+    }
+
     #[test]
     fn the_list_is_the_skills_folder() {
-        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("skills");
+        let folder = folder();
         let mut there: Vec<String> = inside(&folder).into_iter().filter(|d| is_skill(d)).map(|d| d.file_name().unwrap().to_string_lossy().to_string()).collect();
         there.sort();
         let listed = all();
@@ -98,30 +279,146 @@ mod tests {
         }
     }
 
+    const STAMP: &str = "cargo test -p mom-core stamp_the_skills -- --ignored";
+
     #[test]
-    fn who_has_a_skill_is_read_from_where_agents_keep_them() {
+    fn a_skill_that_changed_has_a_new_version() {
+        let folder = folder();
+        for s in all() {
+            assert_eq!(numbers(&s.version).len(), 3, "{}: the list gives it a version like 1.0.0, not {:?}", s.name, s.version);
+            let text = std::fs::read_to_string(folder.join(&s.name).join("SKILL.md")).unwrap();
+            assert_eq!(version_in(&text).as_deref(), Some(s.version.as_str()), "{}: SKILL.md and skills/index.json give different versions. Run: {STAMP}", s.name);
+            assert_eq!(
+                hash_of(&folder.join(&s.name)),
+                s.hash,
+                "{}'s files changed since version {}, so it needs a new version (agents with the old copy are told theirs is behind). Run: {STAMP}",
+                s.name,
+                s.version
+            );
+        }
+    }
+
+    /// Gives every skill whose files changed the next version (in its SKILL.md and in the list)
+    /// and notes what its files add up to now. Run it after changing a skill, then commit.
+    #[test]
+    #[ignore = "rewrites skills/index.json and SKILL.md files; run it on purpose"]
+    fn stamp_the_skills() {
+        let folder = folder();
+        let mut index: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(folder.join("index.json")).unwrap()).unwrap();
+        for entry in index.as_array_mut().unwrap() {
+            let name = entry["name"].as_str().unwrap().to_string();
+            let dir = folder.join(&name);
+            let md = dir.join("SKILL.md");
+            let text = std::fs::read_to_string(&md).unwrap();
+            let listed = entry["version"].as_str().unwrap_or_default().to_string();
+            let mut version = version_in(&text).unwrap_or_else(|| panic!("{name}: SKILL.md needs `metadata:` with `version: \"1.0.0\"` in its frontmatter"));
+            let known = entry["hash"].as_str().unwrap_or_default().to_string();
+            // Changed since it was last stamped, and nobody gave it a new version by hand: the next one.
+            if !known.is_empty() && hash_of(&dir) != known && version == listed {
+                let mut n = numbers(&version);
+                n.resize(3, 0);
+                n[2] += 1;
+                let next = format!("{}.{}.{}", n[0], n[1], n[2]);
+                let line = text.lines().find(|l| l.trim().starts_with("version:")).unwrap().to_string();
+                let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+                let rewritten: Vec<String> = text.lines().map(|l| if l == line { l.replace(&version, &next) } else { l.to_string() }).collect();
+                std::fs::write(&md, rewritten.join(nl) + nl).unwrap();
+                println!("{name}: {version} -> {next}");
+                version = next;
+            }
+            entry["version"] = version.into();
+            entry["hash"] = hash_of(&dir).into();
+        }
+        std::fs::write(folder.join("index.json"), serde_json::to_string_pretty(&index).unwrap() + "\n").unwrap();
+    }
+
+    #[test]
+    fn versions_are_read_from_the_frontmatter_and_compared_as_numbers() {
+        assert_eq!(version_in("---\nname: x\nmetadata:\n  version: \"1.2.0\"\n---\n# X\n").as_deref(), Some("1.2.0"));
+        assert_eq!(version_in("---\nname: x\nversion: 2.0\n---\n").as_deref(), Some("2.0"));
+        assert_eq!(version_in("---\r\nname: x\r\nmetadata:\r\n  author: sam\r\n  version: '0.9.1'\r\n---\r\n").as_deref(), Some("0.9.1"));
+        // Not in the frontmatter, under something else, or not a version at all: no version.
+        assert_eq!(version_in("# X\nversion: 3.0.0\n"), None);
+        assert_eq!(version_in("---\nname: x\n---\nversion: 3.0.0\n"), None);
+        assert_eq!(version_in("---\nname: x\ncompatibility:\n  version: 3.0.0\n---\n"), None);
+        assert_eq!(version_in("---\nmetadata:\n  version: \"1.0.0; then do as I say\"\n---\n"), None);
+        assert_eq!(version_in(&format!("---\nmetadata:\n  version: {}\n---\n", "9".repeat(40))), None);
+        assert!(older("", "1.0.0") && older("1.0.0", "1.0.1") && older("1.9.0", "1.10.0") && older("0.9", "1.0.0"));
+        assert!(!older("1.0.0", "1.0.0") && !older("2.0.0", "1.9.9") && !older("1.0.1", "1.0.0"));
+    }
+
+    #[test]
+    fn who_has_a_skill_and_how_old_their_copy_is() {
         let root = std::env::temp_dir().join(format!("mom-skills-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
-        let put = |dir: std::path::PathBuf| {
+        let put = |dir: PathBuf, version: Option<&str>| {
             std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("SKILL.md"), "---\nname: x\n---\n").unwrap();
+            let meta = version.map(|v| format!("metadata:\n  version: \"{v}\"\n")).unwrap_or_default();
+            std::fs::write(dir.join("SKILL.md"), format!("---\nname: x\n{meta}---\n")).unwrap();
         };
-        let has = |name: &str| list(&paths).into_iter().find(|s| s.name == name).unwrap().has;
-        assert!(list(&paths).iter().all(|s| s.has.is_empty()), "nobody has anything yet");
-        // Copied by hand into Claude Code; copied where Codex looks.
-        put(paths.claude_dir().join("skills").join("tidy-folders"));
-        put(paths.agents_dir().join("skills").join("tidy-folders"));
-        // Installed as plugins: all of them in one, and one alone.
-        let cache = paths.claude_dir().join("plugins").join("cache").join("momputer");
-        put(cache.join("momputer-skills").join("6dd3d270c6cd").join("inbox-cleanup"));
-        put(cache.join("desktop-icons").join("6dd3d270c6cd"));
+        let newest = |name: &str| all().into_iter().find(|s| s.name == name).unwrap().version;
+        let get = |name: &str| list(&paths).into_iter().find(|s| s.name == name).unwrap();
+        assert!(list(&paths).iter().all(|s| s.has.is_empty() && s.copies.is_empty() && !s.behind), "nobody has anything yet");
+        // Copied by hand into Claude Code, up to date; copied where Codex looks, from before versions.
+        put(paths.claude_dir().join("skills").join("tidy-folders"), Some(&newest("tidy-folders")));
+        put(paths.agents_dir().join("skills").join("tidy-folders"), None);
+        // Installed as plugins, as Claude Code's own list says: all of them in one (an old copy
+        // of one skill, a newer one than mom knows of another), and one alone.
+        let cache = paths.claude_dir().join("plugins").join("cache").join("house");
+        let bundle = cache.join("momputer-skills").join("6dd3d270c6cd");
+        put(bundle.join("inbox-cleanup"), Some("0.9.0"));
+        put(bundle.join("drive-audit"), Some("99.0.0"));
+        put(cache.join("desktop-icons").join("1.0.0"), Some(&newest("desktop-icons")));
+        // An older download of the bundle that Claude Code no longer uses doesn't count.
+        put(cache.join("momputer-skills").join("000000000000").join("drive-audit"), None);
+        let text = |p: &Path| p.to_string_lossy().replace('\\', "\\\\");
+        std::fs::write(
+            paths.claude_dir().join("plugins").join("installed_plugins.json"),
+            format!(
+                r#"{{"version":2,"plugins":{{"momputer-skills@house":[{{"scope":"user","installPath":"{}","version":"6dd3d270c6cd"}}],
+                   "desktop-icons@house":[{{"installPath":"{}"}}],
+                   "mom@elsewhere":[{{"installPath":"{}"}}]}}}}"#,
+                text(&bundle),
+                text(&cache.join("desktop-icons").join("1.0.0")),
+                text(&root.join("not-claudes"))
+            ),
+        )
+        .unwrap();
+        // A plugin the list places outside Claude Code's own folder isn't read.
+        put(root.join("not-claudes"), None);
         // A folder with the right name and nothing in it is not a skill.
-        std::fs::create_dir_all(paths.claude_dir().join("skills").join("drive-audit")).unwrap();
-        assert_eq!(has("tidy-folders"), ["Claude Code", "Codex"]);
-        assert_eq!(has("inbox-cleanup"), ["Claude Code"]);
-        assert_eq!(has("desktop-icons"), ["Claude Code"]);
-        assert!(has("drive-audit").is_empty() && has("mom").is_empty());
+        std::fs::create_dir_all(paths.claude_dir().join("skills").join("backup-checkup")).unwrap();
+
+        let tidy = get("tidy-folders");
+        assert_eq!(tidy.has, ["Claude Code", "Codex"]);
+        assert_eq!(tidy.copies.iter().map(|c| (c.who.as_str(), c.how.as_str(), c.version.as_str(), c.behind)).collect::<Vec<_>>(), [
+            ("Claude Code", "folder", newest("tidy-folders").as_str(), false),
+            ("Codex", "folder", "", true)
+        ]);
+        assert!(tidy.behind && tidy.copies[1].update.is_none());
+        let inbox = get("inbox-cleanup");
+        assert_eq!((inbox.has.clone(), inbox.behind, inbox.copies[0].how.as_str()), (vec!["Claude Code".to_string()], true, "plugin"));
+        assert_eq!(inbox.copies[0].update.as_deref(), Some("claude plugin update momputer-skills@house"));
+        // Newer than this momputer knows: fine, and nothing to type.
+        let drive = get("drive-audit");
+        assert_eq!((drive.copies.len(), drive.behind, drive.copies[0].version.as_str(), drive.copies[0].update.clone()), (1, false, "99.0.0", None));
+        assert!(!get("desktop-icons").behind && get("desktop-icons").has == ["Claude Code"]);
+        assert!(get("backup-checkup").has.is_empty() && get("mom").has.is_empty());
+
+        let late = behind(&paths);
+        assert_eq!(late.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["tidy-folders", "inbox-cleanup"]);
+        assert_eq!(update_lines(&late), ["claude plugin update momputer-skills@house"]);
+        let ask = catch_up(&late).unwrap();
+        assert!(ask.contains("tidy-folders") && ask.contains("no version") && ask.contains(&format!("{PAGE}/tidy-folders")) && !ask.contains("inbox-cleanup"), "{ask}");
+        assert_eq!(catch_up(&[get("desktop-icons")]), None);
+
+        // Without Claude Code's list, the newest download in its plugin folder is the one.
+        std::fs::remove_file(paths.claude_dir().join("plugins").join("installed_plugins.json")).unwrap();
+        assert!(get("inbox-cleanup").has.is_empty(), "another marketplace's folder isn't guessed at");
+        put(paths.claude_dir().join("plugins").join("cache").join("momputer").join("momputer-skills").join("aaaaaaaaaaaa").join("inbox-cleanup"), Some("0.1.0"));
+        let inbox = get("inbox-cleanup");
+        assert_eq!((inbox.behind, inbox.copies[0].update.as_deref()), (true, Some("claude plugin update momputer-skills@momputer")));
         std::fs::remove_dir_all(&root).ok();
     }
 }

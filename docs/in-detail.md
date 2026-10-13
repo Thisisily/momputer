@@ -84,7 +84,8 @@ mom trash clean all    take out the safe trash (never the Recycle Bin or your ow
 mom trash keep <path>  keep a file or folder out of every clean-up (--release lets it go)
 mom health             drives, memory, restarts, Storage Sense and startup apps
 mom update             is there a newer momputer? (asks GitHub)
-mom skills             the skills that come with momputer: what each does, what to say
+mom skills             the skills that come with momputer: what each does, what to say, whose copy is behind
+mom agents             how each agent is set up: MCP servers, hooks, settings (mom agents read <id> shows a file)
 mom speed              what's slowing the PC down, and what's busy right now
 mom programs           every program running, one line each (only looks)
 mom pc                 what the PC is, and its protection, updates, hardware and registry leftovers
@@ -115,7 +116,22 @@ The read-only commands take `--json` for scripts and agents.
 
 Codex asks you to trust new hooks once: run `/hooks` in the Codex CLI.
 
+**Skill versions.** Each skill has a version (`metadata.version` in its `SKILL.md`). Mom knows the newest there was when she was built, and compares it with every copy your agents have: a plugin in Claude Code, or a folder you copied for Claude Code or Codex. A copy that's behind gets a red light under House rules > Skills, with the command that updates it (`claude plugin update momputer-skills@momputer`) or a note to hand your agent for a copy made by hand. She tells you once, and again only when it changes.
+
 **The rules.** Edit them in the app or in `~/.momputer/house-rules.md`. Mom can write them into `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` and `~/.gemini/GEMINI.md` inside a clearly marked block, and take them out again without touching anything else.
+
+## Agent health
+
+Running > Agents ends with a row for each agent that has a set-up on this PC: Claude Code, Codex, Cursor, Gemini CLI and opencode. Tap one for everything it has.
+
+- **MCP servers**, from your settings, from each project and from plugins. One that starts a program is checked by whether that program and its script are there. One that's called over the web is checked by its address. One waiting for you to sign in says so.
+- **Hooks**, yours and each plugin's: when it runs, what it runs, and whether its program and script are there. Mom's own check-ins are marked.
+- **Settings that apply everywhere**: whether the agent asks before it runs commands, a settings file that can't be read, keys kept in plain text, an instructions file long enough to slow every session.
+- **Skills** and the files all of this lives in.
+
+Mom only reads. No server is started, no hook is run and nothing is asked over the network. A finding is a sentence with something to do: a command to copy, or a note for your agent.
+
+Tap any row to read the file behind it. That switches to BIG MODE, where there's room for a page: Markdown is laid out, settings files are shown as written. Keys, tokens and passwords are blanked before the file reaches the screen, and only files mom herself found in an agent's set-up can be opened.
 
 ## How mom knows who did it
 

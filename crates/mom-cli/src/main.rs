@@ -80,9 +80,19 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// The skills that come with momputer: what each does, what to say, and who has it.
+    /// The skills that come with momputer: what each does, what to say, who has it, and whether
+    /// their copy is the newest.
     Skills {
         #[arg(long)]
+        json: bool,
+    },
+    /// How each agent is set up, and whether it holds together: MCP servers, hooks, settings and
+    /// skills. Only looks: no server is started and no hook is run. `mom agents read <id>` shows
+    /// one of the files, with keys blanked.
+    Agents {
+        #[command(subcommand)]
+        action: Option<AgentsCmd>,
+        #[arg(long, global = true)]
         json: bool,
     },
     /// A checkup for the whole machine: disks, memory, restarts, startup apps.
@@ -163,6 +173,12 @@ enum Cmd {
     Hook { agent: String, event: String },
     /// Where mom keeps her settings.
     Config,
+}
+
+#[derive(Subcommand)]
+enum AgentsCmd {
+    /// Show one of the files `mom agents --json` lists (by its id), with keys blanked.
+    Read { id: String },
 }
 
 #[derive(Subcommand)]
@@ -462,6 +478,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Health { .. })
         | Some(Cmd::Update { .. })
         | Some(Cmd::Skills { .. })
+        | Some(Cmd::Agents { .. })
         | Some(Cmd::Speed { .. })
         | Some(Cmd::Programs { .. })
         | Some(Cmd::Pc { .. })
@@ -833,12 +850,84 @@ fn run(cli: Cli) -> Result<i32> {
                 println!("{}  {}", st.bold("SKILLS"), st.dim(&format!("{} jobs you can hand your agent", list.len())));
                 for s in &list {
                     let who = if s.has.is_empty() { "not installed".to_string() } else { format!("in {}", s.has.join(" and ")) };
-                    println!("\n  {}  {}", st.bold(&pad(&s.title, 20)), st.dim(&who));
+                    println!("\n  {}  {}  {}", st.bold(&pad(&s.title, 20)), st.dim(&format!("{:<7}", s.version)), st.dim(&who));
                     println!("  {}", s.what);
                     println!("  {}", st.dim(&format!("Say: \"{}\"", s.prompts.join("\", \""))));
+                    for c in s.copies.iter().filter(|c| c.behind) {
+                        let have = if c.version.is_empty() { "an older copy".to_string() } else { format!("version {}", c.version) };
+                        println!("  {}", st.yellow(&format!("{} has {have}; the newest is {}.", c.who, s.version)));
+                    }
+                }
+                let late: Vec<_> = list.iter().filter(|s| s.behind).cloned().collect();
+                for line in mom_core::skills::update_lines(&late) {
+                    println!("\n{} {}", st.bold("To catch up, run:"), line);
+                }
+                if mom_core::skills::catch_up(&late).is_some() {
+                    println!("{}", st.dim(&format!("Copied by hand? Replace the folder with the newest from {}", mom_core::skills::PAGE)));
                 }
                 println!("\n{}", st.dim(&format!("Get them all in Claude Code: {}", mom_core::skills::INSTALL)));
                 println!("{}", st.dim(&format!("Anywhere else, copy a folder from {}", mom_core::skills::PAGE)));
+            }
+        }
+        Some(Cmd::Agents { action, json }) => {
+            let agents = mom_core::setup::check(&paths);
+            match action {
+                Some(AgentsCmd::Read { id }) => {
+                    let doc = mom_core::setup::read(&agents, &id).map_err(|e| anyhow::anyhow!(e))?;
+                    if json {
+                        print_json(&doc)?;
+                    } else {
+                        println!("{}  {}", st.bold(&doc.title), st.dim(&doc.path));
+                        if doc.hidden > 0 {
+                            println!("{}", st.dim(&format!("{} blanked: mom doesn't show keys.", if doc.hidden == 1 { "1 key".to_string() } else { format!("{} keys", doc.hidden) })));
+                        }
+                        println!("\n{}", doc.text);
+                        if doc.cut {
+                            println!("\n{}", st.dim("(the rest is longer than mom shows)"));
+                        }
+                    }
+                }
+                None if json => print_json(&agents)?,
+                None => {
+                    if agents.is_empty() {
+                        println!("No agent has a set-up on this PC yet.");
+                    }
+                    for a in &agents {
+                        let look = if a.problems == 0 { st.green("all in order") } else { st.red(&format!("{} to look at", a.problems)) };
+                        println!("{}  {}", st.bold(&a.name.to_uppercase()), look);
+                        let light = |level: &str| match level {
+                            "warn" => st.red("●"),
+                            "note" => st.yellow("●"),
+                            "off" => st.dim("○"),
+                            _ => st.green("●"),
+                        };
+                        for f in &a.settings {
+                            println!("  {} {}  {}", light(&f.level), f.title, st.dim(&f.detail));
+                        }
+                        if !a.servers.is_empty() {
+                            println!("  {}", st.dim(&format!("MCP servers ({})", a.servers.len())));
+                        }
+                        for s in &a.servers {
+                            println!("  {} {}  {}", light(&s.level), pad(&s.name, 22), st.dim(&format!("{} · {}", s.what, s.from)));
+                            if let Some(p) = &s.problem {
+                                println!("{}", wrap(p, 92, "      "));
+                            }
+                        }
+                        if !a.hooks.is_empty() {
+                            println!("  {}", st.dim(&format!("Hooks ({})", a.hooks.len())));
+                        }
+                        for h in &a.hooks {
+                            let when = if h.matcher.is_empty() { h.event.clone() } else { format!("{} ({})", h.event, h.matcher) };
+                            let whose = if h.mine { "mom's check-in".to_string() } else { h.from.clone() };
+                            let whose = if h.count > 1 { format!("{whose} · {} times", h.count) } else { whose };
+                            println!("  {} {}  {}", light(&h.level), pad(&when, 22), st.dim(&format!("{} · {whose}", h.what)));
+                            if let Some(p) = &h.problem {
+                                println!("{}", wrap(p, 92, "      "));
+                            }
+                        }
+                        println!("  {}\n", st.dim(&format!("{} skills, {} files to read (`mom agents --json` lists them)", a.skills.len(), a.docs.len())));
+                    }
+                }
             }
         }
         Some(Cmd::Health { json }) => {

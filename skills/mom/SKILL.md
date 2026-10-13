@@ -2,6 +2,8 @@
 name: mom
 description: Clean up after yourself. Use before finishing any task where you started processes (dev servers, watchers, headless browsers, tail -f, docker containers, VMs) or created temp files, screenshots, reports or new folders in a project. Also use when the user mentions leftover processes, RAM or disk filling up, clutter, messy folders, or "clean up after yourself".
 license: Apache-2.0 (complete terms in LICENSE.txt)
+metadata:
+  version: "1.0.0"
 ---
 
 # Mom

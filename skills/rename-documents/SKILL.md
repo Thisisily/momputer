@@ -3,6 +3,8 @@ name: rename-documents
 description: Gives scanned and downloaded documents names a person can find later. Surveys a folder read-only (by default Downloads and the scan folders) for files whose names say nothing, such as scan0001.pdf, IMG_2031.jpg, Untitled.docx, long codes or only digits, with a short safe peek inside text, Word and PDF files. The agent proposes a name for each under one naming rule the user picks (for example 2024-03-14 Lanternfall invoice 1182.pdf), a script checks every proposed name, and an interactive page shows old and new names side by side for the user to tick. Renames happen only after the user approves that exact plan, files stay in their folder with the same extension, and every rename is logged with a revert script. Use when the user asks to rename scans, downloads or documents, give files meaningful or consistent names, or clean up names like scan0001 or IMG_1234. Not for moving or sorting files into folders (use tidy-folders), renaming folders, photo libraries, or code and program files.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline. Naming scans and photos of documents needs an agent that can look at a PDF or image.
+metadata:
+  version: "1.0.0"
 ---
 
 # Rename documents

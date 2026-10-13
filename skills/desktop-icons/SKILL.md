@@ -3,6 +3,8 @@ name: desktop-icons
 description: Tidies a cluttered Windows desktop. Surveys the user's own Desktop folder (wherever it really is, OneDrive included) and the Public Desktop read-only, reads each shortcut file without ever running it, and finds shortcuts whose target is gone, several shortcuts to the same program, shortcuts to things already pinned or installed twice, shortcuts that run a command, loose documents, screenshots, installers and folders and how long they have sat there, and how many icons there are against what fits on one screen. Builds an interactive plan page with charts that the user ticks item by item. Dead and duplicate shortcuts go to the Recycle Bin, loose files move into folders, and every step is logged with a revert script. Use when the user asks to clean up, declutter, sort or organize their desktop or desktop icons, remove broken shortcuts, or says the desktop is full or a mess. Not for arranging icon positions, other folders (use tidy-folders), uninstalling programs, or the Start menu and taskbar.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline.
+metadata:
+  version: "1.0.0"
 ---
 
 # Desktop icons

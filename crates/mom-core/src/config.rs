@@ -152,6 +152,8 @@ pub struct UiConfig {
     pub notify_meltdown: bool,
     /// What mom turned off by herself.
     pub notify_cleanups: bool,
+    /// An agent's copy of one of mom's skills is older than the newest.
+    pub notify_skills: bool,
     /// Agents often tidy up a minute later, so a leftover has to sit this long before mom says anything.
     pub notify_after_minutes: u64,
     /// At most one leftover notification this often; anything new in between waits for the next one.
@@ -171,6 +173,7 @@ impl Default for UiConfig {
             notify_leftovers: true,
             notify_meltdown: true,
             notify_cleanups: true,
+            notify_skills: true,
             notify_after_minutes: 10,
             notify_every_minutes: 30,
             scan_interval_secs: 3,

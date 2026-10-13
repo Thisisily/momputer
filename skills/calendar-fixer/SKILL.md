@@ -3,6 +3,8 @@ name: calendar-fixer
 description: Reviews a Google Calendar read-only (the next four weeks, plus the last two for patterns) through a Calendar connector or MCP server, browser automation (Claude in Chrome, Codex's browser), or both, and builds a private HTML report with charts and a fix plan. It finds double bookings, back-to-back runs, meetings outside working hours, invitations never answered, stale repeating meetings, meetings with no video link or place, duplicates, time-zone slips, days with no free two hours, and hours in meetings per day and week. The user ticks the fixes they approve. Use when the user asks to fix, clean up, audit, review or declutter their calendar or schedule, find conflicts or double bookings, see how much time goes to meetings, or get focus time back. Never answers, declines, moves, edits or deletes an event without the user's tick for that event. Not for scheduling new meetings or finding a time across several people, and not for calendars other than Google Calendar.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Needs a Google Calendar connector or MCP server, or a browser tool signed in to Google Calendar. Python 3.8+ (standard library only) builds the report.
+metadata:
+  version: "1.0.0"
 ---
 
 # Calendar fixer

@@ -14,7 +14,17 @@ skills/<name>/
   references/         detail the agent reads only when it needs it
 ```
 
-`SKILL.md` frontmatter: `name` (the folder name), `description` (what it does, then "Use when ...", then what it is not for; under 1,024 characters), `license: Apache-2.0 (complete terms in LICENSE.txt)`, and `compatibility` (what it needs).
+`SKILL.md` frontmatter: `name` (the folder name), `description` (what it does, then "Use when ...", then what it is not for; under 1,024 characters), `license: Apache-2.0 (complete terms in LICENSE.txt)`, `compatibility` (what it needs), and `metadata:` with a `version: "1.0.0"`.
+
+## Versions
+
+A skill that changes gets a new version, so people with the old copy are told theirs is behind. You don't count by hand: after changing anything in a skill's folder, run
+
+```
+cargo test -p mom-core stamp_the_skills -- --ignored
+```
+
+It gives each changed skill the next version, in its `SKILL.md` and in `skills/index.json`, and notes what its files add up to. The ordinary tests fail until you do. For a bigger step than the last number, write the version in `SKILL.md` yourself first.
 
 ## The flow, always
 

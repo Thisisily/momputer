@@ -3,6 +3,8 @@ name: backup-checkup
 description: Checks a Windows PC read-only to answer "if this disk died today, what would I lose?". For each of the user's main folders and other places holding their own work, it works out whether anything keeps a second copy (OneDrive and its folder backup, Dropbox, Google Drive, iCloud Drive, Syncthing, Nextcloud, File History, Windows Backup, a second drive) and how old that copy is. It also finds Git repositories with no remote, unpushed commits or stashes, by reading the .git files and never running Git. Builds one page with a headline, each folder and what protects it, a "you would lose" list and a plan the user ticks. The skill never copies, uploads, syncs or changes a setting itself; it opens Windows' own pages and explains the rest. Use when the user asks whether their files are backed up, what they would lose if the disk failed, whether OneDrive or File History is working, or which code isn't pushed. Not for making or restoring backups, recovering lost files, or freeing disk space.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Check and page work offline.
+metadata:
+  version: "1.0.0"
 ---
 
 # Backup checkup

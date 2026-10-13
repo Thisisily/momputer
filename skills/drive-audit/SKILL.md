@@ -3,6 +3,8 @@ name: drive-audit
 description: Reviews a Google Drive read-only, through a Drive connector or MCP server, browser automation (Claude in Chrome, Codex's browser), or both, and builds a private HTML report with charts. It shows what is shared with anyone who has the link, what is shared outside the user's organization or with personal addresses, the biggest files and what fills the storage by type and owner, duplicates, files untouched for over a year, untitled and empty documents, and the Trash, with per-file fixes the user ticks to approve (stop public sharing, remove outside access, move to Trash) and searches to reuse. Use when the user asks to audit, review, clean up or declutter their Google Drive, check what they share or what is public, see what uses their storage, free up space, or find duplicate or old files. Never opens a file's contents, and never changes sharing or trashes a file without the user's tick for that file. Not for sorting files into folders, reading or summarizing documents, or storage other than Google Drive.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Needs a Google Drive connector or MCP server, or a browser tool signed in to Google Drive. Python 3.8+ (standard library only) builds the report.
+metadata:
+  version: "1.0.0"
 ---
 
 # Drive audit

@@ -3,6 +3,8 @@ name: tidy-folders
 description: Surveys a Windows PC's personal folders read-only (Desktop, Documents, Downloads, Pictures, Videos, Music, the profile folder and the top of every drive), finds legal, financial and ID papers lying loose, games outside a Games folder, duplicates, old installers and empty folders, and builds an interactive tidy plan page with charts that the user ticks item by item. Moves happen only after the user approves that exact plan, deletions go to the Recycle Bin, and every step is logged with a revert script. Use when the user asks to tidy, organize, sort or declutter their Windows folders, Desktop or Downloads, wants to know where their contracts, tax papers or passport scans are, wants games in the Games folder, or wants space back from old installers and duplicate files. Not for code repositories, temp-file or registry cleanup, or uninstalling programs.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline.
+metadata:
+  version: "1.0.0"
 ---
 
 # Tidy folders

@@ -53,6 +53,8 @@ struct Shared {
     machines_busy: AtomicBool,
     machines_at: Mutex<Option<Instant>>,
     rooms: Mutex<BTreeMap<String, tidy::RoomReport>>,
+    /// How each agent was set up when mom last looked. A file can only be read if it's in here.
+    agents: Mutex<Vec<mom_core::setup::AgentSetup>>,
     paused: AtomicBool,
     wake: (Mutex<bool>, Condvar),
     leftover_since: Mutex<HashMap<String, u64>>,
@@ -1231,18 +1233,73 @@ struct RulesState {
     skills: Vec<mom_core::skills::Skill>,
     skills_install: &'static str,
     skills_page: &'static str,
+    /// For the copies that are behind: what to type to catch up, and what to hand an agent for
+    /// the ones copied by hand.
+    skills_update: Vec<String>,
+    skills_catch_up: Option<String>,
 }
 
 #[tauri::command(async)]
 fn get_rules(s: State<'_, S>) -> RulesState {
+    let skills = mom_core::skills::list(&s.paths);
+    let late: Vec<_> = skills.iter().filter(|k| k.behind).cloned().collect();
     RulesState {
         text: rules::current(&s.paths),
         customized: rules::is_customized(&s.paths),
         targets: rules::targets(&s.paths),
         integrations: hooks::integrations(&s.paths),
-        skills: mom_core::skills::list(&s.paths),
+        skills_update: mom_core::skills::update_lines(&late),
+        skills_catch_up: mom_core::skills::catch_up(&late),
+        skills,
         skills_install: mom_core::skills::INSTALL,
         skills_page: mom_core::skills::PAGE,
+    }
+}
+
+/// How each agent on this PC is set up, and what's worth a look: MCP servers, hooks, settings,
+/// skills. Only looks.
+#[tauri::command(async)]
+fn get_agents(s: State<'_, S>) -> Vec<mom_core::setup::AgentSetup> {
+    let agents = mom_core::setup::check(&s.paths);
+    *s.agents.lk() = agents.clone();
+    agents
+}
+
+/// One of the files `get_agents` listed, by its id, with keys blanked. Never a path from the
+/// widget: only what mom herself found in an agent's set-up can be read.
+#[tauri::command(async)]
+fn read_doc(id: String, s: State<'_, S>) -> Res<mom_core::setup::DocText> {
+    let mut agents = s.agents.lk().clone();
+    if agents.is_empty() {
+        agents = mom_core::setup::check(&s.paths);
+        *s.agents.lk() = agents.clone();
+    }
+    mom_core::setup::read(&agents, &id)
+}
+
+/// Says so, once, when an agent's copy of a skill is older than the one this momputer knows, and
+/// again only when that changes. Looks a minute after starting and then every few hours: it's a
+/// handful of small files.
+fn skills_watch(app: AppHandle, s: S) {
+    std::thread::sleep(Duration::from_secs(60));
+    loop {
+        let late = mom_core::skills::behind(&s.paths);
+        let told = s.paths.state_dir().join("skills-told.txt");
+        let now: String = late.iter().map(|k| format!("{}@{}", k.name, k.version)).collect::<Vec<_>>().join(",");
+        if now != std::fs::read_to_string(&told).unwrap_or_default() {
+            let _ = mom_core::util::write_atomic(&told, &now);
+            let _ = app.emit("skills", late.len());
+            let cfg = s.cfg();
+            if !late.is_empty() && cfg.ui.notifications && cfg.ui.notify_skills {
+                let text = match late.as_slice() {
+                    [one] => format!("{} has a newer version than the copy your agent has. House rules, Skills, has the line to catch up.", one.title),
+                    many => format!("{} skills have newer versions than the copies your agents have. House rules, Skills, has the line to catch up.", many.len()),
+                };
+                s.note(text.clone());
+                toast(&app, "Skills", &text);
+            }
+        }
+        std::thread::sleep(Duration::from_secs(6 * 3600));
     }
 }
 
@@ -1441,6 +1498,7 @@ fn main() {
         machines_busy: AtomicBool::new(false),
         machines_at: Mutex::new(None),
         rooms: Mutex::new(BTreeMap::new()),
+        agents: Mutex::new(Vec::new()),
         paused: AtomicBool::new(false),
         wake: (Mutex::new(false), Condvar::new()),
         leftover_since: Mutex::new(HashMap::new()),
@@ -1518,6 +1576,8 @@ fn main() {
             undo_tidy,
             chore_prompt,
             get_rules,
+            get_agents,
+            read_doc,
             save_rules,
             reset_rules,
             teach_rules,
@@ -1568,6 +1628,8 @@ fn main() {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_always_on_top(shared.cfg().ui.always_on_top);
             }
+            let (s, skills_handle) = (shared.clone(), handle.clone());
+            std::thread::Builder::new().name("mom-skills".into()).spawn(move || skills_watch(skills_handle, s))?;
             let s = shared.clone();
             std::thread::Builder::new()
                 .name("mom-watcher".into())

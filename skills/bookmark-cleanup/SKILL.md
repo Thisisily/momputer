@@ -3,6 +3,8 @@ name: bookmark-cleanup
 description: Tidies browser bookmarks without ever writing to the browser's own files. Reads a copy of the bookmarks of Chrome, Edge, Brave or Vivaldi, or a bookmarks HTML file exported from any browser (Firefox, Safari), and builds a private HTML report with charts showing exact and near-duplicate bookmarks, empty folders, folders with hundreds of loose items, bookmarks never opened or not opened in years, an overloaded bookmarks bar and, only if the user agrees, dead links. The user ticks what they approve, and the result is a new bookmarks HTML file with the removals, merges and folder moves applied, for them to import. Use when the user asks to clean up, tidy, organize, deduplicate or audit their bookmarks or favorites, find dead or duplicate bookmarks, or declutter the bookmarks bar. Never edits a browser profile and never opens or runs a bookmark. Not for syncing bookmarks between browsers, browsing history, open tabs, reading lists or saved passwords.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Needs to run on the computer whose browser it is (Windows, macOS or Linux) with Python 3.8+ (standard library only), or to be given an exported bookmarks HTML file. Everything works offline except the optional dead-link check.
+metadata:
+  version: "1.0.0"
 ---
 
 # Bookmark cleanup
