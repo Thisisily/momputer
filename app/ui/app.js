@@ -2765,20 +2765,20 @@ in ${x.cwd}`)}">
           ${updateLine()}
         </div>
       </div>
+      <h3 class="list-head">A message from the dev</h3>
       <div class="about-note">
-        <p class="about-lead">Hi, I'm Ilya Arbabi.</p>
-        <p>My desktop was a mess, and every AI agent I worked with made it worse: dev servers left running, screenshots everywhere, folders called thing-v2-final. I needed something to keep it all in order, so I built my computer a mom.</p>
+        <p><b>Hi! I'm Ilya</b> and I built momputer because my desktop was a mess. Every AI agent I worked with made it worse: dev servers left running, screenshots everywhere, folders called thing-v2-final. So I made my computer a mom.</p>
       </div>
-      <h3 class="list-head">Also by me</h3>
+      <h3 class="list-head">More from me</h3>
       <div class="about-tiles">${tiles}${tile("momputer on GitHub", "Thisisily/momputer · issues and ideas welcome", REPO, mark("GitHub", "fill"), true)}</div>
       <h3 class="list-head">Buy mom a coffee</h3>
       <div class="about-tip">
         <div class="seg about-coins" role="group" aria-label="Which coin">${coins}</div>
         <div class="about-addr num" id="tip-addr" title="${esc(coin)} address">${mark(coin, "coin-ico")}<span>${esc(addr)}</span></div>
-        <div class="about-tip-foot"><span>momputer is free for personal use, and stays that way. A tip keeps her going.</span>
+        <div class="about-tip-foot"><span>momputer is free for personal use and I'm keeping it that way. If she helps, a tip is welcome.</span>
           <button class="primary" data-act="copy-text" data-text="${esc(addr)}" data-what="${esc(coin)}">Copy</button></div>
       </div>
-      <p class="about-foot">Free for personal use (PolyForm Noncommercial) · The one thing momputer asks the internet is whether there's a newer version. Nothing about you or your PC is sent.<br>
+      <p class="about-foot">Made by Ilya Arbabi · Free for personal use (PolyForm Noncommercial).<br>Mom only goes online to ask if there's a newer version. Nothing about you or your PC is sent.<br>
         <span class="about-hint">There's one room in this house nobody tidies.</span></p>`;
   }
 

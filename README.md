@@ -136,7 +136,7 @@ Privacy: momputer sends nothing about you or your PC anywhere. Once a day it ask
 
 ## Made by
 
-momputer is made by Ilya Arbabi. My desktop was a mess, and every AI agent I worked with made it worse, so I built my computer a mom. Also by me: [Marsell](https://getmarsell.com) and [Ilisium](https://ilisium.xyz).
+Hi! I'm Ilya Arbabi and I built momputer because my desktop was a mess. Every AI agent I worked with made it worse, so I made my computer a mom. More from me: [Marsell](https://getmarsell.com) and [Ilisium](https://ilisium.xyz).
 
 momputer is free for personal use. If she saved you an afternoon, you can buy mom a coffee:
 

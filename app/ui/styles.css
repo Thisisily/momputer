@@ -3113,18 +3113,21 @@ button.row-name:hover {
 }
 
 .about-note {
-  margin: 0 6px 6px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--edge);
   color: var(--ink-2);
   text-wrap: pretty;
 }
 
 .about-note p {
-  margin: 0 0 8px;
+  margin: 0;
 }
 
-.about-lead {
+.about-note b {
   color: var(--ink);
-  font: 600 18px/1.3 var(--font-display);
+  font-weight: 600;
 }
 
 .about-tiles {
