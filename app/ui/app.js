@@ -2985,7 +2985,7 @@ in ${x.cwd}`)}">
     const catchUp = late
       ? `<div class="lead is-late"><div class="lead-text"><p><span class="led red"></span>${late === 1 ? "A skill has" : `${late} skills have`} a newer version than the copy your agent has.</p></div>
           <div class="button-row">
-            ${lines.length ? `<button class="secondary" data-act="copy-say" data-text="${esc(lines.join("\n"))}" data-said="Copied. Run it in a terminal, then start your agent again.">${ICON.copy}Copy the update command</button>` : ""}
+            ${lines.length ? `<button class="secondary" data-act="copy-say" data-text="${esc(lines.join("\n"))}" data-said="Copied. Paste ${lines.length > 1 ? "them" : "it"} into a terminal, then start your agent again.">${ICON.copy}Copy the update ${lines.length > 1 ? "commands" : "command"}</button>` : ""}
             ${r.skillsCatchUp ? `<button class="secondary" data-act="copy-say" data-text="${esc(r.skillsCatchUp)}">${ICON.copy}Copy for your agent</button>` : ""}
           </div></div>`
       : "";

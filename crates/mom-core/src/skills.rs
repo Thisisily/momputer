@@ -95,12 +95,25 @@ pub fn behind(paths: &Paths) -> Vec<Skill> {
     list(paths).into_iter().filter(|s| s.behind).collect()
 }
 
-/// What to type to catch up, one line per plugin, for the copies that have a command.
+/// What to type to catch up, for the copies that have a command: each marketplace is asked what's
+/// new first (a plugin is updated to whatever its marketplace last heard of), then each plugin.
 pub fn update_lines(skills: &[Skill]) -> Vec<String> {
-    let mut lines: Vec<String> = skills.iter().flat_map(|s| &s.copies).filter(|c| c.behind).filter_map(|c| c.update.clone()).collect();
+    let mut plugins: Vec<String> = skills.iter().flat_map(|s| &s.copies).filter(|c| c.behind).filter_map(|c| c.update.clone()).collect();
+    plugins.sort();
+    plugins.dedup();
+    let mut lines: Vec<String> = plugins.iter().filter_map(|p| p.rsplit_once('@')).map(|(_, market)| format!("claude plugin marketplace update {market}")).collect();
     lines.sort();
     lines.dedup();
+    lines.extend(plugins);
     lines
+}
+
+/// A plugin's id ("plugin@marketplace") that's safe to put in a command someone will paste into
+/// a terminal: letters, digits, dots, dashes and underscores around one @, and nothing else. The
+/// id is read from a file anyone running as you can write.
+fn plain_id(id: &str) -> bool {
+    let word = |w: &str| !w.is_empty() && w.len() <= 80 && w.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')) && !w.starts_with('-');
+    id.split_once('@').is_some_and(|(plugin, market)| word(plugin) && word(market))
 }
 
 /// What to hand an agent so it brings the hand-copied ones up to date. None if there are none.
@@ -197,7 +210,7 @@ fn copies(paths: &Paths, plugins: &[(String, PathBuf)], name: &str, newest: &str
         let plugin = id.split('@').next().unwrap_or_default();
         let at = if plugin == BUNDLE { dir.join(name) } else if plugin == name { dir.clone() } else { continue };
         if is_skill(&at) {
-            found.push(("Claude Code", "plugin", at, Some(format!("claude plugin update {id}"))));
+            found.push(("Claude Code", "plugin", at, plain_id(id).then(|| format!("claude plugin update {id}"))));
         }
     }
     // ...or, when its list isn't there to say, whatever version sits in its plugin folder.
@@ -408,7 +421,12 @@ mod tests {
 
         let late = behind(&paths);
         assert_eq!(late.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["tidy-folders", "inbox-cleanup"]);
-        assert_eq!(update_lines(&late), ["claude plugin update momputer-skills@house"]);
+        assert_eq!(update_lines(&late), ["claude plugin marketplace update house", "claude plugin update momputer-skills@house"]);
+        // An id that isn't plain never ends up in a command to paste.
+        assert!(plain_id("momputer-skills@momputer") && plain_id("a.b_c@x-1"));
+        for id in ["momputer-skills@house; calc", "x@y z", "x@y&&z", "x@$(calc)", "x@`calc`", "-x@y", "x@", "@y", "x", "x@y@z|w"] {
+            assert!(!plain_id(id), "{id}");
+        }
         let ask = catch_up(&late).unwrap();
         assert!(ask.contains("tidy-folders") && ask.contains("no version") && ask.contains(&format!("{PAGE}/tidy-folders")) && !ask.contains("inbox-cleanup"), "{ask}");
         assert_eq!(catch_up(&[get("desktop-icons")]), None);
@@ -419,6 +437,7 @@ mod tests {
         put(paths.claude_dir().join("plugins").join("cache").join("momputer").join("momputer-skills").join("aaaaaaaaaaaa").join("inbox-cleanup"), Some("0.1.0"));
         let inbox = get("inbox-cleanup");
         assert_eq!((inbox.behind, inbox.copies[0].update.as_deref()), (true, Some("claude plugin update momputer-skills@momputer")));
+        assert_eq!(update_lines(&[inbox]), ["claude plugin marketplace update momputer", "claude plugin update momputer-skills@momputer"]);
         std::fs::remove_dir_all(&root).ok();
     }
 }

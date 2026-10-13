@@ -116,7 +116,7 @@ The read-only commands take `--json` for scripts and agents.
 
 Codex asks you to trust new hooks once: run `/hooks` in the Codex CLI.
 
-**Skill versions.** Each skill has a version (`metadata.version` in its `SKILL.md`). Mom knows the newest there was when she was built, and compares it with every copy your agents have: a plugin in Claude Code, or a folder you copied for Claude Code or Codex. A copy that's behind gets a red light under House rules > Skills, with the command that updates it (`claude plugin update momputer-skills@momputer`) or a note to hand your agent for a copy made by hand. She tells you once, and again only when it changes.
+**Skill versions.** Each skill has a version (`metadata.version` in its `SKILL.md`). Mom knows the newest there was when she was built, and compares it with every copy your agents have: a plugin in Claude Code, or a folder you copied for Claude Code or Codex. A copy that's behind gets a red light under House rules > Skills, with the two commands that update it (`claude plugin marketplace update momputer`, then `claude plugin update momputer-skills@momputer`) or a note to hand your agent for a copy made by hand. She tells you once, and again only when it changes.
 
 **The rules.** Edit them in the app or in `~/.momputer/house-rules.md`. Mom can write them into `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` and `~/.gemini/GEMINI.md` inside a clearly marked block, and take them out again without touching anything else.
 
