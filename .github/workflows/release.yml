@@ -1,7 +1,9 @@
 name: release
 
-# Builds momputer, has SignPath sign it, and drafts a GitHub release with the installers. Runs for
-# a version tag (v0.2.0) or by hand. Signing takes two requests, each approved by hand in SignPath:
+# Builds momputer, has SignPath sign it, and drafts a GitHub release with the installers. Run it
+# by hand (Actions > release > Run workflow): it drafts "momputer <version>" for the version in
+# Cargo.toml, and publishing that draft makes the tag. (It doesn't run for tags: publishing would
+# start it a second time, for a release that's already out.) Signing takes two requests, each approved by hand in SignPath:
 # first momputer.exe and mom.exe, then the installers built from those signed files. Without the
 # SignPath secret and settings (see docs/signing.md) the release is built unsigned and says so.
 #
@@ -9,8 +11,6 @@ name: release
 # the SignPath token and the files that get signed.
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:

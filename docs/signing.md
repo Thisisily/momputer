@@ -37,16 +37,16 @@ The NSIS setup program contains an uninstaller that NSIS builds on the fly, and 
 5. **In GitHub**, under Settings > Secrets and variables > Actions:
    - Secret `SIGNPATH_API_TOKEN`: the token.
    - Variables `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG` and `SIGNPATH_POLICY_SLUG`.
-6. **Protect release tags.** Add a tag ruleset so only maintainers can create or move `v*` tags. A tag is what starts a signed build.
+6. **Protect release tags.** Add a tag ruleset so only maintainers can create or move `v*` tags. A tag says which commit a release was built from.
 
 ## Cutting a release
 
-1. Bump the version in `Cargo.toml` (`[workspace.package]`) and in `app/src-tauri/tauri.conf.json`, and commit.
-2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`. The workflow refuses a tag that doesn't match the version.
-3. The [release workflow](../.github/workflows/release.yml) tests, builds, and asks SignPath to sign the binaries. Approve the request in SignPath within an hour. Then it builds the installers from the signed files and asks again. Approve that too.
-4. A draft release appears with the signed installers and `SHA256SUMS.txt`. Check it, write a few lines about what changed, and publish.
+1. Bump the version: `python scripts/version.py 0.2.2`, build once so `Cargo.lock` follows, commit and push.
+2. Start the [release workflow](../.github/workflows/release.yml) by hand: Actions > release > Run workflow (or `gh workflow run release.yml --ref main`).
+3. It tests, builds, and asks SignPath to sign the binaries. Approve the request in SignPath within an hour. Then it builds the installers from the signed files and asks again. Approve that too. (Without SignPath set up it skips the signing and says so in the release notes.)
+4. A draft release appears with the installers and `SHA256SUMS.txt`. Check it, write a few lines about what changed, and publish. Publishing makes the `v0.2.2` tag, and copies of momputer start telling people there's a newer one.
 
-You can also run the workflow by hand (Actions > release > Run workflow) to try it out. It drafts a release for the current version without a tag, and you can delete the draft afterwards.
+Running it again for the same version replaces the draft's files. Once a version is published the workflow refuses it: bump the version first.
 
 ## Checking a signature
 

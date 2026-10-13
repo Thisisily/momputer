@@ -115,16 +115,22 @@ pub fn owned_by_me(path: &Path) -> bool {
     }
     #[cfg(windows)]
     {
-        static ME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-        match (ME.get_or_init(acl::me), acl::owner(path)) {
-            (Some(me), Some(owner)) => *me == owner,
-            _ => false,
-        }
+        acl::owner(path).is_some_and(|owner| mine(&owner))
     }
     #[cfg(not(windows))]
     {
         true
     }
+}
+
+/// Is this owner the person running mom? Their own account, or whoever Windows names as the
+/// owner of what they create right now: a member of Administrators running elevated (an
+/// administrator's terminal, a build machine) makes files that belong to the Administrators
+/// group, and those are as much theirs.
+#[cfg(windows)]
+fn mine(owner: &str) -> bool {
+    static ME: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    ME.get_or_init(acl::me).iter().any(|sid| sid == owner)
 }
 
 /// The same question as `owned_by_me`, asked of a folder or file that is already open: the answer
@@ -133,11 +139,7 @@ pub fn open_and_mine(file: &std::fs::File) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::io::AsRawHandle;
-        static ME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-        match (ME.get_or_init(acl::me), acl::owner_of(file.as_raw_handle() as _)) {
-            (Some(me), Some(owner)) => *me == owner,
-            _ => false,
-        }
+        acl::owner_of(file.as_raw_handle() as _).is_some_and(|owner| mine(&owner))
     }
     #[cfg(not(windows))]
     {
@@ -348,28 +350,33 @@ mod acl {
         sid
     }
 
-    /// The person running mom, as a SID string.
-    pub fn me() -> Option<String> {
+    /// The person running mom, as SID strings: their own account, and the owner Windows gives
+    /// to what they create (the same account, or Administrators when they run elevated).
+    pub fn me() -> Vec<String> {
         use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-        use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+        use windows_sys::Win32::Security::{GetTokenInformation, TokenOwner, TokenUser, TOKEN_OWNER, TOKEN_QUERY, TOKEN_USER};
         use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
-        // SAFETY: plain Win32 calls with a buffer we own; the token handle is closed before returning,
-        // and the SID is read while the buffer is alive.
+        let mut out = Vec::new();
+        // SAFETY: plain Win32 calls with buffers we own; the token handle is closed before returning,
+        // and each SID is read while its buffer is alive.
         unsafe {
             let mut token: HANDLE = std::ptr::null_mut();
             if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
-                return None;
+                return out;
             }
-            let mut buf = vec![0u64; 128]; // 1 KB, 8-byte aligned for TOKEN_USER
+            let mut buf = vec![0u64; 128]; // 1 KB, 8-byte aligned for both structures
             let mut len = 0u32;
-            let ok = GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), (buf.len() * 8) as u32, &mut len);
-            CloseHandle(token);
-            if ok == 0 {
-                return None;
+            if GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), (buf.len() * 8) as u32, &mut len) != 0 {
+                out.extend(sid_string((*(buf.as_ptr() as *const TOKEN_USER)).User.Sid));
             }
-            let user = &*(buf.as_ptr() as *const TOKEN_USER);
-            sid_string(user.User.Sid)
+            let mut buf = vec![0u64; 128];
+            if GetTokenInformation(token, TokenOwner, buf.as_mut_ptr().cast(), (buf.len() * 8) as u32, &mut len) != 0 {
+                out.extend(sid_string((*(buf.as_ptr() as *const TOKEN_OWNER)).Owner));
+            }
+            CloseHandle(token);
         }
+        out.dedup();
+        out
     }
 
     /// Is `path` owned by someone trusted, with no one else allowed any of `rights` on it?
@@ -491,8 +498,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mom-mine-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("project")).unwrap();
         std::fs::write(dir.join("project").join("file.txt"), "x").unwrap();
-        assert!(owned_by_me(&dir.join("project")));
-        assert!(owned_by_me(&dir.join("project").join("file.txt")));
+        // Running as administrator (a build machine does), what you make belongs to the
+        // Administrators group: still yours.
+        #[cfg(windows)]
+        let who = format!("its owner is {:?}, you are {:?}", acl::owner(&dir.join("project")), acl::me());
+        #[cfg(not(windows))]
+        let who = "";
+        assert!(owned_by_me(&dir.join("project")), "{who}");
+        assert!(owned_by_me(&dir.join("project").join("file.txt")), "{who}");
         assert!(!owned_by_me(&dir.join("not-there")), "what can't be looked at isn't yours");
         #[cfg(windows)]
         {
