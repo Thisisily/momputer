@@ -1321,7 +1321,8 @@ in ${x.cwd}`)}">
     }
     const d = r.doc;
     const notes = [];
-    if (d && d.hidden) notes.push(`${plural(d.hidden, "key")} blanked. Mom doesn't show keys.`);
+    if (d && d.blind) notes.push("Mom couldn't read this as a settings file, so she blanked every value to be safe.");
+    else if (d && d.hidden) notes.push(`${plural(d.hidden, "key")} blanked. Mom doesn't show keys.`);
     if (d && d.cut) notes.push("The rest is longer than mom shows.");
     const body = r.error
       ? `<p class="empty">${esc(r.error)}</p>`

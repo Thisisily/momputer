@@ -142,6 +142,8 @@ pub struct DocText {
     pub hidden: usize,
     /// It was longer than mom shows.
     pub cut: bool,
+    /// It couldn't be read as what it should be, so every value in it is blanked.
+    pub blind: bool,
 }
 
 // ------------------------------------------------------------------ small helpers
@@ -240,36 +242,139 @@ fn secret_name(name: &str) -> bool {
     words.iter().map(|w| w.trim_end_matches(|c: char| c.is_ascii_digit())).any(|w| WORDS.contains(&w) || WORDS.contains(&w.trim_end_matches('s')))
 }
 
-/// A value that looks like a key whatever it's called: a known prefix, or a long run of letters
-/// and digits mixed together with no spaces.
+/// A word that looks like a key whatever it's called: a known prefix, or a long run of letters
+/// and digits mixed together. One word: a run of words is judged word by word (`blank_words`).
 fn secret_value(v: &str) -> bool {
     let v = v.trim();
-    const PREFIXES: &[&str] = &["sk-", "sk_", "pk_", "rk_", "ghp_", "gho_", "ghu_", "ghs_", "github_pat_", "xoxb-", "xoxp-", "xapp-", "AKIA", "AIza", "eyJ", "Bearer ", "Basic ", "glpat-", "hf_", "npm_", "shpat_", "whsec_"];
+    if v.contains(char::is_whitespace) || v.contains("://") {
+        return false;
+    }
+    const PREFIXES: &[&str] = &[
+        "sk-", "sk_", "pk_", "rk_", "ghp_", "gho_", "ghu_", "ghs_", "github_pat_", "xoxb-", "xoxp-", "xoxa-", "xapp-", "AKIA", "ASIA", "AIza", "eyJ", "glpat-", "hf_", "npm_",
+        "shpat_", "whsec_", "ya29.",
+    ];
     if PREFIXES.iter().any(|p| v.starts_with(p)) && v.len() >= 16 {
         return true;
     }
-    let token = |t: &str| {
-        t.len() >= 28
-            && t.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '/' | '=' | '.'))
-            && t.chars().any(|c| c.is_ascii_digit())
-            && t.chars().any(|c| c.is_ascii_alphabetic())
-            && !t.contains('\\')
-            && !t.contains("/") // a path or a package name isn't a key
-    };
-    !v.contains(' ') && token(v)
+    let of_a_key = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '/' | '=' | '.' | '~');
+    if v.len() < 28 || !v.chars().all(of_a_key) {
+        return false;
+    }
+    let digit = v.chars().any(|c| c.is_ascii_digit());
+    let (lower, upper) = (v.chars().any(|c| c.is_ascii_lowercase()), v.chars().any(|c| c.is_ascii_uppercase()));
+    if v.contains('/') {
+        // A path and a package name have slashes too. A key with slashes is base64: all three
+        // sorts of character, and nothing about it that reads as a file.
+        return v.len() >= 32 && digit && lower && upper && !v.contains('.') && !v.starts_with('/') && !v.starts_with('~');
+    }
+    digit && (lower || upper)
 }
 
-/// A web address without what might be a key in it: no sign-in part, no question mark and after.
+/// A part of an address's path that's a key rather than a word (some services put it there).
+fn key_in_path(part: &str) -> bool {
+    part.len() >= 20
+        && part.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '=' | '.' | '~' | '+'))
+        && part.chars().any(|c| c.is_ascii_digit())
+        && part.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+/// A web address without what might be a key in it: no sign-in part, nothing after a question
+/// mark, and no part of the path that looks like a key.
 fn plain_url(url: &str) -> String {
     let url = url.trim();
     let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
     let rest = rest.split(['?', '#']).next().unwrap_or(rest);
-    let rest = rest.rsplit_once('@').map(|(_, host)| host).filter(|_| !rest.contains('/') || rest.find('@') < rest.find('/')).unwrap_or(rest);
-    if scheme.is_empty() {
-        rest.to_string()
-    } else {
-        format!("{scheme}://{rest}")
+    let (place, path) = rest.split_once('/').map(|(h, p)| (h, Some(p))).unwrap_or((rest, None));
+    let host = place.rsplit_once('@').map(|(_, host)| host).unwrap_or(place);
+    let mut out = if scheme.is_empty() { host.to_string() } else { format!("{scheme}://{host}") };
+    if let Some(path) = path {
+        for part in path.split('/') {
+            out.push('/');
+            out.push_str(if key_in_path(part) { BLANK } else { part });
+        }
     }
+    out
+}
+
+/// Does an address carry a key: a password in its sign-in part, a key in its path, or something
+/// after the question mark that's named or shaped like one?
+fn url_has_secret(url: &str) -> bool {
+    let Some((_, rest)) = url.split_once("://") else { return false };
+    let (before, query) = rest.split_once('?').map(|(b, q)| (b, q.split('#').next().unwrap_or(q))).unwrap_or((rest, ""));
+    let (place, path) = before.split_once('/').unwrap_or((before, ""));
+    place.rsplit_once('@').is_some_and(|(who, _)| who.contains(':'))
+        || path.split('/').any(key_in_path)
+        || query.split('&').filter_map(|pair| pair.split_once('=')).any(|(name, value)| secret_name(name) || secret_value(value))
+}
+
+/// Blanks what's secret in a run of words (a command line, a header's value, a line of notes),
+/// leaving every space where it was. Always: a word that looks like a key, `NAME=value` where
+/// the name is a secret's, an address that carries a key. `strict` (it's from a settings file):
+/// also the word after a flag or a word that announces a key ("--token x", "Bearer x",
+/// "password: x"), and everything after the question mark in any address.
+fn blank_words(text: &str, strict: bool) -> (String, usize) {
+    const AROUND: &str = "\"'`()[]{}<>,;";
+    let mut out = String::with_capacity(text.len());
+    let mut hidden = 0;
+    let mut blank_next = false;
+    let mut rest = text;
+    while !rest.is_empty() {
+        let space = rest.len() - rest.trim_start().len();
+        out.push_str(&rest[..space]);
+        rest = &rest[space..];
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let (word, after) = rest.split_at(end);
+        rest = after;
+        if word.is_empty() {
+            continue;
+        }
+        // The word without the punctuation around it.
+        let lead = word.len() - word.trim_start_matches(|c| AROUND.contains(c)).len();
+        // (A full stop or the like after it is the sentence's, not the word's.)
+        let tail = word[lead..].trim_end_matches(|c| AROUND.contains(c) || matches!(c, '.' | '!' | '?')).len();
+        let (open, core, close) = (&word[..lead], &word[lead..lead + tail], &word[lead + tail..]);
+        if core.is_empty() {
+            out.push_str(word);
+            continue;
+        }
+        let plain = core.trim_end_matches(':').trim_start_matches('-').to_ascii_lowercase();
+        let scheme = matches!(plain.as_str(), "bearer" | "basic" | "token" | "apikey");
+        let mut put = |shown: &str| {
+            out.push_str(open);
+            out.push_str(shown);
+            out.push_str(close);
+        };
+        if blank_next && !scheme {
+            blank_next = false;
+            hidden += 1;
+            put(BLANK);
+            continue;
+        }
+        if let Some((name, _)) = core.split_once('=').filter(|(n, v)| !n.is_empty() && !v.is_empty() && !n.contains("://")) {
+            let bare = name.trim_start_matches('-');
+            let env_style = bare.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_') && bare.chars().any(|c| c.is_ascii_uppercase());
+            if secret_name(bare) && (strict || env_style) {
+                hidden += 1;
+                put(&format!("{name}={BLANK}"));
+                continue;
+            }
+        }
+        if secret_value(core) {
+            hidden += 1;
+            put(BLANK);
+            continue;
+        }
+        if core.contains("://") && (url_has_secret(core) || (strict && (core.contains('?') || core.contains('@')))) {
+            hidden += 1;
+            put(&plain_url(core));
+            continue;
+        }
+        if strict {
+            blank_next = scheme || ((core.starts_with('-') || core.ends_with(':')) && secret_name(&plain));
+        }
+        out.push_str(word);
+    }
+    (out, hidden)
 }
 
 /// Environment variables and `~` in a path from a settings file, filled in. `root`: what a
@@ -440,25 +545,11 @@ fn words(cmd: &str) -> Vec<String> {
 
 /// A command to show: the program's name and what follows, with anything key-like blanked.
 fn show_command(program: &str, args: &[String]) -> String {
-    let mut parts = vec![file_name_of(program)];
-    let mut blank_next = false;
-    for a in args.iter().take(12) {
-        let flag = a.trim_start_matches('-').split('=').next().unwrap_or("");
-        if blank_next || secret_value(a) {
-            parts.push(BLANK.to_string());
-            blank_next = false;
-        } else if a.starts_with('-') && a.contains('=') && secret_name(flag) {
-            parts.push(format!("{}={BLANK}", a.split('=').next().unwrap_or("")));
-        } else if a.contains("://") {
-            parts.push(plain_url(a));
-        } else if let Some(inside) = ["${CLAUDE_PLUGIN_ROOT}/", "${CLAUDE_PLUGIN_ROOT}\\", "$CLAUDE_PLUGIN_ROOT/"].iter().find_map(|p| a.strip_prefix(p)) {
-            parts.push(inside.to_string());
-        } else {
-            blank_next = a.starts_with('-') && secret_name(flag);
-            parts.push(a.clone());
-        }
-    }
-    tame(&parts.join(" "), 110)
+    // A plugin's own folder says nothing in a row: the script's place inside it is enough.
+    let inside = |a: &str| ["${CLAUDE_PLUGIN_ROOT}/", "${CLAUDE_PLUGIN_ROOT}\\", "$CLAUDE_PLUGIN_ROOT/"].iter().find_map(|p| a.strip_prefix(p)).unwrap_or(a).to_string();
+    let rest: Vec<String> = args.iter().take(12).map(|a| inside(a)).collect();
+    let (rest, _) = blank_words(&rest.join(" "), true);
+    tame(format!("{} {rest}", file_name_of(program)).trim_end(), 110)
 }
 
 fn strings(v: Option<&Value>) -> Vec<String> {
@@ -575,10 +666,7 @@ fn hooks_in(agent: &str, map: Option<&Value>, from: &str, doc: Option<&Doc>, pat
                         hook.mine = stem_of(&program) == "mom" && all.get(1).map(String::as_str) == Some("hook");
                         // A line of shell (it starts with a bracket, a variable, a cmdlet) isn't a program to look for.
                         let plain = program.chars().next().is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '~' | '/' | '\\' | '%'));
-                        hook.what = if plain { show_command(&program, &all[1..]) } else { tame(command, 110) };
-                        if hook.what.split_whitespace().any(secret_value) {
-                            hook.what = format!("{} {BLANK}", tame(&file_name_of(&program), 60));
-                        }
+                        hook.what = if plain { show_command(&program, &all[1..]) } else { tame(&blank_words(command, true).0, 110) };
                         if let Some((level, why)) = plain.then(|| check_command(&program, &all[1..], paths, root)).flatten() {
                             hook.level = level.into();
                             hook.fix = ask_agent(format!(
@@ -952,28 +1040,36 @@ pub fn check(paths: &Paths) -> Vec<AgentSetup> {
 fn blank_json(v: &mut Value, name: &str, inside_secrets: bool) -> usize {
     match v {
         Value::Object(m) => {
-            let all = inside_secrets || ["env", "headers", "env_http_headers", "http_headers", "environment"].contains(&name.to_ascii_lowercase().as_str());
-            m.iter_mut().map(|(k, x)| blank_json(x, k, all)).sum()
+            let all = inside_secrets || ["env", "headers", "env_http_headers", "http_headers", "environment", "secrets"].contains(&name.to_ascii_lowercase().as_str());
+            let mut hidden = 0;
+            // A name can be a key itself (a token used as a name): blanked too.
+            let entries: Vec<(String, Value)> = std::mem::take(m).into_iter().collect();
+            for (i, (k, mut x)) in entries.into_iter().enumerate() {
+                hidden += blank_json(&mut x, &k, all);
+                let k = if secret_value(&k) {
+                    hidden += 1;
+                    format!("{BLANK} ({})", i + 1)
+                } else {
+                    k
+                };
+                m.insert(k, x);
+            }
+            hidden
         }
         Value::Array(a) => {
-            // A key given as an argument: the word after "--token", or what follows "--token=".
+            // A key given as an argument: the word after "--token".
             let mut hidden = 0;
             let mut after_flag = false;
             for x in a.iter_mut() {
-                let flag = x.as_str().filter(|s| s.starts_with('-')).map(|s| s.trim_start_matches('-').to_string());
-                match (x.as_str().map(str::to_string), flag) {
-                    (Some(_), None) if after_flag => {
+                let word = x.as_str().map(str::to_string);
+                match word {
+                    Some(w) if after_flag && !w.starts_with('-') => {
                         *x = Value::String(BLANK.to_string());
                         hidden += 1;
                         after_flag = false;
                     }
-                    (Some(s), Some(f)) if f.contains('=') && secret_name(f.split('=').next().unwrap_or("")) => {
-                        *x = Value::String(format!("{}={BLANK}", s.split('=').next().unwrap_or("")));
-                        hidden += 1;
-                        after_flag = false;
-                    }
-                    (_, f) => {
-                        after_flag = f.is_some_and(|f| secret_name(&f));
+                    _ => {
+                        after_flag = word.is_some_and(|w| w.starts_with('-') && !w.contains('=') && secret_name(w.trim_start_matches('-')));
                         hidden += blank_json(x, name, inside_secrets);
                     }
                 }
@@ -983,14 +1079,16 @@ fn blank_json(v: &mut Value, name: &str, inside_secrets: bool) -> usize {
         Value::String(s) => {
             if s.is_empty() {
                 0
-            } else if inside_secrets || secret_name(name) || secret_value(s) {
+            } else if inside_secrets || secret_name(name) {
                 *s = BLANK.to_string();
                 1
-            } else if s.contains("://") && (s.contains('?') || s.contains('@')) {
-                *s = plain_url(s);
-                1
             } else {
-                0
+                // Anything else is read word by word: a whole command line can sit in one value.
+                let (shown, hidden) = blank_words(s, true);
+                if hidden > 0 {
+                    *s = shown;
+                }
+                hidden
             }
         }
         Value::Number(_) if inside_secrets || secret_name(name) => {
@@ -1001,35 +1099,71 @@ fn blank_json(v: &mut Value, name: &str, inside_secrets: bool) -> usize {
     }
 }
 
-/// Blanks every key and password in a TOML file, line by line, so it still reads as written.
-fn blank_toml(text: &str) -> (String, usize) {
+/// A settings file mom couldn't read as what it should be, so she can't tell which values are
+/// keys: every value is blanked, and only its shape and its names are left to see.
+fn blank_everything(text: &str) -> (String, usize) {
     let mut hidden = 0;
-    let mut secret_table = false;
     let lines: Vec<String> = text
         .lines()
         .map(|line| {
             let t = line.trim();
-            if t.starts_with('[') {
-                let table = t.trim_matches(|c| c == '[' || c == ']').to_ascii_lowercase();
-                secret_table = [".env", ".headers", ".env_http_headers", ".http_headers"].iter().any(|s| table.ends_with(s));
-                return line.to_string();
+            let indent = &line[..line.len() - line.trim_start().len()];
+            let comma = if t.ends_with(',') { "," } else { "" };
+            let shape = |v: &str| matches!(v.trim_end_matches(','), "" | "{" | "[" | "}" | "]" | "{}" | "[]" | "true" | "false" | "null");
+            if shape(t) || (t.starts_with('[') && t.ends_with(']') && !t.contains('"') && !t.contains(',')) {
+                return line.to_string(); // a bracket, or a table's heading
             }
-            let Some((key, value)) = line.split_once('=') else { return line.to_string() };
-            if t.starts_with('#') {
-                return line.to_string();
-            }
-            let name = key.trim().trim_matches(|c| c == '"' || c == '\'');
-            let bare = value.trim().trim_matches(|c| c == '"' || c == '\'');
-            let hide = !bare.is_empty() && !matches!(bare, "true" | "false") && (secret_table || secret_name(name) || secret_value(bare));
-            if hide {
+            if t.starts_with('#') || t.starts_with("//") {
                 hidden += 1;
-                format!("{key}= \"{BLANK}\"")
-            } else if bare.contains("://") && (bare.contains('?') || bare.contains('@')) {
-                hidden += 1;
-                format!("{key}= \"{}\"", plain_url(bare))
-            } else {
-                line.to_string()
+                return format!("{indent}{} {BLANK}", if t.starts_with('#') { "#" } else { "//" });
             }
+            // "name": value, or name = value. The name stays if it isn't a key itself.
+            let quoted_name = t.strip_prefix('"').and_then(|r| r.split_once('"')).filter(|(_, after)| after.trim_start().starts_with(':') || after.trim_start().starts_with('='));
+            let split = match quoted_name {
+                Some((name, after)) => Some((format!("\"{name}\""), after.trim_start()[..1].to_string(), after.trim_start()[1..].to_string())),
+                None => t.find(['=', ':']).filter(|i| !t[..*i].contains('"')).map(|i| (t[..i].trim_end().to_string(), t[i..i + 1].to_string(), t[i + 1..].to_string())),
+            };
+            match split {
+                Some((name, sep, value)) if shape(value.trim()) => format!("{indent}{name}{} {}", if sep == ":" { ":" } else { " =" }, value.trim()),
+                Some((name, sep, _)) => {
+                    hidden += 1;
+                    let name = if secret_value(name.trim_matches('"')) { format!("\"{BLANK}\"") } else { name };
+                    format!("{indent}{name}{} \"{BLANK}\"{comma}", if sep == ":" { ":" } else { " =" })
+                }
+                None => {
+                    hidden += 1;
+                    format!("{indent}\"{BLANK}\"{comma}")
+                }
+            }
+        })
+        .collect();
+    (lines.join("\n"), hidden)
+}
+
+/// Blanks every key and password in a TOML file. It's read properly and written out again (a
+/// value can be an inline table or a list, which a line-by-line look would miss), so comments
+/// are gone and the order may differ. (text, how many blanked, whether it couldn't be read.)
+fn blank_toml(text: &str) -> (String, usize, bool) {
+    let read = text.parse::<toml::Table>().ok().and_then(|t| serde_json::to_value(&t).ok());
+    if let Some(mut v) = read {
+        let hidden = blank_json(&mut v, "", false);
+        if let Ok(written) = toml::to_string_pretty(&v) {
+            return (written, hidden, false);
+        }
+    }
+    let (text, hidden) = blank_everything(text);
+    (text, hidden, true)
+}
+
+/// Blanks what looks like a key in a file of words (instructions, a skill), line by line.
+fn blank_text(text: &str) -> (String, usize) {
+    let mut hidden = 0;
+    let lines: Vec<String> = text
+        .split('\n')
+        .map(|line| {
+            let (shown, n) = blank_words(line, false);
+            hidden += n;
+            shown
         })
         .collect();
     (lines.join("\n"), hidden)
@@ -1045,14 +1179,16 @@ pub fn read(agents: &[AgentSetup], id: &str) -> Result<DocText, String> {
         return Err("That isn't a file any more.".into());
     }
     use std::io::Read;
-    // The part of a big file is found in the whole of it; anything else is read up to the limit.
-    let limit = if d.part.is_some() { MAX_SETTINGS } else { MAX_DOC };
+    // A settings file is read whole, however long: cut short, it couldn't be read as what it is,
+    // and what can't be read can't be checked for keys. Only what's shown is cut.
+    let settings = matches!(d.kind.as_str(), "json" | "toml");
+    let limit = if settings { MAX_SETTINGS } else { MAX_DOC };
     let mut bytes = Vec::new();
     std::fs::File::open(path).and_then(|f| f.take(limit + 1).read_to_end(&mut bytes)).map_err(|e| format!("Mom couldn't read it: {e}"))?;
     let mut cut = bytes.len() as u64 > limit;
     bytes.truncate(limit as usize);
     let text = String::from_utf8_lossy(&bytes).to_string();
-    let (mut text, hidden) = match d.kind.as_str() {
+    let (mut text, hidden, blind) = match d.kind.as_str() {
         "json" => match json(&text) {
             Some(mut v) => {
                 if let Some(part) = &d.part {
@@ -1075,14 +1211,21 @@ pub fn read(agents: &[AgentSetup], id: &str) -> Result<DocText, String> {
                     v = Value::Object(shown);
                 }
                 let hidden = blank_json(&mut v, "", false);
-                (serde_json::to_string_pretty(&v).unwrap_or_default(), hidden)
+                (serde_json::to_string_pretty(&v).unwrap_or_default(), hidden, false)
             }
-            // Not JSON after all (or cut short): as text, with anything key-like blanked by line.
-            None if d.part.is_none() => blank_toml(&text),
+            // Not JSON after all: mom can't tell which values are keys, so every one is blanked.
+            None if d.part.is_none() => {
+                let (text, hidden) = blank_everything(&text);
+                (text, hidden, true)
+            }
             None => return Err("Mom couldn't read that file as JSON.".into()),
         },
         "toml" => blank_toml(&text),
-        _ => (text, 0),
+        // Words (instructions, a skill): shown as written, but for anything that looks like a key.
+        _ => {
+            let (text, hidden) = blank_text(&text);
+            (text, hidden, false)
+        }
     };
     if text.len() as u64 > MAX_DOC {
         let mut end = MAX_DOC as usize;
@@ -1092,7 +1235,7 @@ pub fn read(agents: &[AgentSetup], id: &str) -> Result<DocText, String> {
         text.truncate(end);
         cut = true;
     }
-    Ok(DocText { id: d.id.clone(), title: d.title.clone(), kind: d.kind.clone(), path: d.path.clone(), text, hidden, cut })
+    Ok(DocText { id: d.id.clone(), title: d.title.clone(), kind: d.kind.clone(), path: d.path.clone(), text, hidden, cut, blind })
 }
 
 #[cfg(test)]
@@ -1260,8 +1403,8 @@ mod tests {
         assert_eq!(codex.skills[0].from, "shared with other agents");
         assert!(!codex.docs.iter().any(|d| d.title == "AGENTS.md"), "an empty file isn't worth reading");
         let toml = read(&agents, &codex.docs[0].id).unwrap();
-        assert!(toml.text.contains("\"CF-Access-Client-Secret\" = \"•••\"") && toml.text.contains("\"X-Team\" = \"•••\"") && toml.text.contains("approval_policy = \"never\""), "{}", toml.text);
-        assert_eq!(toml.hidden, 2);
+        assert!(toml.text.contains("CF-Access-Client-Secret = \"•••\"") && toml.text.contains("X-Team = \"•••\"") && toml.text.contains("approval_policy = \"never\""), "{}", toml.text);
+        assert!(toml.hidden == 2 && !toml.blind && !toml.text.contains("0123456789abcdef"));
         // Cursor's file has a comment in it, opencode's has comments and trailing commas: both read.
         assert_eq!((agents[1].servers[0].name.as_str(), agents[1].servers[0].level.as_str()), ("motion", "note"));
         assert!(!read(&agents, &agents[1].docs[0].id).unwrap().text.contains("\"x\""));
@@ -1309,6 +1452,72 @@ mod tests {
     }
 
     #[test]
+    fn a_key_is_blanked_wherever_it_sits_in_a_line() {
+        let strict = |t: &str| blank_words(t, true);
+        // A whole command in one value: the header, the address with a sign-in and a key in its path.
+        assert_eq!(
+            strict("curl -H \"Authorization: Bearer abcdef0123456789\" https://sam:pw@x.example/hook/abcdef0123456789abcdef0123?sig=1"),
+            (format!("curl -H \"Authorization: Bearer {BLANK}\" https://x.example/hook/{BLANK}"), 2)
+        );
+        assert_eq!(strict("API_KEY=abc node server.js --token abc --name atlas --password=hunter2"), (format!("API_KEY={BLANK} node server.js --token {BLANK} --name atlas --password={BLANK}"), 3));
+        assert_eq!(strict("password: hunter2"), (format!("password: {BLANK}"), 1));
+        // Every space stays where it was, and what isn't a key isn't touched.
+        assert_eq!(strict("a   b\tc  --name  atlas"), ("a   b\tc  --name  atlas".to_string(), 0));
+        assert_eq!(strict("npx -y @copperline/mcp-server C:\\Users\\sam\\notes"), ("npx -y @copperline/mcp-server C:\\Users\\sam\\notes".to_string(), 0));
+        // In notes and skills, only what is a key by its looks: prose about tokens stays prose.
+        let notes = "The token: is described at [the docs](https://docs.example/a?tab=readme). Set OPENAI_API_KEY=sk-live-0123456789abcdef and use `ghp_abcdefghijklmnopqrstuvwxyz0123456789`.";
+        let (shown, hidden) = blank_words(notes, false);
+        assert_eq!(shown, format!("The token: is described at [the docs](https://docs.example/a?tab=readme). Set OPENAI_API_KEY={BLANK} and use `{BLANK}`."));
+        assert_eq!(hidden, 2);
+    }
+
+    #[test]
+    fn a_settings_file_is_blanked_however_its_keys_are_written() {
+        let (root, paths) = fixture("blank");
+        let dir = paths.claude_dir();
+        // A hook's whole command in one value, and a server whose key is in its address.
+        put(
+            &dir.join("settings.json"),
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"npx notify --api-key sk-abc0123456789abcdef --to sam"}]}]},"notes":"sk-abc0123456789abcdef"}"#,
+        );
+        put(&paths.home.join(".claude.json"), r#"{"mcpServers":{"zapper":{"type":"http","url":"https://mcp.zapper.example/api/mcp/s/abcdef0123456789abcdef0123/mcp"}}}"#);
+        put(&dir.join("CLAUDE.md"), "# Notes\n\nPush with ghp_abcdefghijklmnopqrstuvwxyz0123456789 until Friday.\n\n    indented   code stays\tas it is\n");
+        // Codex: a key in an inline table and in a list, where a line-by-line look would miss them.
+        put(
+            &paths.codex_dir().join("config.toml"),
+            "# my key is tok_inacomment_0123456789abcdef\n[mcp_servers.notes]\ncommand = \"notes-mcp\"\nargs = [\"--token\", \"tok123\"]\nenv = { NOTES_KEY = \"abc123\", MODE = \"fast\" }\n",
+        );
+        // Cursor: a file cut off halfway. Mom can't tell what's a key in it, so nothing is shown.
+        put(&paths.home.join(".cursor").join("mcp.json"), "{\n  \"mcpServers\": {\n    \"x\": {\n      \"command\": \"x-mcp\",\n      \"env\": {\n        \"TOKEN\": \"tok_live_secret\",\n        \"plainword\"\n");
+        let agents = check(&paths);
+        let read_it = |agent: &str, title: &str| {
+            let a = agents.iter().find(|a| a.id == agent).unwrap();
+            read(&agents, &a.docs.iter().find(|d| d.title == title).unwrap_or_else(|| panic!("no {title}")).id).unwrap()
+        };
+        // In the list, the hook's row and the server's row don't show them either.
+        let claude = agents.iter().find(|a| a.id == "claude").unwrap();
+        assert_eq!(claude.hooks[0].what, format!("npx notify --api-key {BLANK} --to sam"));
+        assert_eq!(claude.servers[0].what, format!("https://mcp.zapper.example/api/mcp/s/{BLANK}/mcp"));
+        let settings = read_it("claude", "settings.json");
+        assert!(!settings.text.contains("sk-abc") && settings.text.contains("--to sam") && settings.hidden == 2, "{}", settings.text);
+        assert!(!read_it("claude", "MCP servers").text.contains("abcdef0123456789abcdef0123"));
+        let memory = read_it("claude", "CLAUDE.md");
+        assert!(!memory.text.contains("ghp_") && memory.text.contains("    indented   code stays\tas it is") && memory.hidden == 1, "{}", memory.text);
+        let toml = read_it("codex", "config.toml");
+        for secret in ["tok123", "abc123", "fast", "tok_inacomment"] {
+            assert!(!toml.text.contains(secret), "{secret} is shown:\n{}", toml.text);
+        }
+        assert!(toml.text.contains("notes-mcp") && toml.text.contains("--token") && !toml.blind, "{}", toml.text);
+        let cut = read_it("cursor", "mcp.json");
+        assert!(cut.blind && !cut.text.contains("tok_live_secret") && !cut.text.contains("x-mcp") && !cut.text.contains("plainword"), "{}", cut.text);
+        assert!(cut.text.contains("\"mcpServers\": {") && cut.text.contains("\"TOKEN\": \"•••\""), "the shape and the names are left:\n{}", cut.text);
+        // A TOML file that can't be read is treated the same way.
+        let (text, hidden, blind) = blank_toml("model = \"x\"\n[mcp_servers.a\nenv = { K = \"tok_live_secret\" }\n# tok_live_secret\n");
+        assert!(blind && hidden == 4 && !text.contains("tok_live_secret") && text.contains("model = \"•••\""), "{text}");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn keys_are_told_from_ordinary_words() {
         for name in ["API_KEY", "apiKey", "Authorization", "X-Auth-Token", "password", "client_secret", "GITHUB_PAT", "access-token"] {
             assert!(secret_name(name), "{name} is a secret's name");
@@ -1316,12 +1525,26 @@ mod tests {
         for name in ["command", "args", "url", "type", "model", "path", "keyboard", "author", "monkey_bars"] {
             assert!(!secret_name(name), "{name} isn't a secret's name");
         }
-        for v in ["sk-ant-abcdefghijklmnop", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "eyJhbGciOiJIUzI1NiJ9.e30.abc", "Bearer abcdef0123456789", "f3a9c1d27b6e4f0a8c5d9e1b2a3c4d5e6f708192"] {
+        for v in ["sk-ant-abcdefghijklmnop", "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "eyJhbGciOiJIUzI1NiJ9.e30.abc", "f3a9c1d27b6e4f0a8c5d9e1b2a3c4d5e6f708192", "aGVsbG8vd29ybGQrMTIzNDU2Nzg5MEFCQ0RFRkdISUo="] {
             assert!(secret_value(v), "{v} looks like a key");
         }
-        for v in ["node", "C:\\Users\\sam\\tools\\server.js", "@copperline/mcp-server-filesystem", "https://mcp.atlas.example/mcp", "claude-opus-5-5", "bypassPermissions", "a sentence with spaces in it that is long"] {
+        for v in [
+            "node",
+            "C:\\Users\\sam\\tools\\server.js",
+            "@copperline/mcp-server-filesystem",
+            "https://mcp.atlas.example/mcp",
+            "claude-opus-5-5",
+            "bypassPermissions",
+            "a sentence with spaces in it that is long",
+            "tools/scripts/build-2024/release-notes-v2/readme-final",
+            "src/components/Checkout2/PaymentForm.tsx",
+        ] {
             assert!(!secret_value(v), "{v} isn't a key");
         }
+        // A key in an address's path goes; the words around it stay.
+        assert_eq!(plain_url("https://mcp.zapper.example/api/mcp/s/abcdef0123456789abcdef0123/mcp"), format!("https://mcp.zapper.example/api/mcp/s/{BLANK}/mcp"));
+        assert!(url_has_secret("https://x.example/a?access_token=1") && url_has_secret("https://sam:pw@x.example/a") && url_has_secret("https://x.example/h/abcdef0123456789abcdef0123"));
+        assert!(!url_has_secret("https://docs.example/a?tab=readme") && !url_has_secret("https://x.example/@scope/pkg"));
         assert_eq!(plain_url("https://sam:hunter2@mcp.atlas.example/v1/mcp?key=abc#top"), "https://mcp.atlas.example/v1/mcp");
         assert_eq!(plain_url("https://mcp.atlas.example/files/@scope/x"), "https://mcp.atlas.example/files/@scope/x");
         assert_eq!(words(r#""C:\Program Files\x\run.exe" --name "two words" 'three more words' last"#), ["C:\\Program Files\\x\\run.exe", "--name", "two words", "three more words", "last"]);
