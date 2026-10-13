@@ -1814,11 +1814,14 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         // Projects can sit outside your own folders, where other people on this PC can write
         // (the top of a second drive). There: one at a time, never following a link, even one
         // swapped in while mom works, and only what's still yours at that moment.
-        // "In your own folders" goes by where a thing really is, not by how its path is spelled:
-        // a Projects folder in your profile can be a link to another drive.
+        // The fast way (many at once, by path) is only for a path nobody else can change under
+        // mom's feet: really inside your profile, and written exactly as it really is, so there
+        // is no link anywhere on the way that someone could point elsewhere between the check
+        // and the delete. Everything else goes the careful way.
         let home = std::fs::canonicalize(&ctx.paths.home).ok();
+        let spelled = |p: &Path| p.to_string_lossy().trim_start_matches(r"\\?\").to_ascii_lowercase();
         let at_home = |t: &Path| match (&home, std::fs::canonicalize(t)) {
-            (Some(home), Ok(real)) => real.starts_with(home),
+            (Some(home), Ok(real)) => real.starts_with(home) && spelled(&real) == spelled(t),
             _ => false,
         };
         each(&|c: &Cand| {
