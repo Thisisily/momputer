@@ -29,15 +29,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-      # What gets signed is built from scratch: no build cache then. A draft that won't be signed
-      # may reuse what earlier release builds compiled of the libraries momputer is built from
-      # (they rarely change, and compiling them is half of a build); momputer's own code is
-      # compiled afresh every time either way.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        if: env.SIGN != 'true'
-        with:
-          prefix-key: release
-
+      # No build cache here, signed or not: what people download is built from scratch, from this
+      # commit and the libraries Cargo.lock names. A cache would be quicker, but any job that runs
+      # on main (ci, pages) can write to the repository's caches under any key, so one bad run
+      # there could leave something in a cache that every later installer is then built from.
+      #
       # The Tauri CLI (it only puts the installers together) is Tauri's own ready-made build,
       # checked against the fingerprint written here. Compiling it from source took ten minutes
       # of every run. For a newer one, change the version and the fingerprint together: both
