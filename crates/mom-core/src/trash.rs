@@ -1020,23 +1020,31 @@ fn keep_yours(mut f: Found, keep: &[String]) -> Found {
     f
 }
 
-/// Says to keep `path` from now on (or, with `on` false, not to any more). True if that changed
-/// anything. Paths are compared the way Windows does, whatever their capitals and slashes.
-pub fn set_keep(cfg: &mut TrashConfig, path: &str, on: bool) -> bool {
+/// Says to keep `path` from now on (or, with `on` false, not to any more). Ok(true) if that
+/// changed anything, Ok(false) if it was so already. An error when it can't be kept: whoever
+/// asked must not go on believing it is. Paths are compared the way Windows does, whatever their
+/// capitals and slashes.
+pub fn set_keep(cfg: &mut TrashConfig, path: &str, on: bool) -> Result<bool, String> {
     let path = path.trim();
-    if path.is_empty() || path.len() > MAX_KEPT_PATH {
-        return false;
+    if path.is_empty() {
+        return Err("That has no path to keep it by.".into());
     }
     let want = norm_path(path);
     let had = cfg.keep.iter().any(|k| norm_path(k) == want);
-    if on == had || (on && cfg.keep.len() >= MAX_KEPT) {
-        return false;
+    if on == had {
+        return Ok(false);
+    }
+    if on && path.len() > MAX_KEPT_PATH {
+        return Err("That path is too long to keep.".into());
+    }
+    if on && cfg.keep.len() >= MAX_KEPT {
+        return Err(format!("That's more than mom can keep ({MAX_KEPT}). Let go of some in Settings first."));
     }
     cfg.keep.retain(|k| norm_path(k) != want);
     if on {
         cfg.keep.push(path.to_string());
     }
-    true
+    Ok(true)
 }
 
 /// Everything a spot holds right now, with what you said to keep already marked as staying.
@@ -2587,11 +2595,15 @@ mod tests {
         let text = |p: &Path| p.to_string_lossy().to_string();
         let mut cfg = TrashConfig::default();
         // Spelled another way (capitals, the other slash): the same place.
-        assert!(set_keep(&mut cfg, &text(&a).to_uppercase().replace('\\', "/"), true));
-        assert!(!set_keep(&mut cfg, &text(&a), true), "kept already");
+        assert_eq!(set_keep(&mut cfg, &text(&a).to_uppercase().replace('\\', "/"), true), Ok(true));
+        assert_eq!(set_keep(&mut cfg, &text(&a), true), Ok(false), "kept already");
         // Something inside a folder that would go: the folder stays too, or it would go along.
-        assert!(set_keep(&mut cfg, &text(&c.join("deep").join("c.log")), true));
-        assert!(!set_keep(&mut cfg, "  ", true) && !set_keep(&mut cfg, &"x".repeat(2_000), true));
+        assert_eq!(set_keep(&mut cfg, &text(&c.join("deep").join("c.log")), true), Ok(true));
+        // What can't be kept says so: nobody goes on thinking it is.
+        assert!(set_keep(&mut cfg, "  ", true).is_err() && set_keep(&mut cfg, &"x".repeat(2_000), true).is_err());
+        let mut full = TrashConfig { keep: (0..MAX_KEPT).map(|i| format!(r"C:\kept\{i}")).collect(), ..Default::default() };
+        assert!(set_keep(&mut full, r"C:\one-more", true).is_err() && full.keep.len() == MAX_KEPT);
+        assert_eq!(set_keep(&mut full, r"c:/KEPT/7", false), Ok(true), "letting go always works");
         assert_eq!(cfg.keep.len(), 2);
         {
             let ctx = ctx(&paths, &cfg);
@@ -2613,7 +2625,7 @@ mod tests {
             assert!(a.join("a.log").exists() && c.join("deep").join("c.log").exists() && !b.exists());
         }
         // Let go again, it goes like anything else.
-        assert!(set_keep(&mut cfg, &text(&a), false) && !set_keep(&mut cfg, &text(&a), false));
+        assert_eq!((set_keep(&mut cfg, &text(&a), false), set_keep(&mut cfg, &text(&a), false)), (Ok(true), Ok(false)));
         {
             let ctx = ctx(&paths, &cfg);
             assert!(item(&measure("old-temp", &ctx).unwrap(), "old-a").goes);

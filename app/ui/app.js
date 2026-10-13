@@ -2020,6 +2020,17 @@ in ${x.cwd}`)}">
     return `<div class="item${gone}" id="${id}"><span class="led red"></span>${main}${size}${acts}</div>`;
   }
 
+  /** After keeping or letting go: if it didn't take, show what mom really has, not what was hoped. */
+  async function keepSettled(ok) {
+    if (ok !== null) return;
+    try {
+      state.trash = await invoke("get_trash");
+      state.settings = await invoke("get_settings");
+    } catch {}
+    if (state.tab === "upkeep") render();
+    renderSheet();
+  }
+
   /** "…and 123 smaller items", with the button that lists them (four times as many at a time). */
   const moreButton = (s, unlisted, listed) =>
     `<button class="link-btn" data-act="show-more" data-spot="${esc(s.id)}" ${state.trash.busy || state.cleaning ? "disabled" : ""}>${unlisted <= listed * 3 ? "Show all" : "Show more"}</button>`;
@@ -3171,7 +3182,10 @@ in ${x.cwd}`)}">
     watchClean(id);
     const pk = p.pk;
     const toBin = recycling(s);
-    const pick = p.partial || toBin ? { goes: pk.goes, new: pk.new, ticked: [...pk.ticked], unticked: [...pk.unticked], recycle: toBin } : null;
+    // What this list shows as kept is named too: what you see staying stays, even if mom's own
+    // note of it and this list have drifted apart.
+    const keep = (s.items || []).filter((i) => i.kept).map((i) => i.path);
+    const pick = p.partial || toBin || keep.length ? { goes: pk.goes, new: pk.new, ticked: [...pk.ticked], unticked: [...pk.unticked], recycle: toBin, keep } : null;
     const r = await act(invoke("clean_trash", { id, pick }));
     state.cleaning = null;
     state.live = null;
@@ -3510,7 +3524,7 @@ in ${x.cwd}`)}">
           const list = (state.settings.config.trash.keep || []).filter((k) => k !== i.path);
           state.settings.config.trash.keep = keep ? [...list, i.path] : list;
         }
-        act(invoke("keep_item", { path: i.path, keep, spot: s.id }), () => (keep ? "Got it. I'll leave that one alone." : "Fine, it can go when you say so."));
+        act(invoke("keep_item", { path: i.path, keep, spot: s.id }), () => (keep ? "Got it. I'll leave that one alone." : "Fine, it can go when you say so.")).then(keepSettled);
         if (state.tab === "upkeep") render();
         renderSheet();
         break;
@@ -3518,13 +3532,13 @@ in ${x.cwd}`)}">
       case "unkeep": {
         const path = el.dataset.path;
         if (state.settings) state.settings.config.trash.keep = (state.settings.config.trash.keep || []).filter((k) => k !== path);
-        act(invoke("keep_item", { path, keep: false }), () => "Fine, it can go when you say so.");
+        act(invoke("keep_item", { path, keep: false }), () => "Fine, it can go when you say so.").then(keepSettled);
         renderSheet();
         break;
       }
       case "unkeep-all":
         if (state.settings) state.settings.config.trash.keep = [];
-        act(invoke("keep_nothing"), () => "Fine, they can go when you say so.");
+        act(invoke("keep_nothing"), () => "Fine, they can go when you say so.").then(keepSettled);
         renderSheet();
         break;
       case "stop-clean":

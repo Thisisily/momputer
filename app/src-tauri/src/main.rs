@@ -614,10 +614,16 @@ fn measure_spot(id: String, more: Option<bool>, app: AppHandle, s: State<'_, S>)
 fn keep_item(path: String, keep: bool, spot: Option<String>, app: AppHandle, s: State<'_, S>) -> Res<()> {
     {
         let mut cfg = s.config.lk();
-        if !trash::set_keep(&mut cfg.trash, &path, keep) {
-            return Ok(());
+        let before = cfg.trash.keep.clone();
+        // It's kept once it's written down. If it can't be (or can't be kept at all), nothing
+        // changes and the widget is told, so it never shows something as kept that isn't.
+        let changed = trash::set_keep(&mut cfg.trash, &path, keep)?;
+        if changed {
+            if let Err(why) = cfg.save(&s.paths) {
+                cfg.trash.keep = before;
+                return Err(format!("Couldn't save that, so nothing changed: {why}"));
+            }
         }
-        cfg.save(&s.paths).map_err(err)?;
     }
     let ids: Vec<String> = match spot {
         Some(id) => vec![id],
@@ -640,8 +646,11 @@ fn keep_nothing(app: AppHandle, s: State<'_, S>) -> Res<()> {
         if cfg.trash.keep.is_empty() {
             return Ok(());
         }
-        cfg.trash.keep.clear();
-        cfg.save(&s.paths).map_err(err)?;
+        let before = std::mem::take(&mut cfg.trash.keep);
+        if let Err(why) = cfg.save(&s.paths) {
+            cfg.trash.keep = before;
+            return Err(format!("Couldn't save that, so nothing changed: {why}"));
+        }
     }
     measure_trash_now(app, s.inner().clone(), None);
     Ok(())
@@ -712,7 +721,9 @@ fn clean_as_admin(s: &Shared, id: &str, pick: Option<&trash::Pick>) -> trash::Cl
     // Then the rest as administrator, told what you said to keep: an administrator who isn't you
     // (Windows asked for a password) reads their own settings, not yours.
     let mut args = format!("trash clean {id} --yes --elevated");
-    let keep = s.cfg().trash.keep;
+    let mut keep = s.cfg().trash.keep;
+    // And what the widget's own list showed as kept, should the two ever differ.
+    keep.extend(pick.iter().flat_map(|p| p.keep.iter().cloned()).filter(|k| !keep.contains(k)).collect::<Vec<_>>());
     let with_keep = (!keep.is_empty()).then(|| trash::Pick { keep, ..pick.cloned().unwrap_or_default() });
     if let Some(p) = with_keep.as_ref().or(pick) {
         let hex = mom_core::elevate::to_hex(&serde_json::to_string(p).unwrap_or_default());

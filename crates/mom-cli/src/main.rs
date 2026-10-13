@@ -651,7 +651,9 @@ fn run(cli: Cli) -> Result<i32> {
                     for p in &which {
                         // The whole path, so it means the same thing wherever mom runs from.
                         let full = std::path::absolute(p).map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|_| p.clone());
-                        trash::set_keep(&mut cfg.trash, &full, !release);
+                        if let Err(why) = trash::set_keep(&mut cfg.trash, &full, !release) {
+                            bail!("{full}: {why}");
+                        }
                     }
                     if cfg.trash.keep != before {
                         cfg.save(&paths)?;
