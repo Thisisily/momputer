@@ -1,0 +1,54 @@
+<!doctype html>
+<!-- The README's top picture (1600 x 700) and, with ?social, the link preview (1280 x 640).
+     Rendered to PNG by scripts/images.py. Mom is drawn by the app's own mom.js. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>momputer</title>
+<link rel="stylesheet" href="/app/ui/styles.css">
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; background: #050505; color: #fff; }
+  body {
+    display: grid;
+    grid-template-columns: 43% 1fr;
+    align-items: center;
+    background:
+      radial-gradient(ellipse at 30% 50%, rgba(255, 255, 255, 0.07), transparent 60%),
+      radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.075) 1px, transparent 1.6px) 0 0 / 24px 24px,
+      #050505;
+    font-family: "Geist", "Segoe UI", sans-serif;
+  }
+  .face {
+    justify-self: center;
+    width: 62vh;
+    height: 62vh;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 0 1.6vh #151515;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+  }
+  .face svg { width: 94%; height: auto; margin-top: 4%; }
+  .words { padding-right: 9%; }
+  .wordmark { font-family: "Doto", monospace; font-variation-settings: "ROND" 100; font-weight: 900; font-size: 17.5vh; line-height: 1; letter-spacing: 0.02em; margin-left: -0.04em; }
+  h1 { margin: 5.2vh 0 0; font-size: 6.9vh; line-height: 1.12; font-weight: 750; letter-spacing: -0.025em; }
+  p { margin: 3.2vh 0 0; font-size: 3.45vh; line-height: 1.5; color: #a8a8a8; max-width: 31em; }
+  .lights { display: flex; gap: 4.6vh; margin-top: 5vh; font-size: 2.9vh; font-weight: 550; color: #c9c9c9; }
+  .lights span { display: inline-flex; align-items: center; gap: 1.7vh; }
+  .lights i { width: 1.45vh; height: 1.45vh; border-radius: 50%; background: #2fe07a; box-shadow: 0 0 1.6vh rgba(47, 224, 122, 0.7); }
+  .lights i.red { background: #ff3b47; box-shadow: 0 0 1.6vh rgba(255, 59, 71, 0.7); }
+</style>
+</head>
+<body>
+  <div class="face" id="face"></div>
+  <div class="words">
+    <div class="wordmark">momputer</div>
+    <h1>A mom for you, your computer and your AIs.</h1>
+    <p>She keeps the whole house in order: turns off what AI agents left running, frees up disk space, and checks your drives, memory, sound and Windows settings. She always shows you first.</p>
+    <div class="lights"><span><i></i>watching</span><span><i class="red"></i>3 left running</span><span><i></i>20.1 GB to free up</span></div>
+  </div>
+  <script src="/app/ui/mom.js"></script>
+  <script>document.getElementById("face").innerHTML = window.momFace.svg("look");</script>
+</body>
+</html>

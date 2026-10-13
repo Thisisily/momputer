@@ -2702,7 +2702,7 @@ in ${x.cwd}`)}">
         <div class="about-face" aria-hidden="true">${face}</div>
         <div>
           <div class="about-word dot">momputer</div>
-          <div class="about-tag">A mom for your AI.</div>
+          <div class="about-tag">A mom for you, your computer and your AIs.</div>
           <div class="about-meta">${state.version ? `<span class="about-ver num">v${esc(state.version)}</span>` : ""}<span>Free for personal use</span></div>
         </div>
       </div>

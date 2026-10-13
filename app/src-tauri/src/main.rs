@@ -1,4 +1,4 @@
-// momputer: a mom for your AI.
+// momputer: a mom for you, your computer and your AIs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use mom_core::containers::{self, Machines};

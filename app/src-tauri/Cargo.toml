@@ -1,6 +1,6 @@
 [package]
 name = "momputer"
-description = "momputer: a mom for your AI. Tray widget that shows and cleans up everything your AI agents left running."
+description = "momputer: a mom for you, your computer and your AIs. Cleans up what AI agents left running and looks after the PC."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

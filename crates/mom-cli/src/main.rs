@@ -13,7 +13,7 @@ use std::path::PathBuf;
 #[command(
     name = "mom",
     version,
-    about = "momputer: a mom for your AI.\nShows what your AI agents left running and cleans up after them.",
+    about = "momputer: a mom for you, your computer and your AIs.\nShows what your AI agents left running, cleans up after them, and looks after the PC.",
     after_help = "Run `mom` with no arguments for a quick look."
 )]
 struct Cli {

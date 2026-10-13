@@ -1,28 +1,33 @@
 <p align="center">
-  <img src="docs/hero.png" width="100%" alt="momputer: a cartoon granny with her hair in a bun and giant round glasses smiles from a round white screen next to the dot-matrix word momputer, with the line 'A mom for your AI' and three tiny status lights">
+  <img src="docs/hero.png" width="100%" alt="momputer: a cartoon granny with her hair in a bun and giant round glasses smiles from a round white screen next to the dot-matrix word momputer, with the line 'A mom for you, your computer and your AIs' and three tiny status lights">
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Windows-10%20%C2%B7%2011-000?style=flat-square&logo=windows&logoColor=white" alt="Windows 10 and 11">
-  <img src="https://img.shields.io/badge/Rust-1.90%2B-000?style=flat-square&logo=rust&logoColor=white" alt="Rust 1.90 or newer">
-  <img src="https://img.shields.io/badge/Tauri-2-000?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2">
-  <img src="https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Cursor%20%C2%B7%20Gemini%20%C2%B7%20Copilot-000?style=flat-square" alt="Works with Claude Code, Codex, Cursor, Gemini and Copilot">
-  <a href="#license"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-000?style=flat-square" alt="PolyForm Noncommercial license"></a>
-  <a href="https://github.com/Thisisily/momputer/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Thisisily/momputer/ci.yml?branch=main&style=flat-square&label=build&labelColor=000&color=2fe07a" alt="Build status"></a>
+  <a href="https://thisisily.github.io/momputer/"><img src="docs/badges/download.svg" height="28" alt="Download for Windows"></a>
+  <img src="docs/badges/windows.svg" height="28" alt="Windows 10 and 11">
+  <a href="#license"><img src="docs/badges/free.svg" height="28" alt="Free for personal use"></a>
+  <a href="#big-mode"><img src="docs/badges/big-mode.svg" height="28" alt="BIG MODE"></a>
+  <a href="skills"><img src="docs/badges/skills.svg" height="28" alt="11 agent skills"></a>
+  <br>
+  <img src="docs/badges/agents.svg" height="28" alt="Works with Claude Code, Codex, Cursor, Gemini and Copilot">
 </p>
 
-<p align="center"><b>Your AI agents leave the stove on. Mom turns it off.</b><br>
-<sub>A Windows tray widget for people who run Claude Code, Codex, Cursor, Gemini or Copilot: it finds leftover dev servers, watchers, headless browsers, old <code>node_modules</code> and caches, says which agent left them, and cleans them up.</sub></p>
+<p align="center"><b>A mom for you, your computer and your AIs.</b><br>
+<sub>She turns off what AI agents left running, frees up disk space, checks your drives, memory, sound and Windows settings, and tidies your folders. A small widget by the clock when you want her out of the way, and BIG MODE when you want the whole picture. She always shows you first.</sub></p>
 
 <p align="center">
-  <img src="docs/showcase.png" width="100%" alt="Three views of the widget: the Running tab with programs Claude left behind, each with a red light and a Stop button; the details of Claude Code's scratch folders, listing what goes and what stays; and the Upkeep tab, with 15 GB mom can free up">
+  <img src="docs/showcase.png" width="100%" alt="Two views of momputer. The widget, with 27.9 GB mom can free up and what it is. And BIG MODE: a full window with your PC drawn in three dimensions on mom's desk, mom on its monitor, the memory sticks lit red, and a card saying they run slower than they're made for">
 </p>
 
 ---
 
 If you run a lot of coding agents, you know the feeling. Claude starts a dev server, Codex starts a watcher, somebody launches a headless browser "just to check", and then the session ends and nobody turns anything off. A week later Task Manager has 70 `node.exe`, 17 `bun.exe` and a `tail -f` from two weeks ago, your disk is full of scratch folders, and your CPU is melting.
 
-**momputer** is a little Windows tray widget (plus a `mom` command line) that keeps an eye on all of it. She knows which agent started what, tells you what was left behind, and cleans up after them, but only after showing you exactly what she's about to do.
+**momputer** keeps an eye on all of it. She knows which agent started what, tells you what was left behind, and cleans up after them, but only after showing you exactly what she's about to do.
+
+And since she's in the house anyway, she looks after the rest of it too: what's filling your disk, what's slowing the PC down, whether your drives and memory are healthy, why there are nine sound outputs and you can hear through two, and the Windows settings that drifted over the years.
+
+She comes three ways: a little widget that lives by the clock, [BIG MODE](#big-mode) when you want the whole picture, and a `mom` command line for you and your agents.
 
 ## Meet mom
 
@@ -35,6 +40,18 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
 <p align="center">
   <img src="docs/moods.png" width="100%" alt="Eight of mom's faces: her usual smile, a raised eyebrow for a few leftovers, a flat look for a lot, sweating when leftovers burn the CPU, a kiss after you clean up, heart eyes when all is tidy, sunglasses after the trash goes out, and asleep when she's on a break">
 </p>
+
+## BIG MODE
+
+<p align="center">
+  <img src="docs/screenshot-big-light.png" width="100%" alt="BIG MODE in the light theme: mom smiling with heart eyes on a monitor, beside an open PC tower with its drives picked out, and a card saying the SSD is healthy with 12% of its rated life used">
+</p>
+
+One button in the widget's title bar and she takes a whole window. The widget stays on the right. The rest is mom's desk: a monitor with mom on it (the same mom: she blinks, watches your pointer, and can be poked) and your PC with its side off, drawn with the parts it really has. As many memory sticks, drives and graphics cards as are in there, the processor under its fan, the motherboard, the speakers, and the power button for Windows itself.
+
+Each part has a little light, from the same checkup as the rest of the app: green when it's fine, red when something's wrong. Point at a part and its fans turn. Tap it and the desk leans in, a card says what she knows with the fix beside it, and mom tells you how it is. Drag to look around.
+
+Like the widget, it costs nothing while it sits there: nothing is drawn unless something changes.
 
 ## What she does
 
@@ -77,7 +94,9 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
       <h3>A checkup for your PC</h3>
       <p>Free space on every drive as a dot meter that turns red when it's nearly full, how much memory is in use and by whom, how long since you restarted, whether Windows is waiting to finish an update, whether Storage Sense is on, and every app that starts with Windows.</p>
       <p>Each tip has a button straight to the right Windows Settings page. Apps you haven't opened in a year (judged by when Windows saw you start them and when their data last changed) are listed with an Uninstall button that opens their own uninstaller. Runtimes, drivers, terminal tools, wallets and messengers are never listed.</p>
-      <p><b>This PC</b>: what it's made of, and whether it runs at its best and is looked after. Memory running below the speed it's made for (read from the sticks' part numbers, with what the BIOS setting is called on your board), sticks sharing one channel, Windows on a hard disk, a disk that says it's failing, a graphics card in a slow slot, an old BIOS. Which antivirus really protects you (from Defender itself, not Security Center's old records), two scanning at once, half-uninstalled ones still running their services, the firewall, memory integrity and Secure Boot. Whether your Windows version still gets security updates, updates paused or switched off by a tweak, when the last one installed, a restart waiting, an old graphics driver. And registry leftovers: right-click menu entries for programs that are gone (they slow the menu), services set to start whose program is gone (they slow starting up), apps Settings can't uninstall, and program shortcuts to nothing.</p>
+      <p><b>This PC</b>: what it's made of, and whether it runs at its best and is looked after. Memory of any kind (DDR3, DDR4, DDR5, laptop sticks, soldered) running below the speed it's made for (read from the sticks' part numbers, with what the BIOS setting is called on your board), sticks sharing one channel. Every drive: an NVMe SSD's own health report (how much of its rated life is used, how hot it runs, errors, how much has been written), Windows on a hard disk, a disk that says it's failing, TRIM or the weekly drive tidy switched off. Every graphics card (NVIDIA, AMD, Intel), one in a slow slot, an old BIOS. Which antivirus really protects you (from Defender itself, not Security Center's old records), two scanning at once, half-uninstalled ones still running their services, the firewall, memory integrity and Secure Boot. Whether your Windows version still gets security updates, updates paused or switched off by a tweak, when the last one installed, a restart waiting, an old graphics driver. And registry leftovers: right-click menu entries for programs that are gone (they slow the menu), services set to start whose program is gone (they slow starting up), apps Settings can't uninstall, and program shortcuts to nothing.</p>
+      <p><b>Sound</b>: the outputs and microphones Windows lists, sorted into the real ones, the ones apps made (Steam Streaming, VB-CABLE, Voicemod and the like) and the ones that go down a screen's cable, with the switch that takes one off the list, and a note when an uninstalled app left its sound device behind.</p>
+      <p><b>Terminal</b>: why PowerShell and cmd draw text wrong or slow down (the old console window, a font that can't draw today's symbols, no UTF-8, a PowerShell from 2016), each with its fix.</p>
       <p><b>Windows settings</b> that drifted over the years: old speed-up tweaks that do nothing today (a fixed page file, XP-era memory values), services switched off, a screen running below its refresh rate, a proxy nobody answers, and leftovers pointing at things that are gone (PATH folders, variables, startup entries). Each says what it does to you now and how Windows ships it. Fixes to your own settings are backed up and can be undone; the ones that need an administrator put back Windows' default, and Windows asks first.</p>
     </td>
   </tr>
@@ -101,7 +120,7 @@ She looks around every few seconds. A tiny light next to her name blinks each ti
 
 ## Install
 
-Run the installer from [Releases](https://github.com/Thisisily/momputer/releases). It installs for all users, in Program Files, so Windows asks for an administrator once, and the clean-ups that need an administrator only work from a copy installed this way. Releases are built by GitHub Actions and aren't code-signed yet, so Windows warns that the installer is from an unknown publisher: choose **More info**, then **Run anyway**.
+The easy way: **[thisisily.github.io/momputer](https://thisisily.github.io/momputer/)** has one download button and three steps. Or take the installer straight from [Releases](https://github.com/Thisisily/momputer/releases). It installs for all users, in Program Files, so Windows asks for an administrator once, and the clean-ups that need an administrator only work from a copy installed this way. Releases are built by GitHub Actions and aren't code-signed yet, so Windows warns that the installer is from an unknown publisher: choose **More info**, then **Run anyway**.
 
 Or build it from source:
 
@@ -120,7 +139,7 @@ cargo build --release -p mom-cli -p momputer
 
 Run from a folder of your own like this, it all works except the clean-ups that need an administrator: mom won't ask for one from a folder anything running as you could change.
 
-Mom lives in the tray. Left-click her to show or hide the widget, and right-click for "Clean up leftovers". Closing the widget just tucks it away. Drag it by mom or any empty spot.
+Mom lives in the tray. Left-click her to show or hide the widget, and right-click for "Clean up leftovers". Closing the widget just tucks it away. Drag it by mom or any empty spot. The arrows in its title bar are BIG MODE; press them again to shrink back.
 
 ## The `mom` command
 
@@ -267,13 +286,13 @@ Privacy policy: This program will not transfer any information to other networke
 
 ## Built with
 
-- [Tauri](https://tauri.app) for the widget.
+- [Tauri](https://tauri.app) for the app.
 - [GSAP](https://gsap.com) for mom's animation, free under GreenSock's [standard license](https://gsap.com/standard-license).
 - [idiomorph](https://github.com/bigskysoftware/idiomorph) (0BSD), so lists update in place.
 - [Geist](https://vercel.com/font) and [Doto](https://github.com/oliverlalan/Doto) fonts, under the SIL Open Font License.
 - [Lucide](https://lucide.dev) icons (ISC).
 - [Simple Icons](https://simpleicons.org) (CC0) for the coin and GitHub marks.
-- [three.js](https://threejs.org) (MIT), for something you'll have to find.
+- [three.js](https://threejs.org) (MIT), for the desk in BIG MODE, and for something you'll have to find.
 
 ## Made by
 
