@@ -204,7 +204,12 @@ mod tests {
     #[test]
     fn idle_projects_lose_their_build_folders_active_ones_keep_them() {
         let root = fixture("builds");
-        let ws = root.join("Workspace");
+        // Named the way mom names every folder she searches: by where it really is (see
+        // default_roots). A temp folder can be spelled another way, with a short name in it
+        // (C:\Users\RUNNER~1 on a build machine) or through a link, and a folder that isn't
+        // where its path says is one mom won't delete.
+        std::fs::create_dir_all(root.join("Workspace")).unwrap();
+        let ws = crate::util::real_path(&root.join("Workspace")).unwrap();
         // An old JS project nobody touched for 90 days.
         let old = ws.join("old-site");
         write(&old.join("package.json"), 20, 90);
