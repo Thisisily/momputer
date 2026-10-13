@@ -1171,7 +1171,7 @@ fn print_spot(st: &Style, s: &trash::Spot) {
 fn print_health(st: &Style, h: &mom_core::health::Health) {
     let warns = h.checks.iter().filter(|c| c.level == "warn").count();
     let line = match warns {
-        0 => "Clean bill of health. Mostly.".to_string(),
+        0 => "Clean bill of health.".to_string(),
         1 => "One thing needs your attention, sweetie.".to_string(),
         n => format!("{n} things need your attention, sweetie."),
     };

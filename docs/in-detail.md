@@ -133,7 +133,7 @@ momputer reads those markers (and only those: never the rest of a process's envi
 
 1. **Is the agent still around?** Claude Code records the PID of the session that launched each command. If that process is gone, whatever it started is *left behind*.
 2. **Is the parent really the parent?** Windows reuses PIDs. A "parent" that started after its child is an impostor, so the child is an *orphan*.
-3. **Harness or task?** Claude Code marks its own MCP servers `_harness` and the commands it runs `_agent`, so mom never nags about an agent's helpers, only about what it chose to start.
+3. **Harness or task?** Claude Code marks its own MCP servers `_harness` and the commands it runs `_agent`, so mom never brings up an agent's helpers, only what it chose to start.
 4. **Circumstantial evidence.** Git Bash's `sleep` and `tail` can't carry markers, so mom also uses fingerprints in paths (Claude's scratch folders are named after the session) and timing (started in the same folder after a live session began).
 5. **Nobody's?** Dev runtimes whose parent is gone and carry no fingerprints are *orphaned*. Your own browser, your terminal's processes and apps' bundled runtimes (Adobe's private `node.exe`, say) are left alone.
 

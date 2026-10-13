@@ -117,7 +117,7 @@
       containers: 0,
       byAgent: [],
     },
-    mood: { face: "disappointed", level: 2, line: `${left.length} leftovers. Were you raised in a barn?` },
+    mood: { face: "helping", level: 2, line: `${left.length} leftovers. One tap and they're gone.` },
   };
 
   const GB = 1024 * MB;
@@ -607,7 +607,7 @@
       : { face: "proud", level: 0, line: "All tidy. I'm proud of you, sweetie." };
     const freed = gone.reduce((a, x) => a + x.mem, 0);
     setTimeout(() => emit("snapshot", JSON.parse(JSON.stringify(snapshot))), 600);
-    return { stopped: [], alreadyGone: [], failed: [], freedMem: freed, groups: gone.length, message: gone.length === 1 ? "Turned it off. You're welcome." : `Turned off ${gone.length} things. You're welcome.` };
+    return { stopped: [], alreadyGone: [], failed: [], freedMem: freed, groups: gone.length, message: gone.length === 1 ? "Turned it off. That's memory back for you." : `Turned off ${gone.length} things. That's memory back for you.` };
   }
 
   const handlers = {

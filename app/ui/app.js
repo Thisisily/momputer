@@ -349,8 +349,9 @@
   const lookedAgo = () => (state.snap ? Math.max(0, Math.floor(Date.now() / 1000) - state.snap.takenAt) : 0);
   const stale = () => !state.paused && !!state.snap && lookedAgo() > 20;
 
-  /** Mostly she smiles, "c:". A raised eyebrow once a few things pile up, a flat look when it's a
-      lot, and a stern one only when it's really bad. The light by her name says if she's stuck. */
+  /** Mostly she smiles, "c:". A thoughtful look once a lot piles up, and a worried one while
+      leftovers keep the processor busy. Never a cross one: she helps, she doesn't tell anyone off.
+      The light by her name says if she's stuck. */
   function faceNow() {
     const s = state.snap;
     if (state.paused) return "asleep";
@@ -359,10 +360,10 @@
     if (!s) return "look";
     if (melting(s)) return "melting";
     switch (s.mood.face) {
-      case "disappointed":
-        return s.mood.level >= 3 ? "unamused" : "hmm";
-      case "furious":
-        return "stern";
+      case "helping":
+        return s.mood.level >= 3 ? "hmm" : "look";
+      case "busy":
+        return "hmm";
       default:
         return "look";
     }
@@ -435,7 +436,7 @@
     }
     const alarm = $("#alarm");
     alarm.hidden = !melting(s);
-    if (melting(s)) alarm.innerHTML = `<span class="led red blink"></span>Leftovers are burning ${Math.round(s.summary.leftoverCpu)}% of your CPU.`;
+    if (melting(s)) alarm.innerHTML = `<span class="led red blink"></span>Leftovers are using ${Math.round(s.summary.leftoverCpu)}% of your CPU.`;
     const count = n > 0 ? String(n) : "";
     if ($("#count-running").textContent !== count) {
       $("#count-running").textContent = count;
@@ -1591,9 +1592,9 @@ in ${x.cwd}`)}">
     const p = bigModel().parts.find((x) => x.id === state.bigPart);
     if (p && state.system) {
       const trouble = p.checks.find((c) => c.level === "warn");
-      react(p.level === "warn" ? "stern" : p.level === "tip" || p.level === "none" ? "hmm" : "proud", 3200);
+      react(p.level === "warn" || p.level === "none" ? "hmm" : p.level === "tip" ? "look" : "proud", 3200);
       const none = p.level === "none" ? `I can't see ${p.subject.toLowerCase().replace("your ", "a ")} from here.` : "";
-      say(none || (trouble ? trouble.title + "." : p.level === "tip" ? `${p.subject} could do better.` : `${p.subject} ${p.plural ? "are" : "is"} fine, sweetie.`), 4200);
+      say(none || (trouble ? trouble.title + "." : p.level === "tip" ? `I have a tip for ${p.subject.toLowerCase()}.` : `${p.subject} ${p.plural ? "are" : "is"} fine, sweetie.`), 4200);
     }
     renderStage();
   }
@@ -2391,10 +2392,10 @@ in ${x.cwd}`)}">
   }
   const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
   const CHORE_LINES = {
-    books: "Alphabetical? Never mind. It'll do.",
+    books: "All in a row. Lovely.",
     bed: "Hospital corners. I raised you right.",
     coffee: "Oh, you shouldn't have. c:",
-    laundry: "In the basket, not next to it. Good.",
+    laundry: "Right in the basket. Thank you, sweetie.",
     picture: "Is that me? What a lovely frame.",
     curtains: "Let the light in. Much better.",
   };
@@ -2530,7 +2531,7 @@ in ${x.cwd}`)}">
       } catch {}
     }
     playroom.el.querySelector(".pr-time").textContent = mmss(took);
-    momSays("Spotless. Who are you and what have you done with my kid?", "kiss");
+    momSays("Spotless. Beautifully done.", "kiss");
     const end = playroom.el.querySelector(".pr-end");
     end.innerHTML = `<div class="pr-end-leds" aria-hidden="true">${'<span class="led green"></span>'.repeat(6)}</div>
       <p class="pr-end-big dot num">${mmss(took)}</p>

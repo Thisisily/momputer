@@ -6,7 +6,7 @@ license: Apache-2.0 (complete terms in LICENSE.txt)
 
 # Mom
 
-You share this computer with a human and many other agents. Most leftover node, bun and python processes, forgotten containers, screenshot piles and dated report folders come from agents that finished a task and walked away. Don't be one of them.
+You share this computer with a human and many other agents. Most leftover node, bun and python processes, forgotten containers, screenshot piles and dated report folders come from agents that finished a task without tidying up. A minute of tidying at the end keeps the place nice for everyone.
 
 ## Before you say you're done
 

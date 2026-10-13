@@ -364,14 +364,14 @@ fn alerts(app: &AppHandle, s: &Shared, cfg: &Config, snap: &Snapshot) {
         let more = if ripe.len() > 3 { format!(" and {} more", ripe.len() - 3) } else { String::new() };
         let mem: u64 = ripe.iter().map(|g| g.mem).sum();
         let body = format!(
-            "{who} left {} thing{} running: {}{more} ({}). Open momputer to turn {} off.",
+            "{who} left {} thing{} running: {}{more} ({}). Open momputer and I'll turn {} off.",
             ripe.len(),
             if ripe.len() == 1 { "" } else { "s" },
             what.join(", "),
             human_bytes(mem),
             if ripe.len() == 1 { "it" } else { "them" }
         );
-        toast(app, "Somebody left the lights on", &body);
+        toast(app, if ripe.len() == 1 { "Something is still running" } else { "A few things are still running" }, &body);
         *last_toast = now;
         seen.extend(ripe.iter().map(|g| g.id.clone()));
     }
@@ -386,11 +386,11 @@ fn alerts(app: &AppHandle, s: &Shared, cfg: &Config, snap: &Snapshot) {
     let lasting = melting_since.is_some_and(|t| now.saturating_sub(t) >= 120);
     if ui.notifications && ui.notify_meltdown && lasting && now.saturating_sub(*last_alarm) >= 3600 {
         let body = format!(
-            "Leftovers have been burning {:.0}% of your CPU for a while ({} things). Open momputer and press Clean up.",
+            "Leftovers have been using {:.0}% of your CPU for a while ({} things). Open momputer and I'll clear them.",
             snap.summary.leftover_cpu, snap.summary.leftovers
         );
-        toast(app, "Your computer is melting", &body);
-        s.note(format!("Meltdown alarm: leftovers at {:.0}% CPU.", snap.summary.leftover_cpu));
+        toast(app, "Your computer is working hard", &body);
+        s.note(format!("Said so: leftovers at {:.0}% CPU.", snap.summary.leftover_cpu));
         *last_alarm = now;
     }
 }

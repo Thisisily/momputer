@@ -322,7 +322,7 @@ fn stop(agent: HookAgent, inp: &HookInput, cfg: &Config, paths: &Paths, file: &P
     }
     if !mess.is_empty() {
         mess.truncate(10);
-        reason.push_str(&format!("\nNew mess in {}:\n", inp.cwd));
+        reason.push_str(&format!("\nNew in {} and not put away yet:\n", inp.cwd));
         reason.push_str(&mess.join("\n"));
         reason.push_str("\nPut it where it belongs (and fix anything that points at the old path), or delete it if it has no further use.\n");
     }
