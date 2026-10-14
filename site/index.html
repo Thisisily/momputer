@@ -125,6 +125,8 @@
                 <li>Programs, Startup and Browsers show what's open, what starts with Windows, and every browser extension, with a switch for each.</li>
                 <li>If leftovers start using a lot of CPU, she tells you. If you let her, she turns them off herself.</li>
                 <li>Agent health: every MCP server, hook and setting your agents have, and which servers answer or are waiting for a sign-in.</li>
+                <li>Homework: what each agent session changed, deleted, installed and pushed this week, beside what it told you.</li>
+                <li>Setup weight: how much every new chat starts with, and the heaviest part.</li>
               </ul>
             </details>
           </div>
@@ -145,6 +147,9 @@
                 <li>Apps: the apps and Steam games you haven't opened in a year, with how big each one is and where it lives.</li>
                 <li>Files: copies of the same file, and big files nobody opened in a year.</li>
                 <li>Old conversations aren't deleted. Mom moves them to another drive and leaves a link, so your agents still open them.</li>
+                <li>Old driver versions, and downloads you're done with.</li>
+                <li>Autopilot, off until you switch it on: once a week she clears the safe things herself.</li>
+                <li>What I did: everything mom did, day by day, with Undo where it can be undone.</li>
               </ul>
             </details>
           </div>
@@ -163,6 +168,10 @@
                 <li>An SSD's own health report: how much of its rated life is used, and how hot it runs.</li>
                 <li>Memory running below the speed it's made for.</li>
                 <li>Sound devices an uninstalled app left behind.</li>
+                <li>Screens below their refresh rate, devices with problems, slow starts, and what wakes the PC at night.</li>
+                <li>Stability: a month of crashes at a glance, and a week of watching after a memory or BIOS change.</li>
+                <li>Backups: folders nothing backs up, and work that exists only on this PC.</li>
+                <li>Keys left in your shell history or in files git keeps, with a button to blank them.</li>
                 <li>Fixes to your own settings are backed up and can be undone.</li>
               </ul>
             </details>
@@ -211,13 +220,13 @@
         <article class="tile card full">
           <div class="tile-text">
             <h3><span class="badge dot">BIG MODE</span></h3>
-            <p>One button turns the widget into a full window, with your PC on mom's desk, drawn with the parts it really has. Each part has a light. Tap one and mom tells you what's wrong and how to fix it. It's also where you read a skill, a hook or a settings file, with keys blanked.</p>
+            <p>One button turns the widget into a full window, with your PC on mom's desk, drawn with the parts it really has. Each part has a light, and the glass side swings open when you pick one inside. Tap one and mom tells you what's wrong and how to fix it. It's also where you read a skill, a hook or a settings file, with keys blanked.</p>
             <p class="go-live" id="go-big-row" hidden><button class="ghost" type="button" id="go-big"><span class="led green" aria-hidden="true"></span>Open it here</button></p>
           </div>
           <div class="tile-shots">
             <picture>
               <source media="(prefers-color-scheme: dark)" srcset="shots/big-dark-1280.webp 1280w, shots/big-dark.webp 2560w" sizes="(min-width: 1264px) 1116px, calc(100vw - 52px)">
-              <img src="shots/big-light-1280.webp" srcset="shots/big-light-1280.webp 1280w, shots/big-light.webp 2560w" sizes="(min-width: 1264px) 1116px, calc(100vw - 52px)" width="2560" height="1640" loading="lazy" alt="BIG MODE: a full window with mom on a monitor on her desk, next to an open PC tower with a small light on each part. A card tells you about the part you picked, and the widget's lists run down the right side.">
+              <img src="shots/big-light-1280.webp" srcset="shots/big-light-1280.webp 1280w, shots/big-light.webp 2560w" sizes="(min-width: 1264px) 1116px, calc(100vw - 52px)" width="2560" height="1640" loading="lazy" alt="BIG MODE: a full window with mom on a monitor on her desk, next to a PC tower with its glass side open and a small light on each part. A card tells you about the part you picked, and the widget's lists run down the right side.">
             </picture>
           </div>
         </article>
@@ -241,6 +250,7 @@
             <div><dt><code>mom pc</code></dt><dd>what the PC is, and its protection, updates and hardware</dd></div>
             <div><dt><code>mom tidy &lt;folder&gt;</code></dt><dd>grade a folder and list what to fix</dd></div>
             <div><dt><code>mom undo</code></dt><dd>undo the last tidy-up</dd></div>
+            <div><dt><code>mom homework</code></dt><dd>what each agent session did this week</dd></div>
           </dl>
           <p class="go"><a href="https://github.com/Thisisily/momputer/blob/main/docs/in-detail.md#the-mom-command">Every command</a></p>
         </article>
@@ -252,6 +262,7 @@
             <li><b>When a session starts</b> <span>She hands the agent the house rules.</span></li>
             <li><b>When the agent thinks it's done</b> <span>She asks about servers still running and new clutter in the project. She mentions each thing once.</span></li>
             <li><b>When the session ends</b> <span>She notes what it left behind.</span></li>
+            <li><b>When an agent is waiting for you</b> <span>She lets you know, if you switch it on.</span></li>
           </ul>
           <p class="small">They're hooks, for Claude Code and Codex. Switch them on under House rules, or run <code>mom install claude-hooks codex-hooks</code>.</p>
         </article>
