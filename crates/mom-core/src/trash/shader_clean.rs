@@ -204,15 +204,13 @@ fn safe_component(part: &str) -> bool {
             && matches!(stem.as_bytes()[3], b'1'..=b'9'))
 }
 
-/// These are not shader-cache entries even if a profile was accidentally moved into a root.
-/// No cookie/auth database is opened to make this decision.
-fn protected_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    ["cookies", "login data", "web data", "history", "key4.db", "cert9.db", "cookies.sqlite", "places.sqlite"]
-        .iter().any(|base| name == *base || name.strip_prefix(base).is_some_and(|s| matches!(s, "-wal" | "-shm" | "-journal")))
-        || matches!(name.as_str(), "local state" | "preferences" | "secure preferences" | "sessions"
-            | "session storage" | "local storage" | "indexeddb" | "logins.json" | "sessionstore.jsonlz4"
-            | "sessionstore-backups" | "profiles.ini" | "current session" | "current tabs" | "last session" | "last tabs")
+/// A browser's marks: a root holding one isn't only a shader cache (a profile was moved into
+/// it, say), so nothing in it is touched. Only names that show a browser is here, never a list
+/// of what a browser keeps, and nothing is opened to decide.
+fn browser_mark(name: &str) -> bool {
+    matches!(name.to_ascii_lowercase().as_str(), "local state" | "preferences" | "secure preferences" | "prefs.js"
+        | "profiles.ini" | "local storage" | "session storage" | "indexeddb" | "service worker" | "webstorage"
+        | "transportsecurity" | "network persistent state")
 }
 
 #[cfg(not(windows))]
@@ -358,7 +356,7 @@ mod platform {
             let path = child.path();
             let name = child.file_name();
             let name = name.to_str().ok_or(())?;
-            if !safe_component(name) || protected_name(name) { return Err(()); }
+            if !safe_component(name) || browser_mark(name) { return Err(()); }
             let kind = child.file_type().map_err(|_| ())?;
             if kind.is_symlink() { return Err(()); }
             if kind.is_dir() {
@@ -417,9 +415,9 @@ mod tests {
     }
 
     #[test]
-    fn session_markers_are_not_shader_entries() {
-        for name in ["Cookies", "Cookies-wal", "Login Data-journal", "Local State", "Sessions", "cookies.sqlite-shm", "key4.db", "logins.json"] { assert!(protected_name(name), "{name}"); }
-        assert!(!protected_name("abc123.nvph"));
+    fn browser_marks_are_not_shader_entries() {
+        for name in ["Local State", "Preferences", "prefs.js", "profiles.ini", "IndexedDB", "Local Storage", "TransportSecurity"] { assert!(browser_mark(name), "{name}"); }
+        assert!(!browser_mark("abc123.nvph"));
     }
 
     #[test]
@@ -510,7 +508,7 @@ mod tests {
             assert!(f.scan().view().files.is_empty());
             // This fixture resets its own synthetic read-only attribute solely for teardown.
             let mut permissions = fs::metadata(&c).unwrap().permissions(); permissions.set_readonly(false); fs::set_permissions(&c, permissions).unwrap();
-            f.file("profile/Cookies"); assert!(f.scan().view().files.is_empty());
+            f.file("profile/Local State"); assert!(f.scan().view().files.is_empty());
             assert!(a.exists() && b.exists() && c.exists());
         }
 
