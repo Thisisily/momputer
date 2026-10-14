@@ -269,6 +269,11 @@ fn settings(repo: &Path) -> Option<String> {
     std::fs::read_to_string(&config).ok()
 }
 
+/// Whether mom asks git about `repo` at all: an ordinary project whose settings are plain data.
+pub(crate) fn askable(repo: &Path) -> bool {
+    settings(repo).is_some_and(|c| plain(&c))
+}
+
 /// Everything in `.git` is a real folder or file here: no link, no junction, nothing that
 /// can't be read. False as well past MAX_GIT_ENTRIES: then it wasn't all looked at.
 fn all_here(dot: &Path) -> bool {
@@ -296,7 +301,7 @@ fn all_here(dot: &Path) -> bool {
 }
 
 /// A link or junction: something that leads elsewhere.
-fn linked(meta: &std::fs::Metadata) -> bool {
+pub(crate) fn linked(meta: &std::fs::Metadata) -> bool {
     let mut yes = meta.file_type().is_symlink();
     #[cfg(windows)]
     {
@@ -367,7 +372,7 @@ fn mtime(path: &Path) -> Option<u64> {
 fn look(git: &Path, repo: &Path, now: u64) -> Option<Look> {
     let name = repo.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| repo.to_string_lossy().to_string());
     let mut l = Look { repo: repo.to_path_buf(), name, ..Default::default() };
-    // Only a project whose settings are plain data is asked about (see PLAIN).
+    // Only a project whose settings are plain data is asked about (see PLAIN and askable).
     let config = settings(repo)?;
     if !plain(&config) {
         return None;

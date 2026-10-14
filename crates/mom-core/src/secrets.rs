@@ -280,17 +280,40 @@ struct Tracked {
     kinds: Vec<&'static str>,
 }
 
+/// `rel` (a path git lists) inside `repo`, when every folder on the way is a real folder in the
+/// project: none is a link or junction that leads somewhere else.
+fn in_project(repo: &Path, rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let rel = Path::new(rel);
+    if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
+        return None;
+    }
+    let mut dir = repo.to_path_buf();
+    for part in rel.parent()?.components() {
+        dir.push(part);
+        let m = std::fs::symlink_metadata(&dir).ok()?;
+        if crate::repos::linked(&m) || !m.is_dir() {
+            return None;
+        }
+    }
+    Some(repo.join(rel))
+}
+
 fn tracked_in(git: &Path, repo: &Path, budget: &std::sync::atomic::AtomicU64) -> Vec<Tracked> {
     use std::sync::atomic::Ordering;
+    // Only a project mom asks git about anyway (see repos::askable).
+    if !crate::repos::askable(repo) {
+        return vec![];
+    }
     let mut args = vec!["ls-files", "-z", "--"];
     args.extend_from_slice(PATHSPECS);
     let Some(listed) = crate::repos::ask(git, repo, &args) else { return vec![] };
     let mut out = Vec::new();
     for rel in listed.split(|b| *b == 0).filter(|p| !p.is_empty()).take(MAX_FILES) {
         let rel = String::from_utf8_lossy(rel).into_owned();
-        let path = repo.join(&rel);
+        let Some(path) = in_project(repo, &rel) else { continue };
         let Ok(m) = std::fs::symlink_metadata(&path) else { continue };
-        if !m.is_file() || m.len() > MAX_FILE || budget.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(m.len())).is_err() {
+        if !m.is_file() || crate::repos::linked(&m) || m.len() > MAX_FILE || budget.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| left.checked_sub(m.len())).is_err() {
             continue;
         }
         let Some(text) = read_small(&path, MAX_FILE) else { continue };
@@ -453,6 +476,35 @@ mod tests {
         let c = checks(paths);
         assert_eq!((c.len(), c[0].level), (1, "ok"));
         c[0].title.clone()
+    }
+
+    #[test]
+    fn only_files_in_real_folders_of_the_project_are_read() {
+        let root = std::env::temp_dir().join(format!("mom-secrets-inside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let repo = root.join("copperline");
+        std::fs::create_dir_all(repo.join("config")).unwrap();
+        assert_eq!(in_project(&repo, "config/.env"), Some(repo.join("config").join(".env")));
+        assert_eq!(in_project(&repo, ".env"), Some(repo.join(".env")));
+        assert_eq!(in_project(&repo, "../elsewhere/.env"), None);
+        assert_eq!(in_project(&repo, "missing/.env"), None);
+        #[cfg(windows)]
+        {
+            let target = root.join("elsewhere");
+            std::fs::create_dir_all(&target).unwrap();
+            let link = repo.join("linked");
+            let made = std::process::Command::new(std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into()))
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(&link)
+                .arg(&target)
+                .output()
+                .is_ok_and(|o| o.status.success());
+            if made {
+                assert_eq!(in_project(&repo, "linked/.env"), None, "a junction leads elsewhere");
+                std::fs::remove_dir(&link).unwrap();
+            }
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
