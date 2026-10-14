@@ -542,7 +542,7 @@
     },
     {
       id: "brave", name: "Brave", open: false, openSecs: 0, processes: 0, mem: 0, restart: "brave://restart", extensionsPage: "brave://extensions",
-      profiles: [{ dir: "Default", path: "C:\\x", name: "Profile 1", lastUsed: now - 246 * 86400, size: 145 * MB, cache: 69 * MB, history: 192 * 1024, cookiesBytes: 300 * 1024, cookies: 412, cookieSites: 63, notes: [], extensions: [ext("uBlock Origin", "Ad blocker", true, [everywhere], 240)] }],
+      profiles: [{ dir: "Default", path: "C:\\x", name: "Profile 1", lastUsed: now - 246 * 86400, size: 145 * MB, cache: 69 * MB, history: 192 * 1024, cookiesBytes: 300 * 1024, cookies: null, cookieSites: null, notes: [], extensions: [ext("uBlock Origin", "Ad blocker", true, [everywhere], 240)] }],
     },
   ];
   const startup = [

@@ -1,7 +1,7 @@
 //! Browsers: every Chromium browser on the PC (Chrome, Edge, Brave, Vivaldi), each profile in it,
 //! and every extension in each profile, said plainly: what it is, what it can do, and whether
-//! it's used. Plus what each profile keeps (history, cache, cookies). Only reads files the
-//! browser leaves readable; changes nothing.
+//! it's used. Plus each profile's storage sizes, without querying cookie databases. Reads browser
+//! configuration and extension metadata; cookie sizes come from filesystem metadata. Changes nothing.
 
 use crate::procs::ProcTable;
 use crate::util::{now_secs, plural};
@@ -42,7 +42,8 @@ pub struct Profile {
     pub cache: u64,
     pub history: u64,
     pub cookies_bytes: u64,
-    /// Cookies and the sites they're from, when the browser is closed (it locks them while open).
+    /// Legacy fields kept for API compatibility; always None. Inventory never reads cookie
+    /// database contents to count cookies or sites, even when the browser is closed.
     pub cookies: Option<u64>,
     pub cookie_sites: Option<u64>,
     pub extensions: Vec<Extension>,
@@ -220,7 +221,6 @@ fn profiles(root: &Path, scheme: &str, now: u64) -> Vec<Profile> {
             let last_used = info.get("active_time").and_then(|v| profile_activity(v, now));
             let file_len = |p: PathBuf| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
             let cookies_path = path.join("Network").join("Cookies");
-            let (cookies, cookie_sites) = count_cookies(&cookies_path).map_or((None, None), |(c, s)| (Some(c), Some(s)));
             let extensions: Vec<Extension> = list.into_iter().map(|(e, _)| e).collect();
             Profile {
                 dir: dir.clone(),
@@ -232,25 +232,14 @@ fn profiles(root: &Path, scheme: &str, now: u64) -> Vec<Profile> {
                 cache: cache_size[i],
                 history: file_len(path.join("History")),
                 cookies_bytes: file_len(cookies_path),
-                cookies,
-                cookie_sites,
+                cookies: None,
+                cookie_sites: None,
                 extensions,
             }
         })
         .collect();
     out.sort_by(|a, b| b.last_used.cmp(&a.last_used).then_with(|| a.name.cmp(&b.name)));
     out
-}
-
-/// Cookies and the sites they're from. The browser locks the file while it's open, so this only
-/// works when it's closed; it's opened read-only and never changed.
-fn count_cookies(path: &Path) -> Option<(u64, u64)> {
-    use rusqlite::{Connection, OpenFlags};
-    if !path.is_file() {
-        return None;
-    }
-    let con = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX).ok()?;
-    con.query_row("SELECT COUNT(*), COUNT(DISTINCT host_key) FROM cookies", [], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64))).ok()
 }
 
 // ------------------------------------------------------------------ extensions
@@ -441,6 +430,43 @@ fn names(list: &[&str]) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn inventory_reports_cookie_file_size_without_collecting_cookie_or_site_counts() {
+        struct Fixture(PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        }
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/mom-test-fixtures");
+        std::fs::create_dir_all(&base).unwrap();
+        let base = std::fs::canonicalize(base).unwrap();
+        let root = base.join(format!("browser-inventory-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        assert_eq!(root.parent(), Some(base.as_path()));
+        std::fs::create_dir(&root).unwrap();
+        let fixture = Fixture(root);
+        let profile = fixture.0.join("Default");
+        std::fs::create_dir_all(profile.join("Network")).unwrap();
+        std::fs::write(fixture.0.join("Local State"), r#"{"profile":{"info_cache":{"Default":{"name":"Test profile"}}}}"#).unwrap();
+        let cookies = profile.join("Network").join("Cookies");
+        // A valid, closed database makes the former count query succeed. Inventory must still
+        // return unknown counts; it must not inspect these synthetic cookie/site records.
+        {
+            let connection = rusqlite::Connection::open(&cookies).unwrap();
+            connection.execute_batch("CREATE TABLE cookies (host_key TEXT); INSERT INTO cookies VALUES ('one.example'), ('one.example'), ('two.example');").unwrap();
+        }
+        let before = std::fs::read(&cookies).unwrap();
+        let found = profiles(&fixture.0, "chrome", 1_800_000_000);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].cookies_bytes, before.len() as u64);
+        assert_eq!(found[0].cookies, None);
+        assert_eq!(found[0].cookie_sites, None);
+        let serialized = serde_json::to_value(&found[0]).unwrap();
+        assert_eq!(serialized["cookies"], Value::Null);
+        assert_eq!(serialized["cookieSites"], Value::Null);
+        assert_eq!(std::fs::read(&cookies).unwrap(), before);
+        assert_eq!(std::fs::read_dir(profile.join("Network")).unwrap().count(), 1, "inventory must not create SQLite sidecars");
+    }
 
     #[test]
     fn permissions_in_plain_words() {

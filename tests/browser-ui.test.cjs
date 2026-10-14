@@ -11,7 +11,7 @@ assert.ok(clickEnd > 0);
 const browser = { id: "chrome", name: "Chrome" };
 const profile = {
   dir: "Profile 2", name: "Work", path: "C:\\FakeBrowser\\Profile 2",
-  lastUsed: null, size: 1000, cache: 200, history: 100, cookies: 2, cookieSites: 1,
+  lastUsed: null, size: 1000, cache: 200, history: 100, cookiesBytes: 4096, cookies: null, cookieSites: null,
   notes: [], extensions: [
     { id: "one", name: "Example", on: false, can: [], page: "chrome://extensions/?id=one", size: 10 },
   ],
@@ -35,7 +35,7 @@ function harness() {
   const ui = context.ui;
   return {
     ...ui, calls,
-    html: () => ui.profileRow(browser, profile),
+    html: (shown = profile) => ui.profileRow(browser, shown),
     action: (act, data = {}) => {
       const control = { dataset: { act, ...data }, closest: () => null };
       return click({ target: { closest: (selector) => selector === "[data-act]" ? control : null }, preventDefault() {} });
@@ -96,4 +96,23 @@ test("detail controls stay outside the toggle and do not collapse their profile"
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].cmd, "reveal");
   assert.equal(h.calls[0].args.path, profile.path);
+});
+
+test("cookie inventory shows metadata without promising counts or surfacing legacy site counts", async () => {
+  const h = harness();
+  await h.action("profile-open", { key });
+  for (const counts of [{ cookies: null, cookieSites: null }, { cookies: 12345, cookieSites: 6789 }, {}]) {
+    const shown = { ...profile, ...counts };
+    if (!Object.keys(counts).length) {
+      delete shown.cookies;
+      delete shown.cookieSites;
+    }
+    const html = h.html(shown);
+    assert.match(html, /4 KB · file size only/);
+    assert.doesNotMatch(html, /counted when|12,345|6,789|from \d+ sites?/);
+  }
+  for (const cookiesBytes of [null, undefined]) {
+    assert.match(h.html({ ...profile, cookiesBytes }), /File size unavailable/);
+  }
+  assert.match(h.html({ ...profile, cookiesBytes: 0 }), /0 B · file size only/);
 });

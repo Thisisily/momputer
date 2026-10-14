@@ -922,7 +922,7 @@
     const key = `${b.id}|${p.dir}`;
     const on = p.extensions.filter((e) => e.on);
     const off = p.extensions.filter((e) => !e.on);
-    const cookies = p.cookies != null ? `${p.cookies.toLocaleString("en-US")} from ${plural(p.cookieSites || 0, "site")}` : `${bytes(p.cookiesBytes)} (counted when ${b.name} is closed)`;
+    const cookies = p.cookiesBytes != null ? `${bytes(p.cookiesBytes)} · file size only` : "File size unavailable";
     const stats = [
       ["Everything", bytes(p.size)],
       ["Cache", `${bytes(p.cache)} · rebuilds itself`],
