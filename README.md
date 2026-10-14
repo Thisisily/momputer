@@ -67,13 +67,9 @@ Want every detail? [momputer, in detail](docs/in-detail.md).
 
 ## Install
 
-**0.3.2 cache update:** NVIDIA shader caches group by the app identity recorded in their
-metadata, when available. Steam shader caches show game names from local manifests and
-cautious installation-status labels. The widget can clear explicitly selected NVIDIA and
-Steam shader files after a fresh scan, with identity checks and no administrator access.
-Other file cleanup, archive moves/restores/deletion, duplicate recycling and Room Apply/Undo
-remain temporarily unavailable while their safety update is validated. Scans, previews,
-Room plans and the 0.3.1 browser-card, selection-state and taskbar fixes remain available.
+**0.3.3:** shader caches carry their game's name, and a game's cache goes once the game is
+uninstalled. Other file cleanup is paused while its safety update is checked; scans and
+previews work as before.
 
 **[Download for Windows](https://thisisily.github.io/momputer/)**: one button, three steps.
 

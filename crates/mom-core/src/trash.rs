@@ -15,6 +15,8 @@ mod harness;
 mod shader_owner;
 pub mod shader_clean;
 mod steam_shaders;
+mod steam_appinfo;
+mod programs;
 mod walk;
 
 use crate::agents::AgentKind;

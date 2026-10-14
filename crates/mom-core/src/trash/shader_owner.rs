@@ -22,19 +22,47 @@ pub(super) fn describe(path: &Path, budget: &mut u64) -> Option<Owner> {
     { let _ = (path, budget); None }
 }
 
+/// The program each NVIDIA app ID in `dir` belongs to, from the files that say it. NVIDIA names
+/// its cache files <driver part, 8 hex digits><app ID, 4><shader, 4>: an app keeps its ID across
+/// driver versions, and some files (older drivers' among them) don't record the program. An ID
+/// two files give different programs for is left out.
+pub(super) fn nvidia_names(dir: &Path, budget: &mut u64) -> std::collections::HashMap<String, String> {
+    #[cfg(windows)]
+    { windows::nvidia_names(dir, budget) }
+    #[cfg(not(windows))]
+    { let _ = (dir, budget); Default::default() }
+}
+
+/// The app ID part of an NVIDIA cache file's name ("0002a9cb[c7c9]09d5.nvph").
+pub(super) fn nvidia_app_id(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    (stem.len() == 16 && stem.bytes().all(|b| b.is_ascii_hexdigit())).then(|| stem[8..12].to_ascii_lowercase())
+}
+
 const NVIDIA_HEADER_BYTES: usize = 512;
 const MAX_IDENTITY_BYTES: usize = 160;
 const APP_ID_SCHEMA: &str = "CREATE TABLE app_id(id INTEGER PRIMARY KEY, exe_path TEXT, app_name TEXT, engine_name TEXT, app_version INTEGER, engine_version INTEGER, app_profile_version INTEGER)";
 
-/// Observed NVPH layout: magic, zero version/reserved fields, a 0/1 marker, then a
-/// NUL-terminated executable basename or Store package family. Never search shader payloads.
+/// Observed NVPH layouts: magic, zero version/reserved fields and a size, then a 0/1 marker
+/// and a NUL-terminated executable basename or Store package family, at byte 17 (current
+/// drivers) or byte 13 (some older ones). Never search shader payloads.
 fn nvidia_identity(bytes: &[u8]) -> Option<&str> {
-    if bytes.len() < 19 || bytes.get(..8)? != b"nvph\0\0\0\0"
-        || bytes.get(12..16)? != [0, 0, 0, 0] || !matches!(bytes[16], 0 | 1)
-    {
+    if bytes.len() < 19 || bytes.get(..8)? != b"nvph\0\0\0\0" {
         return None;
     }
-    let field = bytes.get(17..bytes.len().min(17 + MAX_IDENTITY_BYTES + 1))?;
+    if bytes.get(12..16)? == [0, 0, 0, 0] && matches!(bytes[16], 0 | 1) {
+        if let Some(name) = identity_at(bytes, 17) {
+            return Some(name);
+        }
+    }
+    if matches!(bytes[12], 0 | 1) {
+        return identity_at(bytes, 13);
+    }
+    None
+}
+
+fn identity_at(bytes: &[u8], at: usize) -> Option<&str> {
+    let field = bytes.get(at..bytes.len().min(at + MAX_IDENTITY_BYTES + 1))?;
     let end = field.iter().position(|&b| b == 0)?;
     let name = std::str::from_utf8(&field[..end]).ok()?;
     if name.is_empty() || name.len() > MAX_IDENTITY_BYTES || name.trim() != name
@@ -105,8 +133,35 @@ mod windows {
     };
 
     const MAX_DATABASE_BYTES: u64 = 8 << 20;
+    const MAX_NVIDIA_FILES: usize = 20_000;
     const MAX_DIRECTORY_ENTRIES: usize = 8;
     const REPARSE_POINT: u32 = 0x400;
+
+    pub(super) fn nvidia_names(dir: &Path, budget: &mut u64) -> std::collections::HashMap<String, String> {
+        let mut names: std::collections::HashMap<String, Option<String>> = Default::default();
+        let Ok(entries) = fs::read_dir(dir) else { return Default::default() };
+        for entry in entries.flatten().take(MAX_NVIDIA_FILES) {
+            let path = entry.path();
+            if !nvidia_file(&path) || checked_metadata(&path).is_none_or(|m| !m.is_file()) {
+                continue;
+            }
+            let Some(id) = nvidia_app_id(&path) else { continue };
+            if reserve(budget, NVIDIA_HEADER_BYTES as u64).is_none() {
+                break;
+            }
+            let mut bytes = Vec::with_capacity(NVIDIA_HEADER_BYTES);
+            let Some(file) = open_cache(&path) else { continue };
+            if file.take(NVIDIA_HEADER_BYTES as u64).read_to_end(&mut bytes).is_err() {
+                continue;
+            }
+            let Some(name) = nvidia_identity(&bytes) else { continue };
+            let slot = names.entry(id).or_insert_with(|| Some(name.to_owned()));
+            if slot.as_deref().is_some_and(|prior| !prior.eq_ignore_ascii_case(name)) {
+                *slot = None;
+            }
+        }
+        names.into_iter().filter_map(|(id, name)| Some((id, name?))).collect()
+    }
 
     pub(super) fn describe(path: &Path, budget: &mut u64) -> Option<Owner> {
         let metadata = checked_metadata(path)?;
@@ -435,6 +490,27 @@ mod tests {
         }
         assert!(nvidia_identity(&nvph(b"C:\\Game\\game.exe")).is_none());
         assert!(nvidia_identity(&nvph(b"game.exe")[..24]).is_none());
+    }
+
+    #[test]
+    fn older_drivers_layout_names_too_and_app_ids_come_from_file_names() {
+        // Name at byte 13, after a marker at byte 12 (no size field before it).
+        let mut older = vec![0; NVIDIA_HEADER_BYTES];
+        older[..4].copy_from_slice(b"nvph");
+        older[8..12].copy_from_slice(&[0x35, 0x28, 0, 0]);
+        older[12] = 1;
+        older[13..13 + 7].copy_from_slice(b"vlc.exe");
+        assert_eq!(nvidia_identity(&older), Some("vlc.exe"));
+        // A file that only keeps a number where the name would be stays unnamed.
+        let mut hashed = vec![0; NVIDIA_HEADER_BYTES];
+        hashed[..4].copy_from_slice(b"nvph");
+        hashed[8..12].copy_from_slice(&[0x80, 0x9b, 0xad, 0x19]);
+        hashed[16] = 1;
+        hashed[20..24].copy_from_slice(&[0x0a, 0x7b, 0x3e, 0x90]);
+        assert_eq!(nvidia_identity(&hashed), None);
+        assert_eq!(nvidia_app_id(Path::new(r"C:\x\NVIDIA\DXCache\0002a9cbC7C909d5.nvph")).as_deref(), Some("c7c9"));
+        assert_eq!(nvidia_app_id(Path::new("short.nvph")), None);
+        assert_eq!(nvidia_app_id(Path::new("0002a9cbzzzz09d5.nvph")), None);
     }
 
     #[test]

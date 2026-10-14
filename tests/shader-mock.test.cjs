@@ -5,7 +5,7 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-test("the shader demo consumes one scan, refreshes after rescan and reports version 0.3.2", async () => {
+test("the shader demo consumes one scan, refreshes after rescan and reports version 0.3.3", async () => {
   const context = vm.createContext({
     window: {}, location: { search: "", origin: "http://localhost" }, console,
     setTimeout: (fn) => { fn(); return 1; }, clearTimeout() {}, setInterval() { return 1; }, clearInterval() {},
@@ -26,6 +26,6 @@ test("the shader demo consumes one scan, refreshes after rescan and reports vers
   await mock.invoke("measure_spot", { id: "shader-cache" });
   assert.notEqual(state.shaderCleanup.token, snapshot.token);
   assert.equal(state.shaderCleanup.files.some(f => f.path === chosen.path), false);
-  assert.equal(await mock.invoke("app_version"), "0.3.2");
-  assert.equal((await mock.invoke("get_update")).latest, "0.3.2");
+  assert.equal(await mock.invoke("app_version"), "0.3.3");
+  assert.equal((await mock.invoke("get_update")).latest, "0.3.3");
 });

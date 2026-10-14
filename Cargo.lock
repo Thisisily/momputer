@@ -2296,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "mom-cli"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "mom-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "blake3",
@@ -2329,7 +2329,7 @@ dependencies = [
 
 [[package]]
 name = "momputer"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "mom-core",

@@ -8,7 +8,12 @@ use std::path::{Component, Path, PathBuf};
 
 pub(super) struct Cache {
     pub path: PathBuf,
+    pub id: u32,
     pub name: String,
+    /// `name` is the game's, from its install record (not "Steam app 123").
+    pub named: bool,
+    /// Every library was read and none has the game installed.
+    pub uninstalled: bool,
     pub detail: String,
 }
 
@@ -19,7 +24,7 @@ const MAX_LIBRARIES: usize = 128;
 const MAX_ENTRIES: usize = 20_000;
 const INSTALLED: &str = "Installed in Steam";
 const MISSING: &str = "Installation folder missing; game may have moved";
-const NOT_FOUND: &str = "Not found in installed Steam games; may be left over or moved";
+const NOT_FOUND: &str = "Not installed in Steam";
 const UNKNOWN: &str = "Installation status unknown";
 
 /// The fixture layout has a folder standing in for the system drive. It must never read
@@ -43,6 +48,81 @@ pub(super) fn discover(paths: &Paths) -> Vec<Cache> {
         return vec![];
     }
     discover_at(&root, &allowed)
+}
+
+/// What Steam says is installed: its own folder, and each installed game by app id with its
+/// name and folder. Used to name a game's caches elsewhere and to tell whether it's still here.
+pub(super) struct Games {
+    pub root: PathBuf,
+    /// App id -> (name, install folder). Only games whose folder is there.
+    pub installed: HashMap<u32, (String, PathBuf)>,
+    /// Every library and manifest was read: a game missing from `installed` isn't installed
+    /// through this Steam.
+    pub complete: bool,
+}
+
+pub(super) fn games(paths: &Paths) -> Option<Games> {
+    let fixture = paths.system_drive.parent().is_some();
+    let root = if fixture { Some(paths.program_files_x86.join("Steam")) } else { steam_root() };
+    let root = root.and_then(|p| normalized(&p))?;
+    let mut allowed = vec![paths.system_drive.clone()];
+    allowed.extend(paths.other_drives.iter().cloned());
+    if fixture {
+        allowed.push(paths.program_files_x86.clone());
+    }
+    let allowed: Vec<PathBuf> = allowed.into_iter().filter_map(|p| normalized(&p)).collect();
+    if !allowed.iter().any(|d| beneath(&root, d)) {
+        return None;
+    }
+    let mut budget = CATALOG_BYTES;
+    let mut complete = true;
+    let mut libraries = vec![root.clone()];
+    match read_text(&root.join("steamapps").join("libraryfolders.vdf"), LIST_BYTES, &mut budget).and_then(|s| library_paths(&s)) {
+        Ok((more, read_all)) => {
+            complete &= read_all;
+            libraries.extend(more);
+        }
+        Err(()) => complete = false,
+    }
+    let mut seen = HashSet::new();
+    libraries.retain(|library| seen.insert(path_key(library)));
+    libraries.truncate(MAX_LIBRARIES);
+    let mut installed = HashMap::new();
+    let mut entries_left = MAX_ENTRIES;
+    for library in libraries {
+        if !allowed.iter().any(|drive| beneath(&library, drive)) {
+            complete = false;
+            continue;
+        }
+        let apps = library.join("steamapps");
+        let Ok(entries) = directory(&apps) else {
+            complete = false;
+            continue;
+        };
+        for entry in entries {
+            if entries_left == 0 {
+                complete = false;
+                break;
+            }
+            entries_left -= 1;
+            let Ok(entry) = entry else { complete = false; continue };
+            let filename = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            let Some(id) = filename.strip_prefix("appmanifest_").and_then(|n| n.strip_suffix(".acf")) else { continue };
+            let Ok((name, folder)) = read_text(&entry.path(), MANIFEST_BYTES, &mut budget).and_then(|s| manifest(&s, id)) else {
+                complete = false;
+                continue;
+            };
+            let dir = apps.join("common").join(folder);
+            match (id.parse::<u32>(), install_state(&dir)) {
+                (Ok(n), InstallState::Present) => {
+                    installed.insert(n, (name, dir));
+                }
+                (Ok(_), InstallState::Missing) => {}
+                _ => complete = false,
+            }
+        }
+    }
+    Some(Games { root, installed, complete })
 }
 
 #[cfg(windows)]
@@ -367,7 +447,9 @@ fn discover_at(root: &Path, allowed: &[PathBuf]) -> Vec<Cache> {
             None if complete => NOT_FOUND,
             _ => UNKNOWN,
         };
-        Cache { path, name, detail: format!("Steam app {id} · {status}") }
+        let uninstalled = game.is_none() && complete;
+        let detail = format!("Steam app {id} · {status}");
+        Cache { path, id: id.parse().unwrap_or(0), name, named: game.is_some(), uninstalled, detail }
     }).collect()
 }
 
