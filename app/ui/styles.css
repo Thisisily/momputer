@@ -1235,13 +1235,12 @@ button.row-name:hover {
   padding: 12px 0 12px 17px;
   border-radius: 10px;
   text-align: left;
-  transition: background 160ms ease, box-shadow 160ms ease;
+  transition: background 160ms ease;
 }
 
 .profile-toggle:hover,
 .profile-toggle:focus-visible {
   background: var(--card-hover);
-  box-shadow: inset 0 0 0 1px var(--line-2);
 }
 
 .row.prof > .row-detail {
