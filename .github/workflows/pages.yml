@@ -12,7 +12,7 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: ['site/**', 'app/ui/**', '.github/workflows/pages.yml']
+    paths: ['site/**', 'app/ui/**', 'scripts/version-demo-assets.py', '.github/workflows/pages.yml']
   workflow_dispatch:
 
 permissions:
@@ -33,7 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Put the widget's own page in as the live demo
-        run: cp -r app/ui site/demo
+        run: |
+          cp -r app/ui site/demo
+          python3 -I scripts/version-demo-assets.py site/demo
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
