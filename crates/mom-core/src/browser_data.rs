@@ -57,42 +57,137 @@ fn plain_metadata(path: &Path) -> Option<std::fs::Metadata> {
     (meta.is_file() || meta.is_dir()).then_some(meta)
 }
 
-fn profile_marker(dir: &Path) -> Option<bool> {
-    for name in ["Cookies", "Cookies-journal", "Cookies-wal", "Network/Cookies", "Network/Cookies-journal", "Network/Cookies-wal",
-        "Login Data", "Local State", "cookies.sqlite", "cookies.sqlite-wal", "logins.json", "key3.db", "key4.db", "sessionstore.jsonlz4"] {
-        match std::fs::symlink_metadata(dir.join(name)) {
-            // Windows has a legacy Cookies directory junction directly in the user home.
-            // It must not make every unrelated Documents/Downloads path a browser profile.
-            Ok(meta) if meta.is_file() => return Some(true),
-            Ok(_) => {},
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-            Err(_) => return None,
-        }
+// A complete shallow listing avoids probing credential paths individually. Unknown or oversized
+// listings do not establish a profile boundary: that boundary can permit a known cache child.
+const PROFILE_ENTRY_LIMIT: usize = 4096;
+const PROFILE_FILES: &[&str] = &["Cookies", "Cookies-journal", "Cookies-wal", "Login Data", "Local State",
+    "cookies.sqlite", "cookies.sqlite-wal", "logins.json", "key3.db", "key4.db", "sessionstore.jsonlz4"];
+const PROFILE_DIRECTORIES: &[&str] = &["Local Storage", "Session Storage", "IndexedDB", "Service Worker", "sessionstore-backups"];
+const NETWORK_FILES: &[&str] = &["Cookies", "Cookies-journal", "Cookies-wal"];
+const PROFILE_COMPANIONS: &[&str] = &["Preferences", "Code Cache", "Network"];
+
+#[cfg(any(windows, test))]
+fn marker_alias_blocks(name: &str, alias: &str, directory: bool, profile: bool) -> bool {
+    if alias.is_empty() || alias.eq_ignore_ascii_case(name) { return false; }
+    if alias.eq_ignore_ascii_case("Cookies") && directory { return false; }
+    let files = if profile { PROFILE_FILES } else { NETWORK_FILES };
+    files.iter().chain(if profile { PROFILE_DIRECTORIES } else { &[] }.iter())
+        .chain(if profile { PROFILE_COMPANIONS } else { &[] }.iter())
+        .any(|name| name.eq_ignore_ascii_case(alias))
+}
+
+// std::DirEntry omits Windows 8.3 names. A second bounded listing preserves those possible
+// markers without probing a credential path or creating a new cache-permitting boundary.
+#[cfg(windows)]
+fn marker_aliases_are_clear(dir: &Path, profile: bool) -> Option<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{GetLastError, HANDLE, INVALID_HANDLE_VALUE, ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES};
+    use windows_sys::Win32::Storage::FileSystem::{FindClose, FindFirstFileW, FindNextFileW, WIN32_FIND_DATAW};
+    struct Search(HANDLE);
+    impl Drop for Search {
+        fn drop(&mut self) { unsafe { FindClose(self.0); } }
     }
-    for name in ["Local Storage", "Session Storage", "IndexedDB", "Service Worker", "sessionstore-backups"] {
-        match std::fs::symlink_metadata(dir.join(name)) {
-            Ok(meta) if meta.is_dir() || meta.file_type().is_symlink() => return Some(true),
-            Ok(_) => {},
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-            Err(_) => return None,
+    let mut pattern: Vec<u16> = dir.join("*").as_os_str().encode_wide().collect();
+    if pattern.contains(&0) { return None; }
+    pattern.push(0);
+    let wide = |value: &[u16]| String::from_utf16_lossy(&value[..value.iter().position(|c| *c == 0).unwrap_or(value.len())]);
+    unsafe {
+        let mut data: WIN32_FIND_DATAW = std::mem::zeroed();
+        let handle = FindFirstFileW(pattern.as_ptr(), &mut data);
+        if handle == INVALID_HANDLE_VALUE {
+            let error = GetLastError();
+            return if error == ERROR_FILE_NOT_FOUND && plain_metadata(dir).is_some_and(|m| m.is_dir()) { Some(()) } else { None };
         }
-    }
-    // A profile may only have session recovery data before its first persistent cookie.
-    match std::fs::symlink_metadata(dir.join("Preferences")) {
-        Ok(meta) if meta.is_file() => {
-            for name in ["Code Cache", "Network"] {
-                match std::fs::symlink_metadata(dir.join(name)) {
-                    Ok(_) => return Some(true),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-                    Err(_) => return None,
-                }
+        let search = Search(handle);
+        let mut left = PROFILE_ENTRY_LIMIT;
+        loop {
+            let name = wide(&data.cFileName);
+            if name != "." && name != ".." {
+                if left == 0 { return None; }
+                left -= 1;
+                let alias = wide(&data.cAlternateFileName);
+                if marker_alias_blocks(&name, &alias, data.dwFileAttributes & 0x10 != 0, profile) { return None; }
             }
-        },
-        Ok(_) => {},
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-        Err(_) => return None,
+            if FindNextFileW(search.0, &mut data) == 0 {
+                let error = GetLastError();
+                return (error == ERROR_NO_MORE_FILES).then_some(());
+            }
+        }
     }
-    Some(false)
+}
+
+fn profile_marker(dir: &Path) -> Option<bool> {
+    if !plain_metadata(dir)?.is_dir() { return None; }
+    #[cfg(windows)]
+    marker_aliases_are_clear(dir, true)?;
+    let mut left = PROFILE_ENTRY_LIMIT;
+    profile_marker_entries(std::fs::read_dir(dir).ok()?, &mut left, true)
+}
+
+fn profile_marker_entries(
+    entries: impl IntoIterator<Item = std::io::Result<std::fs::DirEntry>>,
+    left: &mut usize,
+    profile: bool,
+) -> Option<bool> {
+    // Preserve the existing vocabulary and its depth. More marker names could create a
+    // nearer cache-permitting boundary inside a broader protected browser container.
+    let files = if profile { PROFILE_FILES } else { NETWORK_FILES };
+    let (mut marker, mut preferences, mut companion) = (false, false, false);
+    let mut network = None;
+    for entry in entries {
+        if *left == 0 { return None; }
+        *left -= 1;
+        let entry = entry.ok()?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let relevant = files.iter().chain(if profile { PROFILE_DIRECTORIES } else { &[] }.iter())
+            .chain(if profile { PROFILE_COMPANIONS } else { &[] }.iter());
+        if !relevant.clone().any(|n| n.eq_ignore_ascii_case(name)) { continue; }
+        // DirEntry metadata does not follow links. On Windows it comes from the directory
+        // enumeration without an extra metadata query to each named credential file.
+        let meta = entry.metadata().ok()?;
+        let linked = meta.file_type().is_symlink();
+        let directory = meta.is_dir();
+        #[cfg(windows)]
+        let (linked, directory) = {
+            use std::os::windows::fs::MetadataExt;
+            (linked || meta.file_attributes() & 0x400 != 0, directory || meta.file_attributes() & 0x10 != 0)
+        };
+        // The legacy user-home Cookies directory/junction is not a cookie database.
+        if name.eq_ignore_ascii_case("Cookies") && directory { continue; }
+        // Case-sensitive Windows directories and Unix paths must not gain new permissive
+        // profile boundaries merely because a spelling resembles a marker.
+        if !relevant.clone().any(|n| *n == name) {
+            return None;
+        }
+        if files.contains(&name) {
+            if linked { return None; }
+            marker |= meta.is_file();
+        }
+        if !profile { continue; }
+        if PROFILE_DIRECTORIES.contains(&name) {
+            let recognized = meta.is_dir() || meta.file_type().is_symlink();
+            if linked && !recognized { return None; }
+            marker |= recognized;
+        }
+        if name == "Preferences" {
+            if linked { return None; }
+            preferences = meta.is_file();
+        }
+        companion |= matches!(name, "Code Cache" | "Network");
+        if name == "Network" {
+            // Never follow a linked Network, and do not mistake ENOTDIR for absent cookies.
+            if linked || !meta.is_dir() { return None; }
+            network = Some(entry.path());
+        }
+    }
+    if let Some(network) = network {
+        if !plain_metadata(&network)?.is_dir() { return None; }
+        #[cfg(windows)]
+        marker_aliases_are_clear(&network, false)?;
+        marker |= profile_marker_entries(std::fs::read_dir(network).ok()?, left, false)?;
+    }
+    Some(marker || (preferences && companion))
 }
 
 /// Browser boundaries that remain protected even when the cookie database is absent or locked.
@@ -226,6 +321,120 @@ mod tests {
     fn write(path: &Path, bytes: usize, _days: u64) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, vec![b'x'; bytes]).unwrap();
+    }
+
+    #[test]
+    fn windows_alternate_names_cannot_hide_profile_markers_or_create_cache_permission() {
+        for alias in ["COOKIES", "KEY3.DB", "KEY4.DB", "Network"] {
+            assert!(marker_alias_blocks("custom-long-name", alias, false, true), "{alias}");
+        }
+        assert!(marker_alias_blocks("custom-long-name", "NETWORK", true, true));
+        assert!(!marker_alias_blocks("custom-long-name", "COOKIES", true, true), "a legacy Cookies directory is not a database");
+        assert!(marker_alias_blocks("custom-long-name", "COOKIES", false, false));
+        assert!(!marker_alias_blocks("custom-long-name", "KEY3.DB", false, false), "Network's marker scope is unchanged");
+        assert!(!marker_alias_blocks("custom-long-name", "DOCUME~1", true, true));
+        assert!(!marker_alias_blocks("custom-long-name", "", false, true));
+        assert!(!marker_alias_blocks("key3.db", "KEY3.DB", false, true), "same-name aliases add no hidden identity");
+        assert!(!marker_alias_blocks("Cookies", "COOKIES", false, true));
+    }
+
+    #[test]
+    fn shallow_listing_preserves_root_network_and_cookie_free_profile_markers() {
+        let root = fixture("profile-marker-listing");
+        for (i, marker) in ["Cookies", "Cookies-journal", "Cookies-wal", "Network/Cookies", "Network/Cookies-journal",
+            "Network/Cookies-wal", "Login Data", "Local State", "cookies.sqlite", "cookies.sqlite-wal", "logins.json",
+            "key3.db", "key4.db", "sessionstore.jsonlz4"].iter().enumerate() {
+            let home = root.join(format!("profile-{i}"));
+            write(&home.join(marker), 10, 0);
+            assert_eq!(profile_marker(&home), Some(true), "{marker}");
+        }
+        for marker in ["Local Storage", "Session Storage", "IndexedDB", "Service Worker", "sessionstore-backups"] {
+            let home = root.join(marker.replace(' ', "-"));
+            std::fs::create_dir_all(home.join(marker)).unwrap();
+            assert_eq!(profile_marker(&home), Some(true), "{marker}");
+        }
+        for companion in ["Network", "Code Cache"] {
+            let home = root.join(format!("session-only-{}", companion.replace(' ', "-")));
+            write(&home.join("Preferences"), 10, 0);
+            write(&home.join("Sessions/Session_1"), 10, 0);
+            std::fs::create_dir_all(home.join(companion)).unwrap();
+            assert_eq!(profile_marker(&home), Some(true));
+            assert!(protects_path(&home.join("Sessions/Session_1")));
+        }
+        let companion_file = root.join("companion-file");
+        write(&companion_file.join("Preferences"), 10, 0);
+        write(&companion_file.join("Code Cache"), 10, 0);
+        assert_eq!(profile_marker(&companion_file), Some(true), "existing companion need not be a directory");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shallow_listing_does_not_create_a_nearer_permissive_profile_boundary() {
+        let root = fixture("profile-marker-boundary");
+        let outer = root.join("UnknownApp");
+        write(&outer.join("Local State"), 10, 0);
+        let inner = outer.join("ArbitraryChild");
+        write(&inner.join("Sessions/Session_1"), 10, 0);
+        write(&inner.join("Cookies-shm"), 10, 0);
+        write(&inner.join("Cache/data"), 10, 0);
+        assert_eq!(profile_marker(&inner), Some(false), "sensitive entries are not automatically profile boundaries");
+        assert!(protects_path(&inner.join("Cache")), "the outer profile still protects this nested cache");
+        write(&inner.join("Network/Login Data"), 10, 0);
+        assert_eq!(profile_marker(&inner), Some(false), "Network keeps its original cookie-only marker scope");
+        assert!(protects_path(&inner.join("Cache")));
+        write(&inner.join("lOcAl StAtE"), 10, 0);
+        assert_eq!(profile_marker(&inner), None, "ambiguous casing cannot add a permissive boundary");
+        assert!(protects_path(&inner.join("Cache")));
+        let ordinary = root.join("ordinary");
+        write(&ordinary.join("Sessions/history.json"), 10, 0);
+        std::fs::create_dir_all(ordinary.join("Cookies")).unwrap();
+        assert_eq!(profile_marker(&ordinary), Some(false));
+        assert!(tree_is_safe(&ordinary));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn incomplete_or_over_budget_listings_never_establish_a_profile_boundary() {
+        let root = fixture("profile-marker-errors");
+        write(&root.join("Cookies"), 10, 0);
+        let mut left = 10;
+        let entries = std::fs::read_dir(&root).unwrap().chain(std::iter::once(Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied, "synthetic enumeration failure after marker"))));
+        assert_eq!(profile_marker_entries(entries, &mut left, true), None);
+        let mut left = 0;
+        assert_eq!(profile_marker_entries(std::fs::read_dir(&root).unwrap(), &mut left, true), None);
+        let nested = root.join("nested");
+        write(&nested.join("Network/Cookies"), 10, 0);
+        let mut left = 1;
+        assert_eq!(profile_marker_entries(std::fs::read_dir(&nested).unwrap(), &mut left, true), None,
+            "the root and Network share the same entry budget");
+        let malformed = root.join("malformed");
+        write(&malformed.join("Preferences"), 10, 0);
+        write(&malformed.join("Network"), 10, 0);
+        assert_eq!(profile_marker(&malformed), None);
+        assert_eq!(profile_marker(&root.join("missing")), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn legacy_cookies_junction_is_ignored_but_network_junction_is_not_followed() {
+        let root = fixture("profile-marker-junctions");
+        let home = root.join("home");
+        let legacy = root.join("legacy");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&legacy).unwrap();
+        junction::create(&legacy, home.join("Cookies")).unwrap();
+        write(&home.join("Documents/notes.txt"), 10, 0);
+        assert_eq!(profile_marker(&home), Some(false));
+        assert!(!protects_path(&home.join("Documents/notes.txt")));
+        let network = root.join("network");
+        write(&network.join("Cookies"), 10, 0);
+        junction::create(&network, home.join("Network")).unwrap();
+        assert_eq!(profile_marker(&home), None);
+        junction::delete(home.join("Network")).unwrap();
+        junction::delete(home.join("Cookies")).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
