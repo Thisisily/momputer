@@ -76,20 +76,65 @@ fn marker_alias_blocks(name: &str, alias: &str, directory: bool, profile: bool) 
         .any(|name| name.eq_ignore_ascii_case(alias))
 }
 
+// Match standard filesystem path handling before calling a raw Win32 API. An ordinary
+// long DOS/UNC path must not become an unreadable profile just because it lacks a prefix.
+#[cfg(windows)]
+fn marker_search_pattern(dir: &Path) -> Option<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Prefix;
+    if !dir.is_absolute() || dir.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)) {
+        return None;
+    }
+    let valid_name = |name: &OsStr| {
+        !name.is_empty() && !name.encode_wide().any(|c| matches!(c, 0 | 34 | 42 | 47 | 58 | 60 | 62 | 63 | 92 | 124))
+    };
+    let valid_prefix = |path: &Path| match path.components().next() {
+        Some(Component::Prefix(p)) => match p.kind() {
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => letter.is_ascii_alphabetic(),
+            Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => valid_name(server) && valid_name(share),
+            _ => false,
+        },
+        _ => false,
+    };
+    if !valid_prefix(dir) || dir.components().any(|c| matches!(c, Component::Normal(name) if !valid_name(name))) {
+        return None;
+    }
+    // Windows absolute() calls GetFullPathNameW, not the filesystem: normalize ordinary
+    // separators/Win32 spelling before adding a prefix, without resolving any links.
+    // Existing verbatim paths are returned unchanged by absolute().
+    let dir = std::path::absolute(dir).ok()?;
+    if !valid_prefix(&dir) { return None; }
+    let Some(Component::Prefix(prefix)) = dir.components().next() else { return None };
+    let verbatim = prefix.kind().is_verbatim();
+    // Do not turn an unresolved Win32 alias into a different literal extended-path name.
+    if !verbatim && dir.components().any(|c| matches!(c, Component::Normal(name)
+        if name.encode_wide().last().is_some_and(|last| matches!(last, 32 | 46)))) {
+        return None;
+    }
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().collect();
+    if wide.contains(&0) { return None; }
+    let mut pattern: Vec<u16> = match prefix.kind() {
+        Prefix::VerbatimDisk(_) | Prefix::VerbatimUNC(_, _) => wide,
+        Prefix::Disk(_) => r"\\?\".encode_utf16().chain(wide).collect(),
+        Prefix::UNC(_, _) => r"\\?\UNC\".encode_utf16().chain(wide.into_iter().skip(2)).collect(),
+        _ => return None,
+    };
+    if pattern.last() != Some(&(b'\\' as u16)) { pattern.push(b'\\' as u16); }
+    pattern.extend([b'*' as u16, 0]);
+    Some(pattern)
+}
+
+#[cfg(windows)]
 // std::DirEntry omits Windows 8.3 names. A second bounded listing preserves those possible
 // markers without probing a credential path or creating a new cache-permitting boundary.
-#[cfg(windows)]
 fn marker_aliases_are_clear(dir: &Path, profile: bool) -> Option<()> {
-    use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{GetLastError, HANDLE, INVALID_HANDLE_VALUE, ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES};
     use windows_sys::Win32::Storage::FileSystem::{FindClose, FindFirstFileW, FindNextFileW, WIN32_FIND_DATAW};
     struct Search(HANDLE);
     impl Drop for Search {
         fn drop(&mut self) { unsafe { FindClose(self.0); } }
     }
-    let mut pattern: Vec<u16> = dir.join("*").as_os_str().encode_wide().collect();
-    if pattern.contains(&0) { return None; }
-    pattern.push(0);
+    let pattern = marker_search_pattern(dir)?;
     let wide = |value: &[u16]| String::from_utf16_lossy(&value[..value.iter().position(|c| *c == 0).unwrap_or(value.len())]);
     unsafe {
         let mut data: WIN32_FIND_DATAW = std::mem::zeroed();
@@ -336,6 +381,58 @@ mod tests {
         assert!(!marker_alias_blocks("custom-long-name", "", false, true));
         assert!(!marker_alias_blocks("key3.db", "KEY3.DB", false, true), "same-name aliases add no hidden identity");
         assert!(!marker_alias_blocks("Cookies", "COOKIES", false, true));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn marker_search_paths_preserve_windows_names_without_following_links() {
+        for (path, expected) in [
+            (r"C:\alpha\beta", r"\\?\C:\alpha\beta\*"),
+            ("C:/alpha/beta/", r"\\?\C:\alpha\beta\*"),
+            (r"C:\", r"\\?\C:\*"),
+            (r"\\server\share\folder", r"\\?\UNC\server\share\folder\*"),
+            ("//server/share/folder/", r"\\?\UNC\server\share\folder\*"),
+            (r"\\?\C:\alpha\beta", r"\\?\C:\alpha\beta\*"),
+            (r"\\?\UNC\server\share\folder", r"\\?\UNC\server\share\folder\*"),
+            (r"C:\alpha\beta. ", r"\\?\C:\alpha\beta\*"),
+            (r"\\?\C:\alpha\beta. ", r"\\?\C:\alpha\beta. \*"),
+        ] {
+            assert_eq!(marker_search_pattern(Path::new(path)), Some(expected.encode_utf16().chain(Some(0)).collect()), "{path}");
+        }
+        for path in ["relative", r"C:relative", r"\rooted", r"C:\alpha\..\beta", r"\\.\C:\alpha",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1", r"C:\alpha\NUL", r"C:\alpha\*", r"C:\alpha\?", r"C:\alpha:stream", "C:\\alpha\0beta"] {
+            assert!(marker_search_pattern(Path::new(path)).is_none(), "{path}");
+        }
+        // Windows filenames can contain unpaired UTF-16 units; preserve them losslessly.
+        use std::os::windows::ffi::OsStringExt;
+        let path = std::ffi::OsString::from_wide(&[67, 58, 92, 0xd800]);
+        assert_eq!(marker_search_pattern(Path::new(&path)), Some(vec![92, 92, 63, 92, 67, 58, 92, 0xd800, 92, 42, 0]));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn long_nonverbatim_paths_keep_profile_and_cache_decisions() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let root = fixture("profile-marker-long-path");
+        let mut deep = root.clone();
+        while deep.as_os_str().encode_wide().count() < 300 {
+            deep = deep.join("long-directory-name-with-ordinary-files");
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        write(&deep.join("note.txt"), 10, 0);
+        let wide: Vec<u16> = deep.as_os_str().encode_wide().collect();
+        assert_eq!(&wide[..4], &[92, 92, 63, 92]);
+        let ordinary = PathBuf::from(std::ffi::OsString::from_wide(&wide[4..]));
+        assert!(ordinary.as_os_str().encode_wide().count() > 260);
+        assert_eq!(profile_marker(&ordinary), Some(false));
+        assert!(!protects_path(&ordinary));
+        write(&deep.join("Cookies"), 10, 0);
+        write(&deep.join("Cache/data"), 10, 0);
+        assert_eq!(profile_marker(&ordinary), Some(true));
+        assert!(protects_path(&ordinary));
+        assert!(!protects_path(&ordinary.join("Cache")));
+        assert!(tree_is_safe(&ordinary.join("Cache")));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
