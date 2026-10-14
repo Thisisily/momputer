@@ -7,7 +7,7 @@
 //! several seconds), so they're gathered on a thread of their own and kept for half an hour.
 
 use crate::speed::Fix;
-use crate::util::{human_bytes, now_secs, run};
+use crate::util::{human_bytes, now_secs, run, windows_powershell};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -121,7 +121,10 @@ $o | ConvertTo-Json -Depth 4 -Compress
 "#;
 
 fn gather() -> System {
-    let mut facts: Value = run("powershell.exe", &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", SCRIPT], Duration::from_secs(40))
+    // Inline commands do not need a script-file policy override. Keep the user's policy
+    // for any modules the Windows cmdlets load, and never search PATH for the shell.
+    let mut facts: Value = windows_powershell()
+        .and_then(|program| run(&program, &["-NoProfile", "-NonInteractive", "-Command", SCRIPT], Duration::from_secs(40)))
         .ok()
         .filter(|o| o.ok())
         .and_then(|o| serde_json::from_str(o.text().trim()).ok())
@@ -1473,7 +1476,7 @@ try {{ {command} }} catch {{ $failed = $true; $message = $_.Exception.Message }}
 "#);
             let file = home.join("run.ps1");
             std::fs::write(&file, script).unwrap();
-            let output = std::process::Command::new("powershell.exe")
+            let output = std::process::Command::new(windows_powershell().unwrap())
                 .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
                 .arg(&file)
                 .env("USERPROFILE", home)

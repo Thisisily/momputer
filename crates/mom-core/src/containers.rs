@@ -5,7 +5,7 @@
 //! slow and can wake it up).
 
 use crate::procs::ProcTable;
-use crate::util::{run, CmdOutput};
+use crate::util::{run, windows_powershell, CmdOutput};
 use serde::Serialize;
 use std::time::Duration;
 
@@ -372,11 +372,11 @@ pub fn hyperv_vms() -> Vec<Vm> {
         return vec![];
     }
     let script = "Get-VM | Where-Object State -eq 'Running' | ForEach-Object { [pscustomobject]@{ n=$_.Name; s=[string]$_.State; m=[int64]$_.MemoryAssigned; u=[string]$_.Uptime } } | ConvertTo-Json -Compress";
-    let Ok(out) = run(
-        "powershell.exe",
+    let Ok(out) = windows_powershell().and_then(|program| run(
+        &program,
         &["-NoProfile", "-NonInteractive", "-Command", script],
         Duration::from_secs(15),
-    ) else {
+    )) else {
         HYPERV_DENIED.store(true, Ordering::Relaxed);
         return vec![];
     };
@@ -414,8 +414,9 @@ pub fn hyperv_vms() -> Vec<Vm> {
 pub fn hyperv_stop(name: &str) -> anyhow::Result<()> {
     let safe: String = name.chars().filter(|c| *c != '\'' && *c != '`').collect();
     let script = format!("Stop-VM -Name '{safe}'");
+    let powershell = windows_powershell()?;
     let out = run(
-        "powershell.exe",
+        &powershell,
         &["-NoProfile", "-NonInteractive", "-Command", &script],
         Duration::from_secs(120),
     )?;

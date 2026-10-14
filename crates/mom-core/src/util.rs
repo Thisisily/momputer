@@ -84,6 +84,34 @@ impl CmdOutput {
     }
 }
 
+/// Windows' own PowerShell, resolved by the OS rather than PATH or environment variables.
+/// Failure must not fall back to a same-named executable in a user-controlled directory.
+pub(crate) fn windows_powershell() -> std::io::Result<String> {
+    #[cfg(windows)]
+    {
+        let mut directory = [0u16; 32_768];
+        // SAFETY: the owned buffer and its character count are valid for this call.
+        let len = unsafe {
+            windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW(directory.as_mut_ptr(), directory.len() as u32)
+        } as usize;
+        if len == 0 { return Err(std::io::Error::last_os_error()); }
+        powershell_in_system_directory(&directory, len)
+    }
+    #[cfg(not(windows))]
+    { Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Windows PowerShell is only available on Windows.")) }
+}
+
+#[cfg(windows)]
+fn powershell_in_system_directory(directory: &[u16], len: usize) -> std::io::Result<String> {
+    let invalid = || std::io::Error::new(std::io::ErrorKind::InvalidData, "Windows did not return a valid system directory.");
+    if len == 0 || len >= directory.len() || directory[len] != 0 || directory[..len].contains(&0) {
+        return Err(invalid());
+    }
+    let directory = String::from_utf16(&directory[..len]).map_err(|_| invalid())?;
+    if !Path::new(&directory).is_absolute() { return Err(invalid()); }
+    Ok(Path::new(&directory).join(r"WindowsPowerShell\v1.0\powershell.exe").to_str().ok_or_else(invalid)?.to_owned())
+}
+
 /// Runs a program without flashing a console window, killing it if it takes too long.
 pub fn run(program: &str, args: &[&str], timeout: Duration) -> std::io::Result<CmdOutput> {
     run_in(program, args, None, timeout)
@@ -541,6 +569,21 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(windows)]
+    fn a_system_powershell_path_requires_a_complete_absolute_directory() {
+        let directory: Vec<u16> = r"D:\Windows\System32".encode_utf16().chain(Some(0)).collect();
+        assert_eq!(powershell_in_system_directory(&directory, directory.len() - 1).unwrap(), r"D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe");
+        for len in [0, directory.len(), directory.len() + 1] {
+            assert!(powershell_in_system_directory(&directory, len).is_err());
+        }
+        for invalid in ["relative", r"D:relative", r"\System32", "D:\\Windows\0\\System32"] {
+            let directory: Vec<u16> = invalid.encode_utf16().chain(Some(0)).collect();
+            assert!(powershell_in_system_directory(&directory, directory.len() - 1).is_err());
+        }
+        assert!(powershell_in_system_directory(&[0xd800, 0], 1).is_err());
+    }
+
+    #[test]
     fn a_move_never_replaces_what_is_there() {
         let dir = std::env::temp_dir().join(format!("mom-move-new-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -578,7 +621,8 @@ mod tests {
     #[cfg(windows)]
     fn running_with(mark: &str) -> usize {
         let ask = format!("@(Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{mark}*' -and $_.Name -eq 'ping.exe' }}).Count");
-        run("powershell", &["-NoProfile", "-Command", &ask], Duration::from_secs(60)).map(|o| o.text().trim().parse().unwrap_or(99)).unwrap_or(99)
+        windows_powershell().and_then(|program| run(&program, &["-NoProfile", "-Command", &ask], Duration::from_secs(60)))
+            .map(|o| o.text().trim().parse().unwrap_or(99)).unwrap_or(99)
     }
 
     #[test]
