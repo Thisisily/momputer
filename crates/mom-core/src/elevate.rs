@@ -505,9 +505,9 @@ mod acl {
     ///
     /// SAFETY: `ace` must point to a DWORD-aligned ACE in a live allocation containing both
     /// its header and the `AceSize` bytes it declares, as returned by a successful GetAce.
-    unsafe fn ace_is_restricted(ace: *const ACE_HEADER, rights: u32, allowed: &dyn Fn(&str) -> bool) -> bool {
+    unsafe fn ace_is_restricted(ace: std::ptr::NonNull<ACE_HEADER>, rights: u32, allowed: &dyn Fn(&str) -> bool) -> bool {
         // Read only the common header until the type and its minimum size are established.
-        let header = unsafe { *ace };
+        let header = unsafe { ace.read() };
         if (header.AceSize as usize) < std::mem::size_of::<ACE_HEADER>() || header.AceSize % 4 != 0 {
             return false;
         }
@@ -525,7 +525,7 @@ mod acl {
             return false;
         }
         // SAFETY: this is a basic allow ACE, large enough for its mask and fixed SID header.
-        let a = ace.cast::<ACCESS_ALLOWED_ACE>();
+        let a = ace.cast::<ACCESS_ALLOWED_ACE>().as_ptr();
         let (mask, sid_start) = unsafe { ((*a).Mask, (*a).SidStart.to_le_bytes()) };
         if mask & rights == 0 {
             return true;
@@ -568,17 +568,18 @@ mod acl {
             if owner.is_null() || !sid_string(owner).is_some_and(|s| owner_ok(&s)) {
                 return false;
             }
-            if dacl.is_null() {
+            let Some(list) = std::ptr::NonNull::new(dacl) else {
                 return false; // no list at all: everyone may do anything
-            }
-            // SAFETY: `dacl` points into `sd`.
-            let count = unsafe { (*dacl).AceCount };
+            };
+            // SAFETY: `list` points into `sd`.
+            let count = unsafe { list.as_ref().AceCount };
             for i in 0..count as u32 {
                 let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
                 // SAFETY: `i` is below the count; `ace` points into `sd`.
-                if unsafe { GetAce(dacl, i, &mut ace) } == 0 || ace.is_null() {
+                if unsafe { GetAce(list.as_ptr(), i, &mut ace) } == 0 {
                     return false;
                 }
+                let Some(ace) = std::ptr::NonNull::new(ace) else { return false };
                 // SAFETY: successful GetAce returned an aligned ACE inside the descriptor;
                 // `sd` remains allocated until every ACE and its SID have been inspected.
                 if !unsafe { ace_is_restricted(ace.cast(), rights, allowed) } {
@@ -606,7 +607,7 @@ mod acl {
         fn restricted(ace: &[u32; 5]) -> bool {
             // SAFETY: the owned array is DWORD-aligned and holds the complete declared ACE;
             // malformed fixtures keep the declared ACE within that allocation.
-            unsafe { ace_is_restricted(ace.as_ptr().cast(), 2, &trusted) }
+            unsafe { ace_is_restricted(std::ptr::NonNull::from(ace).cast(), 2, &trusted) }
         }
 
         #[test]
