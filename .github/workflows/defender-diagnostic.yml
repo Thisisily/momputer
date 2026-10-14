@@ -1,20 +1,9 @@
 name: Defender diagnostic
 
-# A comparison experiment, not a release. Each source ref gets a fresh hosted runner.
+# A comparison experiment, not a release. Each reviewed commit gets a fresh hosted runner.
 # Neither the CLI nor any test binary is executed, and no Defender settings are changed.
 on:
   workflow_dispatch:
-    inputs:
-      baseline_ref:
-        description: Baseline commit, tag or branch
-        required: true
-        default: 898565ff71cb6144e329509769e3e7a502b24d78
-        type: string
-      candidate_ref:
-        description: Candidate ref (blank uses this workflow dispatch commit)
-        required: false
-        default: ''
-        type: string
 
 permissions:
   contents: read
@@ -22,6 +11,9 @@ permissions:
 jobs:
   compare:
     name: ${{ matrix.label }}
+    # Cargo executes build scripts. Only reviewed main history belongs in this diagnostic;
+    # accepting an arbitrary input ref would also admit unreviewed pull-request code.
+    if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 20
     strategy:
@@ -29,9 +21,9 @@ jobs:
       matrix:
         include:
           - label: baseline
-            source_ref: ${{ inputs.baseline_ref }}
+            source_ref: 898565ff71cb6144e329509769e3e7a502b24d78
           - label: candidate
-            source_ref: ${{ inputs.candidate_ref || github.sha }}
+            source_ref: ${{ github.sha }}
     steps:
       - name: Initialize evidence
         shell: pwsh
@@ -51,7 +43,7 @@ jobs:
           } | ConvertTo-Json | Set-Content evidence/bootstrap.json -Encoding utf8
 
       # The baseline need not contain this script. Both sides use the same diagnostic
-      # implementation from the workflow dispatch commit, not code from either input ref.
+      # implementation from the main-branch dispatch commit.
       - name: Check out the diagnostic
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -61,10 +53,19 @@ jobs:
           sparse-checkout: scripts/defender-diagnostic.ps1
           sparse-checkout-cone-mode: false
 
-      - name: Check out the source
+      - name: Check out the reviewed 0.3.0 baseline
+        if: matrix.label == 'baseline'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ matrix.source_ref }}
+          ref: 898565ff71cb6144e329509769e3e7a502b24d78
+          path: source
+          persist-credentials: false
+
+      - name: Check out the main-branch dispatch commit
+        if: matrix.label == 'candidate'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
           path: source
           persist-credentials: false
 
