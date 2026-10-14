@@ -117,10 +117,18 @@ $c = Get-CimInstance Win32_Processor | Select-Object -First 1; $o.cpu = @{ name 
 $o.gpu = @(Get-CimInstance Win32_VideoController | ForEach-Object { @{ name = "$($_.Name)"; driver = "$($_.DriverVersion)"; date = & $d $_.DriverDate } })
 $g = Get-CimInstance -Namespace root/Microsoft/Windows/DeviceGuard -ClassName Win32_DeviceGuard; $o.dg = @{ running = @($g.SecurityServicesRunning) }
 $o.qfe = & $d ((Get-CimInstance Win32_QuickFixEngineering | Where-Object InstalledOn | Sort-Object InstalledOn -Descending | Select-Object -First 1).InstalledOn)
-$o.pnp = @(Get-CimInstance Win32_PnPEntity -Filter 'ConfigManagerErrorCode <> 0' | Select-Object -First 50 | ForEach-Object { @{ name = "$($_.Name)"; code = [int]$_.ConfigManagerErrorCode } })
-$o.net = @(Get-NetAdapter -Physical | Select-Object -First 16 | ForEach-Object { @{ up = ($_.Status -eq 'Up'); media = "$($_.PhysicalMediaType)"; bps = [int64]$_.ReceiveLinkSpeed; desc = "$($_.InterfaceDescription)"; options = @((Get-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword '*SpeedDuplex').ValidDisplayValues) } })
 $o.vols = @(Get-CimInstance Win32_Volume -Filter 'DriveType=3' | Where-Object DriveLetter | ForEach-Object { @{ letter = "$($_.DriveLetter)"; label = "$($_.Label)" } })
 $o.onedrive = [bool](Get-Process OneDrive)
+$o | ConvertTo-Json -Depth 4 -Compress
+"#;
+
+/// Devices with problems and the network adapters, run beside SCRIPT: between them they take a
+/// couple of seconds (the adapters' module is slow to load) and need nothing from it.
+const SCRIPT_DEVICES: &str = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$o = [ordered]@{}
+$o.pnp = @(Get-CimInstance Win32_PnPEntity -Filter 'ConfigManagerErrorCode <> 0' | Select-Object -First 50 | ForEach-Object { @{ name = "$($_.Name)"; code = [int]$_.ConfigManagerErrorCode } })
+$o.net = @(Get-NetAdapter -Physical | Select-Object -First 16 | ForEach-Object { @{ up = ($_.Status -eq 'Up'); media = "$($_.PhysicalMediaType)"; bps = [int64]$_.ReceiveLinkSpeed; desc = "$($_.InterfaceDescription)"; options = @((Get-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword '*SpeedDuplex').ValidDisplayValues) } })
 $o | ConvertTo-Json -Depth 4 -Compress
 "#;
 
@@ -134,14 +142,23 @@ fn gather() -> System {
             (keys.join().unwrap_or_default(), work)
         })
     });
+    let ask = |script: &'static str| {
+        windows_powershell()
+            .and_then(|program| run(&program, &["-NoProfile", "-NonInteractive", "-Command", script], Duration::from_secs(40)))
+            .ok()
+            .filter(|o| o.ok())
+            .and_then(|o| serde_json::from_str::<Value>(o.text().trim()).ok())
+            .unwrap_or(Value::Null)
+    };
+    let devices = std::thread::spawn(move || ask(SCRIPT_DEVICES));
+    // Windows' logs and the Wi-Fi are read meanwhile too: none of them needs what PowerShell finds.
+    let logs = std::thread::spawn(|| (crate::network::read_air(), crate::power::read_boots(), crate::power::read_wakes(), crate::stability::get()));
     // Inline commands do not need a script-file policy override. Keep the user's policy
     // for any modules the Windows cmdlets load, and never search PATH for the shell.
-    let mut facts: Value = windows_powershell()
-        .and_then(|program| run(&program, &["-NoProfile", "-NonInteractive", "-Command", SCRIPT], Duration::from_secs(40)))
-        .ok()
-        .filter(|o| o.ok())
-        .and_then(|o| serde_json::from_str(o.text().trim()).ok())
-        .unwrap_or(Value::Null);
+    let mut facts: Value = ask(SCRIPT);
+    if let (Some(o), Ok(Value::Object(more))) = (facts.as_object_mut(), devices.join()) {
+        o.extend(more);
+    }
     // What each NVMe drive says about its own health (no administrator needed), next to what
     // Windows said about it.
     if let Some(disks) = facts.get_mut("disks").and_then(Value::as_array_mut) {
@@ -166,15 +183,18 @@ fn gather() -> System {
     checks.extend(performance(&reg));
     // Screens, devices, the network, starting and sleeping, the week after a change, backups.
     let paths = crate::paths::Paths::detect();
+    let (air, boots, wakes, stability) = logs
+        .join()
+        .unwrap_or_else(|_| (crate::network::read_air(), crate::power::read_boots(), crate::power::read_wakes(), crate::stability::get()));
     checks.extend(crate::display::checks(&crate::display::screens()));
     checks.extend(crate::devices::checks(&crate::devices::problems(&facts)));
-    checks.extend(crate::network::checks(&crate::network::adapters(&facts), crate::network::read_air().as_ref()));
+    checks.extend(crate::network::checks(&crate::network::adapters(&facts), air.as_ref()));
     let startup: Vec<String> = crate::health::startup_apps(&paths).into_iter().map(|a| a.name).collect();
-    checks.extend(crate::power::read_boots().map(|b| crate::power::boot_checks(&b, &startup)).unwrap_or_default());
-    checks.extend(crate::power::wake_checks(&crate::power::read_wakes(), now));
+    checks.extend(boots.map(|b| crate::power::boot_checks(&b, &startup)).unwrap_or_default());
+    checks.extend(crate::power::wake_checks(&wakes, now));
     let memory = arr(&facts, "mem").iter().map(|m| num(m, "conf")).filter(|s| *s > 0).min().unwrap_or(0) as u32;
     if let Some(change) = crate::stability::watch(&paths.state_dir(), memory, &text(&facts["bios"], "ver"), now) {
-        checks.push(crate::stability::watch_check(&change, &crate::stability::get()));
+        checks.push(crate::stability::watch_check(&change, &stability));
     }
     checks.extend(crate::backups::cover_checks(&crate::backups::cover(&facts)));
     checks.extend(crate::backups::repair_checks(&crate::backups::repairs(&facts)));
