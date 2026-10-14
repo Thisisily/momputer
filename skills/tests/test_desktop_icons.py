@@ -27,7 +27,7 @@ sys.dont_write_bytecode = True
 from _common import PY, X, Checks, hide, junction, make_lnk, remove_work_folder, run, set_times, tree, work_folder, write  # noqa: E402
 
 MARK = "made-by-test_desktop_icons.txt"
-SECRET = "FILE-CONTENT-MARKER-9917"
+FILE_CONTENT_MARKER = "FILE-CONTENT-MARKER-9917"  # Invented sentinel: the survey must not copy file contents.
 RLO = "‮"  # right-to-left override: "holiday photo" + RLO + "gpj.exe" is shown by Windows as "holiday photoexe.jpg"
 
 ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -115,13 +115,13 @@ try:
     fresh = ["notes.txt", "tool.exe"]
     backwards = "holiday photo" + RLO + "gpj.exe"
     for name in stale + fresh + [backwards]:
-        write(os.path.join(desk, name), SECRET + " " + name)
+        write(os.path.join(desk, name), FILE_CONTENT_MARKER + " " + name)
     for name in stale:
         set_times(os.path.join(desk, name), old)
     write(os.path.join(desk, "Project X", ".git", "config"), "[core]")
     os.makedirs(os.path.join(desk, "New folder"))
     for n in ("a.jpg", "b.jpg"):
-        write(os.path.join(desk, "Holiday photos", n), SECRET)
+        write(os.path.join(desk, "Holiday photos", n), FILE_CONTENT_MARKER)
     write(os.path.join(desk, "Some Program", "unins000.exe"), b"MZ")
     write(os.path.join(desk, "Some Program", "app.dll"), b"MZ")
     hide(write(os.path.join(desk, "desktop.ini"), "[.ShellClassInfo]"))
@@ -176,7 +176,7 @@ try:
     check("a web link and a game link are kept as their kind and host only",
           by_name[("desktop", "Lanternfall Site.url")]["shortcut"]["to"] == "lanternfall.example"
           and by_name[("desktop", "Steam Game.url")]["shortcut"]["leads_to"] == "game" and "SECRET-TOKEN" not in raw and "rungameid" not in raw)
-    check("no file was read except shortcuts (nothing from inside a loose file is in the survey)", SECRET not in raw)
+    check("no file was read except shortcuts (nothing from inside a loose file is in the survey)", FILE_CONTENT_MARKER not in raw)
     check("a shortcut can't make the survey copy a variable out of the environment: only the few that name a place are filled in",
           "NEVER-IN-A-SURVEY" not in raw and "NEVER-IN-A-SURVEY" not in r.stdout + r.stderr
           and "doesn't fill in" in by_name[("desktop", "Env secret.lnk")]["shortcut"]["reason"], by_name[("desktop", "Env secret.lnk")]["shortcut"])
@@ -294,7 +294,7 @@ try:
           by_name[("desktop", backwards)].get("shown") == "holiday photo\\u202egpj.exe" and acts[backwards]["name"] == "holiday photo\\u202egpj.exe"
           and RLO in acts[backwards]["from"] and RLO not in html and "direction-changing" in acts[backwards]["why"], acts[backwards])
     check("the page shows names and targets, never file contents, link tokens or full web addresses",
-          SECRET not in html and "SECRET-TOKEN" not in html and "rungameid" not in html)
+          FILE_CONTENT_MARKER not in html and "SECRET-TOKEN" not in html and "rungameid" not in html)
     check("the page is self-contained: no outside address in it but the SVG namespace",
           html.count("http://www.w3.org/2000/svg") == html.count("http://") and "https://" not in html and "//cdn" not in html)
     check("what a flagged shortcut would run is described next to it, never shown",

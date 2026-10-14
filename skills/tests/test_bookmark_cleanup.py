@@ -360,9 +360,14 @@ try:
     page, plan_path = os.path.join(WORK, "bookmarks-report.html"), os.path.join(WORK, "bookmarks-plan.json")
     r = py(os.path.join(S, "build_report.py"), bm, "--out", page, "--today", "2026-10-13")
     check("report built (no link check)", r.returncode == 0 and os.path.exists(page), r.stderr[-400:])
+    check("report output contains counts, never bookmark addresses or credentials",
+          "hunter2" not in r.stdout + r.stderr and "vault.example" not in r.stdout + r.stderr
+          and "http://" not in r.stdout and "https://" not in r.stdout)
     html, blob, R = data_of(page)
     plan = json.load(open(plan_path, encoding="utf-8"))
     L, totals = R["lists"], R["totals"]
+    check("the printed review count includes every non-web and credential-bearing address",
+          "%d not web pages or with a password" % len(L["look"]) in r.stdout)
     by_id = {n["id"]: n for n in nodes}
     check("the embedded data has no raw <, > or &", not re.search("[<>&" + chr(0x2028) + chr(0x2029) + "]", blob))
     check("the template never uses innerHTML or friends", not re.search(r"innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function", html))

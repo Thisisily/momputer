@@ -1724,7 +1724,7 @@ mod tests {
         let servers = read(&agents, &id("MCP servers")).unwrap();
         assert!(servers.text.contains("\"notes\"") && servers.text.contains("https://mcp.copperline.example/v1\"") && servers.text.contains("\"shop\""), "{}", servers.text);
         for secret in ["tok_live", "Bearer abc", "key=abc123", "\"abc\"", "sam@lanternfall.example", "numStartups"] {
-            assert!(!servers.text.contains(secret), "{secret} is shown:\n{}", servers.text);
+            assert!(!servers.text.contains(secret), "MCP fixture contains an unredacted private field");
         }
         assert_eq!(servers.hidden, 4, "the token, the header, the address with a key in it and the token after --token... {}", servers.text);
         let settings = read(&agents, &id("settings.json")).unwrap();
@@ -2009,7 +2009,7 @@ mod tests {
         assert!(!memory.text.contains("ghp_") && memory.text.contains("    indented   code stays\tas it is") && memory.hidden == 1, "{}", memory.text);
         let toml = read_it("codex", "config.toml");
         for secret in ["tok123", "abc123", "fast", "tok_inacomment"] {
-            assert!(!toml.text.contains(secret), "{secret} is shown:\n{}", toml.text);
+            assert!(!toml.text.contains(secret), "TOML fixture contains an unredacted private field");
         }
         assert!(toml.text.contains("notes-mcp") && toml.text.contains("--token") && !toml.blind, "{}", toml.text);
         let cut = read_it("cursor", "mcp.json");

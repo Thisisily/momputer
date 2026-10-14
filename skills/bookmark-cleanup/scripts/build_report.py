@@ -469,7 +469,7 @@ def main(argv=None):
           "%d not opened in years, %d idle on the bar, %d piles, %d dead, %d to check by hand, %d not web pages or with a password"
           % (os.path.abspath(a.out), os.path.getsize(a.out) // 1024, plan_path, report["report_id"], t["bookmarks"], t["folders"],
              t["dup_extra"], len(report["lists"]["folders"]), t["stale"], t["bar_idle"], t["piles"], t["dead"], t["by_hand"],
-             t["not_web"] + t["secrets"]))
+             len(report["lists"]["look"])))  # Only the aggregate count, never a stored address or credential.
 
 
 if __name__ == "__main__":

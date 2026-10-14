@@ -178,6 +178,7 @@ def hidden_streams(folder):
 
 
 def write(path, data=b"x"):
+    """Write synthetic test fixture bytes; callers must not pass real user files or credentials."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(X + path, "wb") as f:
         f.write(data if isinstance(data, bytes) else data.encode("utf-8"))

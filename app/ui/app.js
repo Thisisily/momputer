@@ -3284,8 +3284,8 @@ in ${x.cwd}`)}">
     if (!st) return "";
     const c = st.config;
     const sw = (key, on, label, note, off = false) => `<div class="switch-row${off ? " unavailable" : ""}" id="set-${key}">
-        <span class="label">${label}</span>
-        <button class="switch" role="switch" aria-checked="${on}" aria-label="${esc(label.replace(/<[^>]+>/g, ""))}" data-set="${key}" ${off ? "disabled" : ""}></button>
+        <span class="label">${esc(label)}</span>
+        <button class="switch" role="switch" aria-checked="${on}" aria-label="${esc(label)}" data-set="${key}" ${off ? "disabled" : ""}></button>
         <small>${note}</small>
       </div>`;
     const num = (key, value, min, max) => `<input class="inline-num num" type="number" min="${min}" max="${max}" value="${value}" data-num="${key}">`;

@@ -262,8 +262,11 @@ try:
     check("Sablewick Coffee: weekly", by.get("Sablewick Coffee", [{}])[0].get("period") == "weekly")
     check("Brindlewood Gym: a payment-failed e-mail is flagged, not followed", "payment_failed" in flags("Brindlewood Gym"))
     check("Tessaract Mobile: noted as unused, cancel suggested", by.get("Tessaract Mobile", [{}])[0].get("suggest") == ["cancel"])
-    check("app store lines are not called two plans", all("store" in [f["kind"] for f in i["flags"]] and "two_plans" not in [f["kind"] for f in i["flags"]]
-                                                           for i in items if i["name"].startswith("Apple.com")) and sum(1 for i in items if i["name"].startswith("Apple.com")) == 2)
+    # This is an exact synthetic statement label, not a URL or a domain allowlist.
+    app_store_items = [i for i in items if i["name"] == "Apple.com Itunes.com"]
+    check("app store lines are not called two plans", len(app_store_items) == 2 and all(
+        "store" in [f["kind"] for f in i["flags"]] and "two_plans" not in [f["kind"] for f in i["flags"]]
+        for i in app_store_items))
     names = " | ".join(i["name"] for i in items)
     check("weekly shopping, one-off buys, rent and pay are not subscriptions", not re.search(r"Greengrocer|Osprey|Wexcombe|Rent|Holloway|Ardmoor", names), names)
     check("Pinewhistle Music: listed as cancelled, not counted", [s["name"] for s in R["stopped"]] == ["Pinewhistle Music"] and R["stopped"][0]["why"] == "cancelled")
