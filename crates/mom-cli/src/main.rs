@@ -177,6 +177,14 @@ enum Cmd {
     Hook { agent: String, event: String },
     /// Where mom keeps her settings.
     Config,
+    /// What mom did: clean-ups, moves, tidy-ups, fixes and programs she stopped, newest first.
+    History {
+        /// Everything on record, not just the latest 30.
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -490,6 +498,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Files { .. })
         | Some(Cmd::Integrations { .. })
         | Some(Cmd::Config)
+        | Some(Cmd::History { .. })
         | Some(Cmd::Settings { action: None, .. }) => true,
         Some(Cmd::Settings { action: Some(SettingsCmd::Fix { id, elevated: true, .. }), .. }) => winsettings::is_admin_fix(id),
         Some(Cmd::Settings { action: Some(SettingsCmd::Fix { .. } | SettingsCmd::Undo { .. }), .. }) => false,
@@ -748,7 +757,9 @@ fn run(cli: Cli) -> Result<i32> {
                     }
                     let mut freed = 0;
                     for s in &spots {
+                        let since = mom_core::util::now_secs();
                         let r = trash::clean(&s.id, &ctx, None);
+                        mom_core::history::cleaned(&paths, &r, None, false, since);
                         freed += r.freed;
                         println!("  {}{}", pad(&s.id, 20), r.message);
                     }
@@ -825,12 +836,23 @@ fn run(cli: Cli) -> Result<i32> {
                     return Ok(0);
                 }
                 match winsettings::fix(&paths, &id) {
-                    Ok(msg) => println!("{}", st.green(&msg)),
+                    Ok(msg) => {
+                        let line = format!("Put back a Windows setting: {}", f.title.trim_end_matches('.'));
+                        if fix.undo {
+                            mom_core::history::fixed(&paths, mom_core::history::kind::SETTING, "setting", &id, line);
+                        } else {
+                            mom_core::history::did(&paths, mom_core::history::kind::SETTING, line);
+                        }
+                        println!("{}", st.green(&msg))
+                    }
                     Err(why) => bail!("{why}"),
                 }
             }
             Some(SettingsCmd::Undo { id }) => match winsettings::undo(&paths, &id) {
-                Ok(msg) => println!("{}", st.green(&msg)),
+                Ok(msg) => {
+                    mom_core::history::put_back(&paths, mom_core::history::kind::SETTING_UNDO, "setting", Some(&id), msg.clone());
+                    println!("{}", st.green(&msg))
+                }
                 Err(why) => bail!("{why}"),
             },
         },
@@ -1074,6 +1096,7 @@ fn run(cli: Cli) -> Result<i32> {
                     only
                 };
                 let r = tidy::apply(&report, &ids, &paths.journal_dir());
+                mom_core::history::tidied(&paths, &report.name, &r);
                 if json {
                     print_json(&r)?;
                 } else {
@@ -1092,9 +1115,33 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Some(Cmd::Undo) => {
             let r = tidy::undo_last(&paths.journal_dir());
+            if r.restored > 0 {
+                mom_core::history::put_back(&paths, mom_core::history::kind::TIDY_UNDO, "tidy", None, r.message.clone());
+            }
             println!("{}", r.message);
             for f in &r.failed {
                 println!("  {}", st.red(f));
+            }
+        }
+        Some(Cmd::History { all, json }) => {
+            let list = mom_core::history::shown(&paths, if all { usize::MAX } else { 30 });
+            if json {
+                print_json(&list)?;
+            } else if list.is_empty() {
+                println!("{}", st.dim("Nothing yet. What mom clears, moves or fixes shows up here."));
+            } else {
+                let now = mom_core::util::now_secs();
+                for e in &list {
+                    let when = format!("{} ago", human_age(now.saturating_sub(e.entry.at)));
+                    let who = if e.entry.auto { " (Autopilot)" } else { "" };
+                    let after = match (e.undone, e.action) {
+                        (true, _) => " · put back".to_string(),
+                        (false, Some(a)) => format!(" · {a} from the widget"),
+                        _ if e.in_bin => " · in the Recycle Bin".to_string(),
+                        _ => String::new(),
+                    };
+                    println!("{}  {}{}{}", st.dim(&pad(&when, 10)), e.entry.text, st.dim(who), st.dim(&after));
+                }
             }
         }
         Some(Cmd::Rules { action }) => match action {
@@ -1534,8 +1581,10 @@ fn stop(st: &Style, paths: &Paths, cfg: &Config, targets: Vec<String>, yes: bool
         println!("Fine. They keep running.");
         return Ok(0);
     }
+    let since = mom_core::util::now_secs();
     mom_core::restart::remember(paths, &table, &chosen);
     let r = kill::stop_groups(&table, &chosen);
+    mom_core::history::stopped(paths, &chosen.iter().map(|g| g.name.clone()).collect::<Vec<_>>(), &r, false, since);
     println!("{}", st.green(&r.message));
     for f in &r.failed {
         println!("  {}", st.red(&format!("{} ({}): {}", f.pid, f.name, f.reason)));

@@ -616,14 +616,45 @@
     scannedAt: now,
   };
 
+  // What mom did, her Sunday letter and Autopilot's last run (made-up names).
+  const day = 86400;
+  const hist = (id, ago, kind, text, extra = {}) => ({ id, at: now - ago, kind, text, bytes: 0, items: 1, auto: false, undo: null, undoes: null, undone: false, action: null, inBin: false, ...extra });
+  const history = {
+    entries: [
+      hist("h1", 40 * 60, "clean", "Cleared npm cache · 1.2 GB", { bytes: 1.2 * GB }),
+      hist("h2", 3 * 3600, "copies", "Sent 14 files to the Recycle Bin · 640 MB", { bytes: 640 * MB, inBin: true }),
+      hist("h3", day + 2 * 3600, "archive", "Moved old conversations to the archive · 3.1 GB", { bytes: 3.1 * GB, action: "Bring back" }),
+      hist("h4", day + 5 * 3600, "tidy", "Tidied Downloads · 14 things", { action: "Undo" }),
+      hist("h5", 3 * day, "clean", "Cleared old temp files · 2.3 GB", { bytes: 2.3 * GB, auto: true }),
+      hist("h6", 4 * day, "stopped", "Turned off vite and 2 more · 1.4 GB of memory back", { action: "Start again" }),
+      hist("h7", 5 * day, "setting", "Put back a Windows setting: Mouse pointer speed", { undone: true }),
+    ],
+    letter: {
+      at: now - 2 * day,
+      from: now - 9 * day,
+      freed: 4.1 * GB,
+      moved: 3.1 * GB,
+      autoFreed: 2.3 * GB,
+      done: 6,
+      lines: ["This week I cleared 4.1 GB for you.", "3.1 GB went to your archive drive, safe and sound.", "Autopilot did 2.3 GB of that by itself.", "That's 6 things done together.", "Love, mom c:"],
+      next: {
+        title: "Your memory runs at 2666, but it's made for 3600",
+        detail: "Switching on D.O.C.P. in the BIOS runs it at full speed. Test it afterwards.",
+        fix: { label: "Copy for your agent", kind: "copy", value: "My PC's memory runs at 2666 MT/s, but its sticks (2 x Crucial BL16G36C16U4BL) are rated for 3600 MT/s.", hint: "Paste it to your agent." },
+      },
+    },
+    letterUnread: true,
+    autopilot: { at: now - 3 * day, freed: 2.3 * GB, items: 120, spots: ["Old temp files"] },
+  };
+
   const settings = {
     config: {
       rooms: [room.path],
       leftovers: { forgottenAfterHours: 12, includeUnknownOrphans: true, autoStop: false, autoStopAfterMinutes: 20, autoStopOrphans: false },
       hooks: { enabled: true, nagProcesses: true, nagClutter: true, shareRules: true, stopOnSessionEnd: false, minAgeSecs: 5 },
       tidy: { reportsFolder: "Documents", minFamily: 3, screenshotPile: 10 },
-      trash: { tempMinAgeDays: 7, agentScratchDays: 67, archiveDir: null, conversationsAfterDays: 67, keep: [] },
-      ui: { alwaysOnTop: false, notifications: true, notifyLeftovers: true, notifyMeltdown: true, notifyCleanups: true, notifySkills: true, notifyAfterMinutes: 10, notifyEveryMinutes: 30, scanIntervalSecs: 3, cpuAlertPercent: 25, checkUpdates: true },
+      trash: { tempMinAgeDays: 7, agentScratchDays: 67, archiveDir: null, conversationsAfterDays: 67, keep: [], autopilot: false },
+      ui: { alwaysOnTop: false, notifications: true, notifyLeftovers: true, notifyMeltdown: true, notifyCleanups: true, notifySkills: true, notifyLetter: true, notifyAfterMinutes: 10, notifyEveryMinutes: 30, scanIntervalSecs: 3, cpuAlertPercent: 25, checkUpdates: true },
       protect: [],
       kept: [],
     },
@@ -1077,6 +1108,21 @@
     },
     set_autostart: ({ on }) => on,
     get_diary: () => [],
+    get_history: async () => (await wait(150), JSON.parse(JSON.stringify(history))),
+    undo_history: async ({ id }) => {
+      await wait(500);
+      const e = history.entries.find((x) => x.id === id);
+      if (!e || !e.action) throw "That one can't be put back now.";
+      const said = { "Bring back": "Brought 2 folders back from the archive · 3.1 GB", Undo: "Put 14 things back where they were.", "Start again": "Started vite and 2 more again" }[e.action];
+      e.undone = true;
+      e.action = null;
+      history.entries.unshift(hist(`u${id}`, 0, "undo", said, { undoes: id }));
+      return said;
+    },
+    letter_read: () => {
+      history.letterUnread = false;
+      return null;
+    },
     open_url: ({ url }) => {
       if (DEMO && /^https:\/\//.test(String(url))) window.open(url, "_blank", "noopener");
       return null;

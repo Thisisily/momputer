@@ -6,6 +6,7 @@ use mom_core::kill::{self, KillReport};
 use mom_core::procs::Sampler;
 use mom_core::scan::{Group, Status};
 use mom_core::util::{human_bytes, now_secs};
+use mom_core::history::{self, kind};
 use mom_core::{hooks, rules, tidy, trash, Config, Paths, Snapshot};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -375,6 +376,7 @@ fn scanner(app: AppHandle, s: S) {
             let looked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 look_once(&app, &s, &cfg, &mut codex, &mut codex_at)
             }));
+            weekly(&app, &s);
             if looked.is_err() {
                 stumbles += 1;
                 if stumbles <= 3 {
@@ -462,6 +464,7 @@ fn auto_stop(app: &AppHandle, s: &Shared, cfg: &Config, table: &mom_core::procs:
     if report.groups == 0 {
         return false;
     }
+    history::stopped(&s.paths, &names, &report, true, now);
     let text = format!(
         "Turned off {} thing{} nobody came back for: {}{}. {} back.",
         report.groups,
@@ -573,8 +576,10 @@ fn stop_where(s: &Shared, pick: impl Fn(&Group) -> bool) -> KillReport {
     let analysis = mom_core::scan::analyze(&table, &mom_core::ports::listeners(), &cfg);
     let chosen: Vec<&Group> = analysis.groups.iter().filter(|g| pick(g)).collect();
     // How to start the servers again, before they're gone.
+    let since = now_secs();
     mom_core::restart::remember(&s.paths, &table, &chosen);
     let report = kill::stop_groups(&table, &chosen);
+    history::stopped(&s.paths, &chosen.iter().map(|g| g.name.clone()).collect::<Vec<_>>(), &report, false, since);
     if report.groups > 0 {
         let names: Vec<&str> = chosen.iter().take(4).map(|g| g.name.as_str()).collect();
         s.note(format!("Turned off {} ({} back).", names.join(", "), human_bytes(report.freed_mem)));
@@ -605,6 +610,7 @@ fn get_stopped(s: State<'_, S>) -> Vec<mom_core::restart::Stopped> {
 #[tauri::command(async)]
 fn start_again(id: String, s: State<'_, S>) -> Res<String> {
     let msg = mom_core::restart::start(&s.paths, &id)?;
+    history::did(&s.paths, kind::STARTED, msg.clone());
     s.note(msg.clone());
     s.rescan_now();
     Ok(msg)
@@ -634,6 +640,7 @@ async fn stop_container(id: String, s: State<'_, S>) -> Res<()> {
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         containers::docker_stop(std::slice::from_ref(&id)).map_err(err)?;
+        history::did(&s.paths, kind::STOPPED, format!("Stopped container {id}"));
         s.note(format!("Stopped container {id}."));
         s.rescan_now();
         Ok(())
@@ -650,6 +657,7 @@ async fn stop_wsl(name: Option<String>, s: State<'_, S>) -> Res<()> {
             Some(n) => containers::wsl_terminate(n).map_err(err)?,
             None => containers::wsl_shutdown().map_err(err)?,
         }
+        history::did(&s.paths, kind::STOPPED, name.as_deref().map_or("Shut WSL down".to_string(), |n| format!("Put WSL distro {n} to bed")));
         s.note(match name {
             Some(n) => format!("Put WSL distro {n} to bed."),
             None => "Shut WSL down.".into(),
@@ -822,6 +830,7 @@ fn stop_clean(s: State<'_, S>) {
 async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: State<'_, S>) -> Res<trash::CleanReport> {
     let s = s.inner().clone();
     let s2 = s.clone();
+    let (since, picked) = (now_secs(), pick.clone());
     let report = tauri::async_runtime::spawn_blocking(move || {
         if trash::needs_admin(&id) && !mom_core::elevate::is_elevated() {
             return clean_as_admin(&s, &id, pick.as_ref());
@@ -839,6 +848,7 @@ async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: S
     })
     .await
     .map_err(err)?;
+    history::cleaned(&s2.paths, &report, picked.as_ref(), false, since);
     measure_trash_now(app, s2, Some(report.id.clone()));
     Ok(report)
 }
@@ -943,6 +953,7 @@ fn stop_files_scan(s: State<'_, S>) {
 fn recycle_files(paths: Vec<String>, s: State<'_, S>) -> mom_core::files::RecycleReport {
     let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let r = mom_core::files::recycle(&s.paths, &files, &s.cfg().trash.keep);
+    history::copies(&s.paths, &r);
     if r.freed > 0 {
         s.note(format!("Moved {} of copies and old files to the Recycle Bin.", human_bytes(r.freed)));
     }
@@ -971,6 +982,8 @@ fn fix_setting(id: String, s: State<'_, S>) -> Res<String> {
     let after = fix.after.map(|a| format!(" {a}")).unwrap_or_default();
     if !fix.admin {
         let msg = winsettings::fix(&s.paths, &id).map_err(err)?;
+        let line = format!("Put back a Windows setting: {}", f.title.trim_end_matches('.'));
+        if fix.undo { history::fixed(&s.paths, kind::SETTING, "setting", &id, line) } else { history::did(&s.paths, kind::SETTING, line) }
         s.note(format!("Put back a Windows setting: {}.", f.title));
         return Ok(msg);
     }
@@ -985,13 +998,16 @@ fn fix_setting(id: String, s: State<'_, S>) -> Res<String> {
     if winsettings::check(&s.paths).iter().any(|f| f.id == id) {
         return Err("Windows let mom try, but the setting didn't change.".into());
     }
+    history::did(&s.paths, kind::SETTING, format!("Put back a Windows setting: {}", f.title.trim_end_matches('.')));
     s.note(format!("Put back a Windows setting: {}.", f.title));
     Ok(format!("Done: {}.{after}", f.title.trim_end_matches('.')))
 }
 
 #[tauri::command(async)]
 fn undo_setting(id: String, s: State<'_, S>) -> Res<String> {
-    mom_core::winsettings::undo(&s.paths, &id).map_err(err)
+    let msg = mom_core::winsettings::undo(&s.paths, &id).map_err(err)?;
+    history::put_back(&s.paths, kind::SETTING_UNDO, "setting", Some(&id), msg.clone());
+    Ok(msg)
 }
 
 /// Opens one of Windows' own settings programs (the ones the checkup points to), Event Viewer, or
@@ -1112,6 +1128,7 @@ async fn bring_back(from: String, app: AppHandle, s: State<'_, S>) -> Res<String
     let m = tauri::async_runtime::spawn_blocking(move || mom_core::archive::bring_back(&s.paths, std::path::Path::new(&from)))
         .await
         .map_err(err)??;
+    history::record(&s2.paths, history::Entry::new(kind::BRING_BACK, format!("Brought {} back from the archive", m.name)).bytes(m.bytes).items(1));
     s2.note(format!("Brought {} back from the archive.", m.name));
     measure_trash_now(app, s2, Some("old-conversations".into()));
     Ok(format!("{} is back where it was ({}).", m.name, human_bytes(m.bytes)))
@@ -1125,6 +1142,7 @@ async fn delete_moved(from: String, app: AppHandle, s: State<'_, S>) -> Res<Stri
     let m = tauri::async_runtime::spawn_blocking(move || mom_core::archive::delete_moved(&s.paths, std::path::Path::new(&from)))
         .await
         .map_err(err)??;
+    history::record(&s2.paths, history::Entry::new(kind::ARCHIVE_DELETE, format!("Deleted {} from the archive for good", m.name)).bytes(m.bytes).items(1));
     s2.note(format!("Deleted {} from the archive.", m.name));
     measure_trash_now(app, s2, None);
     Ok(format!("Deleted {} ({}) for good.", m.name, human_bytes(m.bytes)))
@@ -1189,13 +1207,17 @@ async fn get_browsers(fresh: bool, s: State<'_, S>) -> Res<Vec<mom_core::browser
 /// Removes your own registry leftovers of one kind, keeping a copy.
 #[tauri::command(async)]
 fn fix_registry(id: String, s: State<'_, S>) -> Res<String> {
-    mom_core::system::fix_registry(&s.paths, &id)
+    let msg = mom_core::system::fix_registry(&s.paths, &id)?;
+    history::fixed(&s.paths, kind::REGISTRY, "registry", &id, msg.clone());
+    Ok(msg)
 }
 
 /// Puts back what the last registry fix of that kind removed.
 #[tauri::command(async)]
 fn undo_registry(id: String, s: State<'_, S>) -> Res<String> {
-    mom_core::system::undo_registry(&s.paths, &id)
+    let msg = mom_core::system::undo_registry(&s.paths, &id)?;
+    history::put_back(&s.paths, kind::REGISTRY_UNDO, "registry", Some(&id), msg.clone());
+    Ok(msg)
 }
 
 /// Where the Files scan looks: your usual folders, each drive, and folders you added.
@@ -1250,7 +1272,11 @@ async fn program_action(id: String, action: String, s: State<'_, S>) -> Res<mom_
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let table = s.sampler.lk().sample();
-        mom_core::programs::act(&table, &id, &action)
+        let r = mom_core::programs::act(&table, &id, &action);
+        if r.ok {
+            history::did(&s.paths, kind::PROGRAM, r.message.clone());
+        }
+        r
     })
     .await
     .map_err(err)
@@ -1271,7 +1297,9 @@ async fn get_startup(s: State<'_, S>) -> Res<Vec<mom_core::startup::Startup>> {
 /// Switches one of them on or off, the way Task Manager does.
 #[tauri::command(async)]
 fn set_startup(id: String, on: bool, s: State<'_, S>) -> Res<String> {
-    mom_core::startup::set(&s.paths, &id, on)
+    let msg = mom_core::startup::set(&s.paths, &id, on)?;
+    history::did(&s.paths, kind::STARTUP, msg.clone());
+    Ok(msg)
 }
 
 #[tauri::command(async)]
@@ -1339,6 +1367,7 @@ async fn apply_tidy(path: String, ids: Vec<String>, s: State<'_, S>) -> Res<tidy
         let report = s.rooms.lk().get(&path).cloned().ok_or("Look at the room first.")?;
         tidy::check_room(&PathBuf::from(&report.path), &s.paths)?;
         let r = tidy::apply(&report, &ids, &s.paths.journal_dir());
+        history::tidied(&s.paths, &report.name, &r);
         s.note(format!("Tidied {}: {}", report.name, r.message));
         if let Ok(fresh) = tidy::inspect(&PathBuf::from(&path), &s.cfg().tidy) {
             s.rooms.lk().insert(path, fresh);
@@ -1354,6 +1383,9 @@ async fn undo_tidy(s: State<'_, S>) -> Res<tidy::UndoReport> {
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let r = tidy::undo_last(&s.paths.journal_dir());
+        if r.restored > 0 {
+            history::put_back(&s.paths, kind::TIDY_UNDO, "tidy", None, r.message.clone());
+        }
         s.note(r.message.clone());
         let rooms: Vec<String> = s.rooms.lk().keys().cloned().collect();
         let cfg = s.cfg();
@@ -1570,6 +1602,94 @@ fn set_autostart(on: bool, app: AppHandle) -> Res<bool> {
 #[tauri::command(async)]
 fn get_diary(s: State<'_, S>) -> Vec<Note> {
     s.diary.lk().iter().cloned().collect()
+}
+
+// ------------------------------------------------------------------ what mom did (0.5.0 C2)
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryState {
+    entries: Vec<history::Shown>,
+    letter: Option<mom_core::letter::Letter>,
+    letter_unread: bool,
+    autopilot: Option<trash::autopilot::Run>,
+}
+
+/// What mom did, newest first, her last letter, and Autopilot's last run.
+#[tauri::command(async)]
+fn get_history(s: State<'_, S>) -> HistoryState {
+    HistoryState {
+        entries: history::shown(&s.paths, 300),
+        letter: mom_core::letter::latest(&s.paths),
+        letter_unread: mom_core::letter::unread(&s.paths),
+        autopilot: trash::autopilot::last(&s.paths),
+    }
+}
+
+/// Puts back one thing from "What I did", named by its id in mom's own record (never a path).
+#[tauri::command]
+async fn undo_history(id: String, app: AppHandle, s: State<'_, S>) -> Res<String> {
+    let s = s.inner().clone();
+    let s2 = s.clone();
+    let msg = tauri::async_runtime::spawn_blocking(move || {
+        let msg = history::undo(&s.paths, &id)?;
+        // What came back may show elsewhere: rooms, conversations in the archive, servers.
+        let rooms: Vec<String> = s.rooms.lk().keys().cloned().collect();
+        let cfg = s.cfg();
+        for room in rooms {
+            if let Ok(fresh) = tidy::inspect(&PathBuf::from(&room), &cfg.tidy) {
+                s.rooms.lk().insert(room, fresh);
+            }
+        }
+        Ok::<_, String>(msg)
+    })
+    .await
+    .map_err(err)??;
+    s2.note(msg.clone());
+    s2.rescan_now();
+    measure_trash_now(app, s2, None);
+    Ok(msg)
+}
+
+/// You opened the letter.
+#[tauri::command(async)]
+fn letter_read(s: State<'_, S>) {
+    mom_core::letter::mark_read(&s.paths);
+}
+
+/// Once an hour (and once right after starting), on its own thread: Autopilot's weekly clean-up
+/// when it's due, and Sunday's letter. The watcher never waits for either.
+fn weekly(app: &AppHandle, s: &S) {
+    static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let now = now_secs();
+    let last = LAST.load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < 3600 {
+        return;
+    }
+    LAST.store(now, Ordering::Relaxed);
+    let (app, s) = (app.clone(), s.clone());
+    std::thread::spawn(move || {
+        let cfg = s.cfg();
+        if cfg.trash.autopilot && !mom_core::elevate::is_elevated() {
+            let table = s.sampler.lk().sample();
+            let ctx = trash::TrashCtx::new(&s.paths, &cfg, &table);
+            let run = trash::autopilot::run_if_due(&ctx, trash::autopilot::away_secs(), trash::autopilot::on_mains());
+            if let Some(text) = run.as_ref().and_then(trash::autopilot::said) {
+                s.note(text.clone());
+                if cfg.ui.notifications && cfg.ui.notify_cleanups {
+                    toast(&app, "mom", &text);
+                }
+                measure_trash_now(app.clone(), s.clone(), None);
+            }
+        }
+        if mom_core::letter::due(&s.paths, now) {
+            mom_core::letter::write(&s.paths, now, &mom_core::system::get(false).checks);
+            if cfg.ui.notifications && cfg.ui.notify_letter {
+                toast(&app, "mom", "Your weekly letter from mom is here");
+            }
+            let _ = app.emit("letter", ());
+        }
+    });
 }
 
 #[tauri::command(async)]
@@ -1846,6 +1966,10 @@ fn main() {
             card_away,
             glide_ready,
             set_paused,
+            // 0.5.0 C2
+            get_history,
+            undo_history,
+            letter_read,
         ])
         .setup(move |app| {
             #[cfg(windows)]

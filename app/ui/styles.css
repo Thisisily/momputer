@@ -4354,7 +4354,7 @@ button.row-name:hover {
 
 /* ---------------------------------------------------------------- versions */
 
-/* A newer version is out: a small red light on the "i". */
+/* A newer version is out: a small red light on the "i" (and on the history button, a letter). */
 .icon-btn.has-news {
   position: relative;
 }
@@ -4471,4 +4471,10 @@ button.row-name:hover {
   margin: 8px 0 0;
   font-size: 12px;
   color: var(--ink-2);
+}
+
+/* ---------------------------------------------------------------- mom's letter */
+
+.letter p + p {
+  margin-top: 6px;
 }

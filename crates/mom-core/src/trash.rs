@@ -6,6 +6,7 @@
 //! Recycle Bin, and "review" spots ask the user to look first. Mom skips anything a running
 //! process is using and anything touched recently.
 
+pub mod autopilot;
 pub(crate) mod bin;
 mod browsers;
 mod builds;
@@ -883,6 +884,11 @@ pub fn spot_ids() -> Vec<&'static str> {
 
 fn def(id: &str) -> Option<&'static Def> {
     DEFS.iter().find(|d| d.id == id)
+}
+
+/// A spot's name and what its button does ("npm cache", "delete"), for saying what was done.
+pub fn about(id: &str) -> Option<(&'static str, &'static str)> {
+    def(id).map(|d| (d.label, d.action))
 }
 
 /// Spots `mom trash clean all` (and anything else that cleans without asking) may take:
