@@ -126,6 +126,9 @@ pub struct TrashConfig {
     /// Things you said to keep, by path: no clean-up ever takes them (or anything inside them, or
     /// anything they're inside of), whatever is ticked. Managed by the app and `mom trash keep`.
     pub keep: Vec<String>,
+    /// Autopilot: once a week, while you're away and the PC is on mains power, mom clears the
+    /// clean-ups that are safe without looking. Off unless you switch it on.
+    pub autopilot: bool,
 }
 
 impl Default for TrashConfig {
@@ -136,6 +139,7 @@ impl Default for TrashConfig {
             archive_dir: None,
             conversations_after_days: 67,
             keep: vec![],
+            autopilot: false,
         }
     }
 }
@@ -154,6 +158,8 @@ pub struct UiConfig {
     pub notify_cleanups: bool,
     /// An agent's copy of one of mom's skills is older than the newest.
     pub notify_skills: bool,
+    /// Mom's weekly letter is here (on Sundays).
+    pub notify_letter: bool,
     /// Agents often tidy up a minute later, so a leftover has to sit this long before mom says anything.
     pub notify_after_minutes: u64,
     /// At most one leftover notification this often; anything new in between waits for the next one.
@@ -174,6 +180,7 @@ impl Default for UiConfig {
             notify_meltdown: true,
             notify_cleanups: true,
             notify_skills: true,
+            notify_letter: true,
             notify_after_minutes: 10,
             notify_every_minutes: 30,
             scan_interval_secs: 3,

@@ -3305,6 +3305,7 @@ in ${x.cwd}`)}">
           <div class="about-tag">A mom for you, your computer and your AIs.</div>
           <div class="about-meta">${state.version ? `<span class="about-ver num">v${esc(state.version)}</span>` : ""}<span>Free for personal use</span></div>
           ${updateLine()}
+          <button class="link-btn" data-act="open-history">${ICON.undo}What I did</button>
         </div>
       </div>
       <h3 class="list-head">A message from the dev</h3>
@@ -3359,6 +3360,7 @@ in ${x.cwd}`)}">
         sw("autoStop", c.leftovers.autoStop, "Clean up on my own", `Turn off what agents leave behind once nobody has come back for it in ${num("autoStopAfterMinutes", c.leftovers.autoStopAfterMinutes, 1, 1440)} minutes.`) +
           sw("autoStopOrphans", c.leftovers.autoStopOrphans, "Orphans too", "Also turn off runtimes nobody can be traced to.") +
           sw("includeOrphans", c.leftovers.includeUnknownOrphans, "Count orphans as leftovers", "Runtimes whose parent is gone and carry no agent's fingerprints.") +
+          sw("autopilot", !!c.trash.autopilot, "Autopilot", "Clean up the safe things myself, once a week, while you're away. Never what you keep, nothing new, nothing that wants a look first.") +
           row(
             "keep",
             "How long things stay",
@@ -3381,7 +3383,8 @@ in ${x.cwd}`)}">
           ) +
           sw("notifyMeltdown", c.ui.notifyMeltdown, "CPU alarm", `When leftovers burn more than ${num("cpuAlertPercent", c.ui.cpuAlertPercent, 5, 100)}% CPU for two minutes. At most once an hour.`, !c.ui.notifications) +
           sw("notifyCleanups", c.ui.notifyCleanups, "Clean-up reports", "When mom turns things off by herself.", !c.ui.notifications) +
-          sw("notifySkills", c.ui.notifySkills !== false, "Skills", "When a skill has a newer version than the copy your agent has.", !c.ui.notifications)
+          sw("notifySkills", c.ui.notifySkills !== false, "Skills", "When a skill has a newer version than the copy your agent has.", !c.ui.notifications) +
+          sw("notifyLetter", c.ui.notifyLetter !== false, "Sunday letter", "A few lines about your week, once a week.", !c.ui.notifications)
       )}
       ${section(
         "s-widget",
@@ -3409,12 +3412,95 @@ in ${x.cwd}`)}">
     return saved;
   }
 
+  // ------------------------------------------------------------ what I did, and mom's letter
+
+  /** What mom did, her last letter and Autopilot's last run. The history button wears a dot
+      while this week's letter is unread. */
+  async function loadHistory() {
+    try {
+      state.history = await invoke("get_history");
+    } catch {
+      return;
+    }
+    $("#btn-history").classList.toggle("has-news", !!state.history.letterUnread);
+    if (state.sheet && (state.sheet.kind === "history" || state.sheet.kind === "letter")) renderSheet();
+  }
+
+  /** "Today", "Yesterday", "Tuesday", or a date further back. */
+  function dayOf(at) {
+    const d = new Date(at * 1000);
+    const today = new Date();
+    const start = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const days = Math.round((start(today) - start(d)) / 86400000);
+    if (days <= 0) return "Today";
+    if (days === 1) return "Yesterday";
+    if (days < 7) return d.toLocaleDateString(undefined, { weekday: "long" });
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: d.getFullYear() === today.getFullYear() ? undefined : "numeric" });
+  }
+
+  /** The same, in the middle of a sentence: "today", "on Tuesday". */
+  const whenSaid = (at) => {
+    const d = dayOf(at);
+    return d === "Today" || d === "Yesterday" ? d.toLowerCase() : `on ${d}`;
+  };
+
+  function historyRow(e) {
+    const time = new Date(e.at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    const sub = [time, e.auto ? "Autopilot" : "", e.undone ? "Put back since" : ""].filter(Boolean).join(" · ");
+    const busy = state.historyBusy === e.id;
+    const act = e.action
+      ? `<button class="mini-btn wide" data-act="history-undo" data-id="${esc(e.id)}" ${busy ? "disabled" : ""}>${ICON.undo}${busy ? "Working…" : esc(e.action)}</button>`
+      : e.inBin && !e.undone
+        ? `<button class="mini-btn wide" data-act="open-recycle-bin" title="Open Recycle Bin">${ICON.trash}Recycle Bin</button>`
+        : "";
+    return `<div class="item stays moved" id="hi-${hash(e.id)}"><span class="led ${e.undone ? "" : "green"}"></span>
+        <span class="item-main"><span class="item-name" title="${esc(e.text)}">${esc(e.text)}</span><span class="item-sub">${esc(sub)}</span></span>
+        <span class="item-size"></span><span class="moved-acts">${act}</span></div>`;
+  }
+
+  function renderHistory() {
+    const h = state.history;
+    const head = `<div class="sheet-head"><h2 id="sheet-title" class="dot sheet-dot">what i did</h2>
+        <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button></div>`;
+    if (!h) return `${head}<p class="sheet-what">Looking through my notes…</p>`;
+    const letter = h.letter
+      ? `<div class="lead"><div class="lead-text"><p>${h.letterUnread ? '<span class="led red"></span> ' : ""}Your letter from ${esc(dayOf(h.letter.at).replace(/^(Today|Yesterday)$/, (d) => d.toLowerCase()))} is here.</p></div>
+          <button class="secondary" data-act="open-letter">Read it</button></div>`
+      : "";
+    const pilot = h.autopilot && h.autopilot.at ? `<p class="list-hint">Autopilot last tidied ${esc(whenSaid(h.autopilot.at))}${h.autopilot.freed ? `: ${bytes(h.autopilot.freed)}` : ""}.</p>` : "";
+    const days = [];
+    for (const e of h.entries || []) {
+      const d = dayOf(e.at);
+      const last = days[days.length - 1];
+      if (last && last.d === d) last.rows.push(e);
+      else days.push({ d, rows: [e] });
+    }
+    const list = days.length
+      ? days.map((g) => `<h3 class="list-head">${esc(g.d)}</h3><div class="items">${g.rows.map(historyRow).join("")}</div>`).join("")
+      : `<p class="empty">Nothing yet. When I clear, move or fix something, it shows up here.</p>`;
+    return `${head}<p class="sheet-what">Everything I cleared, moved or fixed, newest first. Where I can put it back, there's a button.</p>${letter}${pilot}${list}`;
+  }
+
+  function renderLetter() {
+    const l = state.history && state.history.letter;
+    const head = `<div class="sheet-head"><h2 id="sheet-title" class="dot sheet-dot">your week</h2>
+        <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button></div>`;
+    if (!l) return `${head}<p class="sheet-what">No letter yet. The first one comes on a Sunday.</p>`;
+    const face = window.momFace ? window.momFace.svg("delighted") : "";
+    const next = l.next ? `<h3 class="list-head">One thing worth a look</h3>${checkRow({ id: "letter-next", level: "tip", ...l.next, more: [], items: [] }, "lt")}` : "";
+    return `${head}<div class="about-hero"><div class="about-face" aria-hidden="true">${face}</div><div><div class="about-tag">From mom, ${esc(whenSaid(l.at))}</div></div></div>
+      <div class="about-note letter">${(l.lines || []).map((x) => `<p>${esc(x)}</p>`).join("")}</div>
+      ${next}
+      <div class="detail-actions"><button class="link-btn" data-act="open-history">${ICON.undo}See what I did</button></div>`;
+  }
+
   // ------------------------------------------------------------ the sheet (details and settings)
 
   function renderSheet() {
     if (!state.sheet) return;
     const kind = state.sheet.kind;
-    const html = kind === "spot" ? renderSpot(state.sheet.id) : kind === "agent" ? renderAgentSheet(state.sheet.id) : kind === "about" ? renderAbout() : renderSettings();
+    const html = kind === "spot" ? renderSpot(state.sheet.id) : kind === "agent" ? renderAgentSheet(state.sheet.id) : kind === "about" ? renderAbout()
+      : kind === "history" ? renderHistory() : kind === "letter" ? renderLetter() : renderSettings();
     morph($("#sheet-body"), html);
   }
 
@@ -3424,12 +3510,15 @@ in ${x.cwd}`)}">
     const opened = sheet.kind === "spot" ? state.trash.spots.find((x) => x.id === sheet.id) || {} : {};
     if (opened.action === "move") loadArchive();
     if (opened.admin) loadAdminCheck();
+    if (sheet.kind === "letter") invoke("letter_read").catch(() => {}).then(loadHistory);
+    else if (sheet.kind === "history") loadHistory();
     const wasOpen = !!state.sheet;
     state.sheet = sheet;
     state.cleanConfirm = null;
     renderSheet();
     $("#btn-settings").setAttribute("aria-pressed", String(sheet.kind === "settings"));
     $("#btn-about").setAttribute("aria-pressed", String(sheet.kind === "about"));
+    $("#btn-history").setAttribute("aria-pressed", String(sheet.kind === "history"));
     const wrap = $("#sheet");
     wrap.hidden = false;
     $("#sheet-body").scrollTop = 0;
@@ -3447,6 +3536,7 @@ in ${x.cwd}`)}">
     state.cleanConfirm = null;
     $("#btn-settings").setAttribute("aria-pressed", "false");
     $("#btn-about").setAttribute("aria-pressed", "false");
+    $("#btn-history").setAttribute("aria-pressed", "false");
     const wrap = $("#sheet");
     const done = () => {
       if (!state.sheet) wrap.hidden = true;
@@ -3763,6 +3853,21 @@ in ${x.cwd}`)}">
         e.preventDefault();
         act(invoke("open_recycle_bin"), () => null);
         break;
+      case "open-history":
+        openSheet({ kind: "history" });
+        break;
+      case "open-letter":
+        openSheet({ kind: "letter" });
+        break;
+      case "history-undo": {
+        if (state.historyBusy) break;
+        state.historyBusy = el.dataset.id;
+        renderSheet();
+        await act(invoke("undo_history", { id: el.dataset.id }));
+        state.historyBusy = null;
+        await loadHistory();
+        break;
+      }
       case "keep":
         if (!g) return;
         act(invoke("keep_group", { signature: g.signature, keep: !g.kept }), () => (g.kept ? "Okay, it can go when you say so." : "Got it. I'll leave that one alone."));
@@ -4593,10 +4698,13 @@ in ${x.cwd}`)}">
       if (key === "notifySkills") c.ui.notifySkills = on;
       if (key === "alwaysOnTop") c.ui.alwaysOnTop = on;
       if (key === "checkUpdates") c.ui.checkUpdates = on;
+      if (key === "autopilot") c.trash.autopilot = on;
+      if (key === "notifyLetter") c.ui.notifyLetter = on;
     });
     if (!saved) return;
     if (key === "checkUpdates" && on) loadUpdate();
     if (key === "autoStop") toast(on ? "Deal. I'll clean up after them myself." : "Okay. I'll just tell you.");
+    if (key === "autopilot") toast(on ? "Deal. Once a week, while you're away, I'll tidy the safe things." : "Okay. I'll wait for you to ask.");
     if (key === "notifications") toast(on ? "I'll let you know when it matters." : "Okay. Not a peep.");
   });
 
@@ -4675,6 +4783,7 @@ in ${x.cwd}`)}">
   });
   $("#btn-settings").addEventListener("click", () => (state.sheet && state.sheet.kind === "settings" ? closeSheet() : openSheet({ kind: "settings" })));
   $("#btn-about").addEventListener("click", () => (state.sheet && state.sheet.kind === "about" ? closeSheet() : openSheet({ kind: "about" })));
+  $("#btn-history").addEventListener("click", () => (state.sheet && state.sheet.kind === "history" ? closeSheet() : openSheet({ kind: "history" })));
   $("#btn-hide").addEventListener("click", () => invoke("hide_window"));
   $("#btn-big").addEventListener("click", () => setBigMode(!state.big));
   $("#btn-pin").addEventListener("click", async () => {
@@ -4704,6 +4813,8 @@ in ${x.cwd}`)}">
     loadAgents();
     loadRules().catch(() => {});
     bridge.listen("skills", () => loadRules().catch(() => {}));
+    loadHistory();
+    bridge.listen("letter", () => loadHistory());
     // New versions: a first look once things have settled, then now and then (she asks GitHub at
     // most once a day, however often this runs).
     setTimeout(loadUpdate, 20000);
