@@ -66,8 +66,13 @@ pub struct Extension {
     pub description: String,
     pub version: String,
     pub on: bool,
-    /// A Chrome app (not an extension): Chrome stopped running these on Windows.
+    /// A Chrome app (not an extension): Chrome stopped running these on Windows, and its
+    /// extensions page no longer lists them.
     pub app: bool,
+    /// A theme: Chrome lists it under Appearance, not with the extensions.
+    pub theme: bool,
+    /// The site a Chrome app opens ("desmos.com"), when it's one that just opens a site.
+    pub site: Option<String>,
     /// What sort of thing it is: "ad blocker", "crypto wallet", "VPN", ...
     pub kind: Option<&'static str>,
     /// What it's allowed to do, in plain words, the most far-reaching first.
@@ -78,7 +83,8 @@ pub struct Extension {
     pub added: Option<u64>,
     pub last_saved: Option<u64>,
     pub size: u64,
-    /// Its own page in the browser (where it's switched off or removed).
+    /// Its own page in the browser (where it's switched off or removed): the Apps page for a
+    /// Chrome app, Appearance for a theme.
     pub page: String,
     /// Its picture, as a data: URI.
     pub icon: Option<String>,
@@ -268,6 +274,15 @@ fn extensions(profile: &Path, scheme: &str) -> Vec<(Extension, Vec<PathBuf>)> {
         let disabled = e.get("disable_reasons").is_some_and(|r| r.as_array().is_some_and(|a| !a.is_empty()) || r.as_i64().is_some_and(|n| n != 0))
             || e.get("state").and_then(Value::as_i64) == Some(0);
         let (can, everywhere) = permissions(&manifest);
+        let app = manifest.get("app").is_some();
+        let theme = manifest.get("theme").is_some();
+        let page = if app {
+            format!("{scheme}://apps")
+        } else if theme {
+            format!("{scheme}://settings/appearance")
+        } else {
+            format!("{scheme}://extensions/?id={id}")
+        };
         let measure = vec![
             dir.clone(),
             profile.join("Local Extension Settings").join(id),
@@ -280,19 +295,29 @@ fn extensions(profile: &Path, scheme: &str) -> Vec<(Extension, Vec<PathBuf>)> {
             description: text("description"),
             version: manifest.get("version").and_then(Value::as_str).unwrap_or_default().to_string(),
             on: !disabled,
-            app: manifest.get("app").is_some(),
+            app,
+            theme,
+            site: manifest.pointer("/app/launch/web_url").and_then(Value::as_str).and_then(site_of),
             can,
             everywhere,
             added: e.get("first_install_time").or_else(|| e.get("install_time")).and_then(chrome_time),
             last_saved: None,
             size: 0,
-            page: format!("{scheme}://extensions/?id={id}"),
+            page,
             icon: version_dir.as_deref().and_then(|v| crate::icons::extension(v, &manifest)),
             name,
         }, measure));
     }
     out.sort_by(|(a, _), (b, _)| b.on.cmp(&a.on).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     out
+}
+
+/// "https://www.desmos.com/calculator" -> "desmos.com".
+fn site_of(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
+    let host = rest.split(['/', '?', '#', ':']).next()?.to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    (!host.is_empty() && host.len() <= 253 && host.bytes().all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))).then(|| host.to_string())
 }
 
 /// Manifests sometimes start with a byte-order mark.
@@ -396,11 +421,12 @@ fn notes(ext: &[Extension], last_used: Option<u64>, now: u64) -> Vec<Note> {
     if let Some(t) = last_used.filter(|t| now.saturating_sub(*t) > year) {
         out.push(Note { level: "tip", text: format!("Not used in {} days. If it's an old profile, removing it frees its space.", now.saturating_sub(t) / 86_400) });
     }
-    let apps: Vec<&str> = on.iter().filter(|e| e.app).map(|e| e.name.as_str()).collect();
+    let apps: Vec<&str> = ext.iter().filter(|e| e.app).map(|e| e.name.as_str()).collect();
     if !apps.is_empty() {
-        out.push(Note { level: "tip", text: format!("{} {}: Chrome stopped running Chrome apps on Windows, so {} just {}.", plural(apps.len() as u64, "Chrome app"), names(&apps), if apps.len() == 1 { "it" } else { "they" }, if apps.len() == 1 { "sits there" } else { "sit there" }) });
+        let (they, sit) = if apps.len() == 1 { ("it", "sits") } else { ("they", "sit") };
+        out.push(Note { level: "tip", text: format!("{} {sit} here unused: {}. Chrome stopped running Chrome apps, so {they} can go.", plural(apps.len() as u64, "old Chrome app"), names(&apps)) });
     }
-    let idle: Vec<&str> = on.iter().filter(|e| !e.app && e.last_saved.is_none() && e.added.is_some_and(|a| now.saturating_sub(a) > 30 * 86_400)).map(|e| e.name.as_str()).collect();
+    let idle: Vec<&str> = on.iter().filter(|e| !e.app && !e.theme && e.last_saved.is_none() && e.added.is_some_and(|a| now.saturating_sub(a) > 30 * 86_400)).map(|e| e.name.as_str()).collect();
     if idle.len() >= 2 {
         out.push(Note { level: "tip", text: format!("{} have never saved anything since you added them: {}. Most likely unused.", plural(idle.len() as u64, "extension"), names(&idle)) });
     }
@@ -453,6 +479,9 @@ mod tests {
         assert_eq!(kind_of("VPN for Chrome: NordVPN proxy protection", &[]), Some("VPN"));
         assert_eq!(kind_of("Desmos Graphing Calculator", &[]), None);
         assert_eq!(chrome_time(&json!("13291816019293602")), Some(1_647_342_419));
+        assert_eq!(site_of("https://www.desmos.com/calculator?x=1").as_deref(), Some("desmos.com"));
+        assert_eq!(site_of("http://Example.org:8080").as_deref(), Some("example.org"));
+        assert_eq!(site_of("chrome-extension://abc/index.html"), None);
     }
 
     #[test]
@@ -465,6 +494,8 @@ mod tests {
             version: "1".into(),
             on: true,
             app,
+            theme: false,
+            site: None,
             kind,
             can: vec![],
             everywhere: false,
@@ -484,7 +515,7 @@ mod tests {
         let n = notes(&list, Some(now - 500 * 86_400), now);
         let all: Vec<&str> = n.iter().map(|x| x.text.as_str()).collect();
         assert!(all[0].starts_with("Not used in 500 days"), "{all:?}");
-        assert!(all.iter().any(|t| t.starts_with("1 Chrome app Desmos")), "{all:?}");
+        assert!(all.iter().any(|t| t.starts_with("1 old Chrome app sits here unused: Desmos")), "{all:?}");
         assert!(all.iter().any(|t| t.starts_with("2 extensions have never saved anything since you added them: Psykopaint, Sketchpad")), "{all:?}");
         assert!(all.iter().any(|t| t.starts_with("2 ad blockers do the same job twice")), "{all:?}");
     }

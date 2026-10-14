@@ -68,8 +68,8 @@ Want every detail? [momputer, in detail](docs/in-detail.md).
 ## Install
 
 **0.3.3:** shader caches carry their game's name, and a game's cache goes once the game is
-uninstalled. Other file cleanup is paused while its safety update is checked; scans and
-previews work as before.
+uninstalled. Old Chrome apps get their own list, with a way to remove them. Other file cleanup
+is paused while its safety update is checked; scans and previews work as before.
 
 **[Download for Windows](https://thisisily.github.io/momputer/)**: one button, three steps.
 
