@@ -175,8 +175,7 @@ pub fn blank_history(paths: &Paths, id: &str) -> Result<String, String> {
         if n == 0 {
             return Ok("Nothing to take out any more.".into());
         }
-        let tmp = h.path.with_extension("txt.momtmp");
-        std::fs::write(&tmp, blanked.as_bytes()).map_err(|e| format!("Couldn't write beside it: {e}"))?;
+        let tmp = fresh_file(&h.path, blanked.as_bytes()).map_err(|e| format!("Couldn't write beside it: {e}"))?;
         let now = std::fs::symlink_metadata(&h.path).ok();
         let same = now.is_some_and(|m| m.len() == before.len() && m.modified().ok() == before.modified().ok());
         if !same {
@@ -192,6 +191,43 @@ pub fn blank_history(paths: &Paths, id: &str) -> Result<String, String> {
         };
     }
     Err("It kept changing while mom worked. Close PowerShell and terminal windows, then press again.".into())
+}
+
+/// Writes `bytes` to a new file beside `path`, under a name nobody could have guessed, creating
+/// it fresh: never through a link someone left there, and never in a folder that is itself a
+/// link to somewhere else. Returns where it went.
+fn fresh_file(path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    use std::io::Write;
+    let refuse = |what: &str| std::io::Error::new(std::io::ErrorKind::PermissionDenied, what.to_string());
+    let dir = path.parent().ok_or_else(|| refuse("no folder"))?;
+    let meta = std::fs::symlink_metadata(dir)?;
+    let mut linked = meta.file_type().is_symlink();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        linked |= meta.file_attributes() & 0x400 != 0; // FILE_ATTRIBUTE_REPARSE_POINT
+    }
+    if linked || !meta.is_dir() {
+        return Err(refuse("its folder is a link"));
+    }
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let tmp = dir.join(format!(".{name}.{}-{nanos:x}.momtmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT: a link is never followed
+    }
+    let mut file = options.open(&tmp)?;
+    let written = file.write_all(bytes).and_then(|_| file.sync_all());
+    drop(file);
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(tmp)
 }
 
 fn history_check(h: &History, text: &str) -> Option<Check> {

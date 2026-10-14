@@ -497,6 +497,37 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// A plain path on one of this PC's own disks: a drive letter (not a network share or a device
+/// path), no "..", on a drive Windows calls fixed, removable or a RAM disk (not one mapped from
+/// the network). Even looking at a file elsewhere can make Windows sign in to another computer
+/// as you, so paths mom read from settings files are checked with this first.
+pub fn local_disk(path: &std::path::Path) -> bool {
+    use std::path::{Component, Prefix};
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return false;
+    }
+    let letter = match path.components().next() {
+        Some(Component::Prefix(p)) => match p.kind() {
+            Prefix::Disk(d) | Prefix::VerbatimDisk(d) => d,
+            _ => return false,
+        },
+        _ => return cfg!(not(windows)) && path.is_absolute(),
+    };
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+        let root = wide(&format!("{}:\\", letter as char));
+        // SAFETY: `root` is a NUL-terminated UTF-16 string that outlives the call.
+        // 2 removable, 3 fixed, 6 RAM disk.
+        matches!(unsafe { GetDriveTypeW(root.as_ptr()) }, 2 | 3 | 6)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = letter;
+        false
+    }
+}
+
 /// Roots of the fixed drives ("C:\\", "D:\\"): no USB sticks, DVDs or network shares.
 #[cfg(windows)]
 pub fn fixed_drives() -> Vec<String> {
@@ -566,6 +597,18 @@ pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    #[test]
+    fn only_paths_on_this_pcs_own_disks_are_local() {
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        assert!(super::local_disk(std::path::Path::new(&format!("{system}\\Windows"))));
+        assert!(!super::local_disk(std::path::Path::new(r"\\server.example\share\notes.md")));
+        assert!(!super::local_disk(std::path::Path::new(r"\\?\UNC\server.example\share\notes.md")));
+        assert!(!super::local_disk(std::path::Path::new(r"\\.\pipe\notes")));
+        assert!(!super::local_disk(std::path::Path::new(&format!("{system}\\Windows\\..\\x"))));
+        assert!(!super::local_disk(std::path::Path::new(r"notes\here.md")));
+    }
+
     use super::*;
 
     #[test]

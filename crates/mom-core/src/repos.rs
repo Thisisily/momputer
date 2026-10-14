@@ -2,10 +2,12 @@
 //! anywhere else yet. A project with no remote at all, commits that were never pushed, changes
 //! never committed, stashes set aside and forgotten. If the drive fails, that work goes with it.
 //!
-//! Mom only asks git, and only questions: `remote`, `for-each-ref`, `rev-list`, `status` and
-//! `stash list`. Each runs with --no-optional-locks (so git doesn't even refresh its index),
-//! with the project's own fsmonitor switched off (a project's settings can name a program for
-//! git to run), with a time limit, and several projects at a time.
+//! Mom only asks git, and only questions: `for-each-ref`, `log`, `status` and `stash list`. A
+//! project's own settings can name programs for git to run (a filter for every file it
+//! compares, an fsmonitor, a signature checker) or pull in other settings files, so git is only
+//! asked about a project whose settings are all ones mom knows are plain data; any other is
+//! left alone. Each question runs with --no-optional-locks (so git doesn't even refresh its
+//! index), with a time limit, and several projects at a time.
 
 use crate::paths::Paths;
 use crate::speed::Fix;
@@ -158,7 +160,7 @@ pub(crate) fn git() -> Option<PathBuf> {
 pub(crate) fn ask(git: &Path, repo: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let repo = repo.to_str()?;
     let program = git.to_str()?;
-    let mut all = vec!["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", repo];
+    let mut all = vec!["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "log.showSignature=false", "-C", repo];
     all.extend_from_slice(args);
     crate::util::run(program, &all, GIT_TIME).ok().filter(|o| o.ok()).map(|o| o.stdout)
 }
@@ -234,14 +236,80 @@ fn changed_paths(z: &[u8]) -> Vec<String> {
     out
 }
 
-/// Whether the project has a remote, from its own settings file (a few lines, read without
-/// starting git). None when it can't be told that way: a worktree, whose settings are elsewhere,
-/// or a file that can't be read.
-fn has_remote(repo: &Path) -> Option<bool> {
-    let config = repo.join(".git").join("config");
-    std::fs::symlink_metadata(&config).ok().filter(|m| m.is_file() && m.len() <= 1 << 20)?;
-    let text = std::fs::read_to_string(&config).ok()?;
-    Some(text.lines().any(|l| l.trim_start().to_ascii_lowercase().starts_with("[remote ")))
+/// The project's own settings file, when it's an ordinary one: a real .git folder (not a link,
+/// and not a worktree's pointer to settings elsewhere) on this PC's own disks, holding a small
+/// readable config. None for anything else, and then mom doesn't ask git about it at all.
+fn settings(repo: &Path) -> Option<String> {
+    let dot = repo.join(".git");
+    if !crate::util::local_disk(&dot) {
+        return None;
+    }
+    let meta = std::fs::symlink_metadata(&dot).ok()?;
+    let mut linked = meta.file_type().is_symlink();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        linked |= meta.file_attributes() & 0x400 != 0; // a junction or other reparse point
+    }
+    if linked || !meta.is_dir() {
+        return None;
+    }
+    let config = dot.join("config");
+    std::fs::symlink_metadata(&config).ok().filter(|m| m.is_file() && m.len() <= 64 << 10)?;
+    std::fs::read_to_string(&config).ok()
+}
+
+/// The settings git keeps per project that are only data: names, addresses, branch links,
+/// switches. Anything else (a filter or fsmonitor program, a signature checker, an include of
+/// other settings, a setting mom doesn't know) means git might run something, so mom doesn't ask.
+const PLAIN: &[(&str, &[&str])] = &[
+    ("core", &["repositoryformatversion", "filemode", "bare", "logallrefupdates", "symlinks", "ignorecase", "precomposeunicode", "autocrlf", "eol", "safecrlf", "longpaths", "quotepath", "hidedotfiles", "checkstat", "trustctime", "fscache", "sparsecheckout", "sparsecheckoutcone"]),
+    ("remote", &["url", "pushurl", "fetch", "push", "tagopt", "prune", "prunetags", "mirror", "skipdefaultupdate", "skipfetchall", "partialclonefilter", "promisor"]),
+    ("branch", &["remote", "merge", "rebase", "pushremote", "description", "vscode-merge-base", "github-pr-owner-number"]),
+    ("user", &["name", "email"]),
+    ("gui", &["wmstate", "geometry"]),
+    ("pull", &["rebase", "ff"]),
+    ("push", &["default", "autosetupremote", "followtags"]),
+    ("fetch", &["prune", "prunetags"]),
+    ("init", &["defaultbranch"]),
+    ("submodule", &["url", "active", "branch"]),
+    ("lfs", &["repositoryformatversion"]),
+    ("extensions", &["objectformat"]),
+    ("maintenance", &["auto", "strategy"]),
+    ("blame", &["ignorerevsfile", "markignoredlines", "markunblamablelines"]),
+];
+
+/// Every setting in `config` is plain data (see PLAIN). A line mom can't read counts as no.
+fn plain(config: &str) -> bool {
+    let mut section = String::new();
+    for raw in config.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.ends_with('\\') {
+            return false; // a value carried on to the next line
+        }
+        if let Some(head) = line.strip_prefix('[') {
+            let Some(end) = head.find(']') else { return false };
+            if !head[end + 1..].trim().is_empty() {
+                return false;
+            }
+            // "[remote \"origin\"]" or "[remote.origin]": the section is the first word.
+            let name = head[..end].trim();
+            section = name.split(|c: char| c == ' ' || c == '.' || c == '"').next().unwrap_or("").to_ascii_lowercase();
+            if !PLAIN.iter().any(|(s, _)| *s == section) {
+                return false;
+            }
+            continue;
+        }
+        let key = line.split('=').next().unwrap_or("").trim().to_ascii_lowercase();
+        let Some((_, keys)) = PLAIN.iter().find(|(s, _)| *s == section) else { return false };
+        if !keys.contains(&key.as_str()) {
+            return false;
+        }
+    }
+    true
 }
 
 fn mtime(path: &Path) -> Option<u64> {
@@ -252,10 +320,12 @@ fn mtime(path: &Path) -> Option<u64> {
 fn look(git: &Path, repo: &Path, now: u64) -> Option<Look> {
     let name = repo.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| repo.to_string_lossy().to_string());
     let mut l = Look { repo: repo.to_path_buf(), name, ..Default::default() };
-    l.no_remote = match has_remote(repo) {
-        Some(any) => !any,
-        None => text(&ask(git, repo, &["remote"])?).trim().is_empty(),
-    };
+    // Only a project whose settings are plain data is asked about (see PLAIN).
+    let config = settings(repo)?;
+    if !plain(&config) {
+        return None;
+    }
+    l.no_remote = !config.lines().any(|line| line.trim_start().to_ascii_lowercase().starts_with("[remote "));
 
     // Every branch, where it was pushed to and how far ahead it is; and whether anything's stashed.
     let refs = text(&ask(git, repo, &["for-each-ref", "--format=%(refname)%09%(upstream:short)%09%(upstream:track)%09%(committerdate:unix)", "refs/heads", "refs/stash"])?);
@@ -300,7 +370,7 @@ fn look(git: &Path, repo: &Path, now: u64) -> Option<Look> {
     }
 
     // Changes not committed, when nobody has touched any of them for a while.
-    if let Some(z) = ask(git, repo, &["status", "--porcelain=v1", "-z"]) {
+    if let Some(z) = ask(git, repo, &["status", "--porcelain=v1", "-z", "--ignore-submodules=all"]) {
         let changed = changed_paths(&z);
         if !changed.is_empty() {
             let newest = changed.iter().take(MAX_CHANGED).filter_map(|p| mtime(&repo.join(p))).max().unwrap_or(0);
@@ -480,6 +550,31 @@ fn checks_in(git: &Path, repos: &[PathBuf], now: u64) -> Vec<Check> {
 }
 
 #[cfg(test)]
+mod settings_tests {
+    use super::plain;
+
+    #[test]
+    fn only_settings_that_are_plain_data_let_git_be_asked() {
+        let ordinary = "[core]\n\trepositoryformatversion = 0\n\tfilemode = false\n\tbare = false\n[remote \"origin\"]\n\turl = https://git.example/nimbus.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n";
+        assert!(plain(ordinary));
+        for program in [
+            "[core]\n\tfsmonitor = run-me.exe\n",
+            "[filter \"lfs\"]\n\tclean = run-me.exe %f\n",
+            "[include]\n\tpath = elsewhere.cfg\n",
+            "[includeIf \"gitdir:x\"]\n\tpath = elsewhere.cfg\n",
+            "[gpg]\n\tprogram = run-me.exe\n",
+            "[log]\n\tshowSignature = true\n",
+            "[core]\n\tsshCommand = run-me.exe\n",
+            "[submodule \"x\"]\n\tupdate = !run-me.exe\n",
+            "[core]\n\tbare = false \\\n",
+            "[core] fsmonitor = run-me.exe\n",
+        ] {
+            assert!(!plain(&format!("{ordinary}{program}")), "{program}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -513,12 +608,12 @@ mod tests {
         let git_dir = root.join(".git");
         std::fs::create_dir_all(&git_dir).unwrap();
         std::fs::write(git_dir.join("config"), "[core]\n\tbare = false\n").unwrap();
-        assert_eq!(has_remote(&root), Some(false));
+        assert!(settings(&root).is_some_and(|c| plain(&c) && !c.contains("[remote ")));
         std::fs::write(git_dir.join("config"), "[core]\n\tbare = false\n[remote \"origin\"]\n\turl = https://example.com/nimbus.git\n").unwrap();
-        assert_eq!(has_remote(&root), Some(true));
+        assert!(settings(&root).is_some_and(|c| plain(&c) && c.contains("[remote ")));
         std::fs::remove_dir_all(&git_dir).unwrap();
         std::fs::write(root.join(".git"), "gitdir: ../elsewhere/.git/worktrees/x\n").unwrap();
-        assert_eq!(has_remote(&root), None, "a worktree: ask git");
+        assert_eq!(settings(&root), None, "a worktree: its settings are elsewhere, so mom leaves it alone");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

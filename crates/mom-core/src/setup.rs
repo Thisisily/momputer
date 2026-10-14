@@ -1204,7 +1204,7 @@ fn codex(paths: &Paths) -> Option<AgentSetup> {
                     a.settings.push(fact("Model", tame(model, 60), "ok", Some(d)));
                 }
                 let trusted = v.get("projects").and_then(Value::as_object).map(|p| p.values().filter(|x| x.get("trust_level").and_then(Value::as_str) == Some("trusted")).count()).unwrap_or(0);
-                a.projects = v.get("projects").and_then(Value::as_object).into_iter().flatten().map(|(p, _)| PathBuf::from(p)).filter(|p| p.is_dir()).take(MAX_PROJECTS).collect();
+                a.projects = v.get("projects").and_then(Value::as_object).into_iter().flatten().map(|(p, _)| PathBuf::from(p)).filter(|p| crate::util::local_disk(p) && p.is_dir()).take(MAX_PROJECTS).collect();
                 if trusted > 0 {
                     a.settings.push(fact("Trusted folders", format!("{trusted}, where it works without asking as much."), "ok", Some(d)));
                 }
@@ -1465,7 +1465,7 @@ fn recent_claude_projects(paths: &Paths, state: Option<&Value>) -> Vec<PathBuf> 
             .map(|rd| rd.flatten().take(5_000).filter_map(|e| e.metadata().ok()?.modified().ok()).filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).max().unwrap_or(0))
             .unwrap_or(0);
         let dir = PathBuf::from(project);
-        if newest > 0 && now.saturating_sub(newest) <= RECENT && dir.is_dir() {
+        if newest > 0 && now.saturating_sub(newest) <= RECENT && crate::util::local_disk(&dir) && dir.is_dir() {
             found.push((newest, dir));
         }
     }
@@ -1511,6 +1511,10 @@ fn memory_with_imports(path: &Path, home: &Path) -> Vec<(PathBuf, String)> {
     let mut todo = vec![(path.to_path_buf(), 0)];
     while let Some((p, depth)) = todo.pop() {
         if out.len() > MAX_IMPORTS || out.iter().any(|(q, _)| crate::util::norm_path(&q.to_string_lossy()) == crate::util::norm_path(&p.to_string_lossy())) {
+            continue;
+        }
+        // An import can name any path, a network share included: only this PC's own disks are read.
+        if !crate::util::local_disk(&p) {
             continue;
         }
         let Some(text) = std::fs::symlink_metadata(&p).ok().filter(|m| m.is_file() && m.len() <= MAX_DOC).and_then(|_| std::fs::read_to_string(&p).ok()) else { continue };
