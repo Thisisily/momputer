@@ -318,6 +318,31 @@
         recent(item("Figma-Setup.exe", "Downloads", 210 * MB, false, "Last changed 6 days ago (kept for 30 days)", 6 * D2)),
       ],
     }),
+    // 0.5.0 C1
+    spot({
+      id: "downloads", label: "Downloads you're done with", group: "personal", action: "recycle", safety: "review", path: "C:\\Users\\me\\Downloads",
+      what: "Things in your Downloads folders that have done their job: archives you've already unpacked (the folder next to each one stays), and installers for programs that are installed. Old disk images can be ticked. Exports of your own data are pointed out and stay.",
+      effect: "Moves 3 files (2.6 GB) to the Recycle Bin: archives you've already unpacked (the folders stay) and installers for programs that are installed, plus any old disk images you tick. Changed your mind? Restore them from the Recycle Bin.",
+      totalBytes: 2.6 * GB + 5.4 * GB + 880 * MB, reclaimableBytes: 2.6 * GB, reclaimableItems: 3, keptItems: 2,
+      items: [
+        { ...item("lanternfall-assets.zip", "Downloads", 1.9 * GB, true, "Already unpacked into lanternfall-assets", 40 * D2), kind: "unpacked archives" },
+        { ...item("NimbusSetup.exe", "Downloads", 520 * MB, true, "Nimbus is installed", 12 * D2), kind: "installers" },
+        { ...item("storefront-tools-2.1-x64.msi", "Downloads", 180 * MB, true, "storefront tools is installed", 33 * D2), kind: "installers" },
+        { ...recent(item("atlas-os.iso", "Downloads", 5.4 * GB, false, "Unchanged for 140 days; tick it if you're done with it", 140 * D2)), kind: "disk images" },
+        { ...item("chatgpt-export", "Downloads", 880 * MB, false, "Your ChatGPT export. It may be your only copy, so it stays", 200 * D2), kind: "data exports" },
+      ],
+    }),
+    spot({
+      id: "old-drivers", label: "Old driver versions", group: "windows", action: "delete", safety: "review", admin: true, path: "C:\\Windows\\System32\\DriverStore\\FileRepository",
+      what: "Every driver update adds a copy to Windows' driver store, and Windows keeps the old ones in case the new one goes wrong. Older versions no device uses can go; the newest version of each driver, and any version a device uses, always stays.",
+      effect: "Has Windows remove 2 old driver versions (1.6 GB) that no device uses. The newest version of each driver, and every version a device uses, stays. Windows asks you first, and refuses any a device still needs.",
+      totalBytes: 2.4 * GB, reclaimableBytes: 1.6 * GB, reclaimableItems: 2, keptItems: 1,
+      items: [
+        { ...item("Lanternfall Graphics · lanternfall.inf 31.0.15.4601", "Driver package oem12.inf", 820 * MB, true, "Version 32.0.15.6094 replaced it, and no device uses it", 300 * D2), kind: "old driver versions" },
+        { ...item("Lanternfall Graphics · lanternfall.inf 31.0.15.5222", "Driver package oem19.inf", 790 * MB, true, "Version 32.0.15.6094 replaced it, and no device uses it", 200 * D2), kind: "old driver versions" },
+        { ...item("Lanternfall Graphics · lanternfall.inf 32.0.15.6094", "Driver package oem27.inf", 810 * MB, false, "A device uses it", 30 * D2), kind: "old driver versions" },
+      ],
+    }),
   ];
 
   // Where old conversations go (none chosen yet) and one that was moved before.
@@ -404,7 +429,7 @@
 
   const health = {
     drives: [
-      { root: "C:\\", label: "Windows", total: 476 * GB, free: 41 * GB, system: true },
+      { root: "C:\\", label: "Windows", total: 476 * GB, free: 41 * GB, system: true, fullInDays: 23 },
       { root: "D:\\", label: "Data", total: 931 * GB, free: 512 * GB, system: false },
     ],
     memory: { total: 64 * GB, used: 47 * GB },

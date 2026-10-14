@@ -4462,3 +4462,13 @@ button.row-name:hover {
 .st-bad {
   fill: var(--red);
 }
+
+/* 0.5.0 C1: a drive that's filling up says when it's full. */
+.gauge-soon {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--ink-2);
+}

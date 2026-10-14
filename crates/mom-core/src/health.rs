@@ -37,6 +37,10 @@ pub struct Drive {
     pub free: u64,
     /// Windows lives here.
     pub system: bool,
+    /// At the rate it's been filling, it's full in about this many days (only said within two
+    /// months).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_in_days: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -102,7 +106,13 @@ fn size(b: u64) -> String {
 
 /// Looks the machine over. Takes a few milliseconds; runs nothing.
 pub fn check(table: &ProcTable, paths: &Paths) -> Health {
-    let drives = os::drives();
+    let mut drives = os::drives();
+    // 0.5.0 C1: a reading a day, and when each drive will be full at the rate it's filling.
+    let readings: Vec<(String, u64, u64)> = drives.iter().map(|d| (d.root.clone(), d.free, d.total)).collect();
+    let soon = crate::space::note(paths, &readings, crate::util::now_secs());
+    for d in &mut drives {
+        d.full_in_days = soon.get(&d.root.to_ascii_uppercase()).copied().flatten();
+    }
     let memory = os::memory().unwrap_or(Memory { total: table.total_mem, used: table.used_mem });
     let uptime_secs = os::uptime_secs();
     let startup = startup_apps(paths);
@@ -645,6 +655,7 @@ mod os {
                     root,
                     total,
                     free: avail.min(free),
+                    full_in_days: None,
                 })
             })
             .collect()
@@ -690,7 +701,7 @@ mod tests {
     use crate::procs::{fake, ProcTable};
 
     fn drive(letter: &str, free_gb: u64, total_gb: u64) -> Drive {
-        Drive { root: format!("{letter}:\\"), label: "Local Disk".into(), total: total_gb * GB, free: free_gb * GB, system: letter == "C" }
+        Drive { root: format!("{letter}:\\"), label: "Local Disk".into(), total: total_gb * GB, free: free_gb * GB, system: letter == "C", full_in_days: None }
     }
 
     fn facts<'a>(drives: &'a [Drive], memory: &'a Memory, top: Option<&'a ProcMem>) -> Facts<'a> {

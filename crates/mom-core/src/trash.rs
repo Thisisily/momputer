@@ -10,6 +10,9 @@ pub(crate) mod bin;
 mod browsers;
 mod builds;
 mod claude;
+// 0.5.0 C1
+mod downloads;
+mod drivers;
 mod forgotten;
 mod harness;
 mod shader_owner;
@@ -798,6 +801,33 @@ const DEFS: &[Def] = &[
         safety: "review",
         owner: None,
     },
+    // 0.5.0 C1
+    Def {
+        id: "downloads",
+        label: "Downloads you're done with",
+        detail: "Archives you've already unpacked, and installers for programs that are installed.",
+        what: "Things in your Downloads folders that have done their job: zip, 7z and rar files you've already unpacked \
+               (the folder next to each one stays), and installers for programs that are installed. Old disk images \
+               can be ticked. Exports of your own data (ChatGPT, Google Takeout) are pointed out and stay: they may be \
+               your only copy. Mom looks in your Downloads folder and a Downloads folder at the top of each drive.",
+        group: "personal",
+        action: "recycle",
+        safety: "review",
+        owner: None,
+    },
+    Def {
+        id: "old-drivers",
+        label: "Old driver versions",
+        detail: "Older versions of drivers that a newer version replaced and no device uses.",
+        what: "Every driver update adds a copy to Windows' driver store, and Windows keeps the old ones in case the new \
+               one goes wrong. Older versions no device uses can go; the newest version of each driver, and any version \
+               a device uses, always stays. Windows' own pnputil removes them and refuses any a device still needs. It \
+               needs an administrator, so Windows asks you first.",
+        group: "windows",
+        action: "delete",
+        safety: "review",
+        owner: None,
+    },
 ];
 
 /// The last measurement, saved so a restart doesn't mean measuring everything again.
@@ -862,7 +892,7 @@ pub fn cleans_without_asking(id: &str) -> bool {
 }
 
 /// Spots only an administrator can clean: the app asks Windows to run `mom` elevated for them.
-const ADMIN: &[&str] = &["windows-junk", "admin-leftovers"];
+const ADMIN: &[&str] = &["windows-junk", "admin-leftovers", "old-drivers"];
 
 pub fn needs_admin(id: &str) -> bool {
     ADMIN.contains(&id)
@@ -1470,6 +1500,9 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
             f
         }
         "recycle-bin" => bin::find(ctx),
+        // 0.5.0 C1
+        "downloads" => downloads::find(ctx),
+        "old-drivers" => drivers::find(ctx),
         "old-installers" => {
             let dir = &ctx.paths.downloads;
             if !dir.is_dir() {
@@ -1477,13 +1510,22 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
             }
             let mut f = Found::at(dir.clone());
             let min = OLD_INSTALLER_DAYS * 86_400;
+            // Installers for programs that are installed are in "Downloads you're done with".
+            let looked_up;
+            let installed = match &ctx.installed {
+                Some(i) => i,
+                None => {
+                    looked_up = crate::installed::Installed::scan(ctx.paths);
+                    &looked_up
+                }
+            };
             let list = entries(dir)
                 .into_iter()
                 .map(|p| {
                     let n = name_of(&p);
                     (p, n)
                 })
-                .filter(|(p, n)| is_installer(n) && p.is_file());
+                .filter(|(p, n)| is_installer(n) && p.is_file() && downloads::installed_app(p, installed).is_none());
             for mut c in cands(list.collect(), ctx.now) {
                 c = c.age_sensitive();
                 c.sub = Some(installer_kind(&c.name).to_string());
@@ -1945,6 +1987,9 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
              and untick anything you might want back.",
             count_size(n, "item", "items", bytes)
         ),
+        // 0.5.0 C1
+        "downloads" => downloads::effect(n, bytes),
+        "old-drivers" => drivers::effect(n, bytes, stays.len()),
         "old-installers" if n == 0 => nothing(&format!("no installers in Downloads older than {OLD_INSTALLER_DAYS} days.")),
         "old-installers" => format!(
             "Moves {} from Downloads to the Recycle Bin. They're setup files over {OLD_INSTALLER_DAYS} days old for programs \
@@ -2067,6 +2112,7 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     match def.action {
         "tool" => return run_tool(id, ctx, r),
         _ if id == "docker" => return docker_clean(ctx, pick, r),
+        _ if id == "old-drivers" => return drivers::clean(ctx, pick, r),
         _ => {}
     }
     let f = find_for(id, ctx, pick);
@@ -2155,7 +2201,9 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         // The data and its restore record are a pair. Keep the record if data could not go.
         each(false, &bin::remove_record)
     } else if def.action == "recycle" {
-        each(false, &|c: &Cand| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok()))
+        // Too big for the bin, Windows would delete it for good without asking: it stays.
+        let room = std::cell::RefCell::new(bin::Room::default());
+        each(false, &|c: &Cand| c.targets.iter().all(|t| !t.exists() || (room.borrow_mut().fits(t, c.bytes) && ::trash::delete(t).is_ok())))
     } else if recycle {
         recycle_chosen(&chosen, live, &mut big, &|c| (id != "browser-cache" || browsers::still_closed(&c.path, ctx)) && update_allowed(c), &|i, ok| match ok {
             Some(ok) => settle(i, ok, false), // it counts the files of each batch itself

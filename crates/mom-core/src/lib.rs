@@ -30,6 +30,7 @@ pub mod rules;
 pub mod scan;
 pub mod setup;
 pub mod skills;
+pub mod space; // 0.5.0 C1
 pub mod sound;
 pub mod speed;
 pub mod startup;
