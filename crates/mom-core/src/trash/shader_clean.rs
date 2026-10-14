@@ -439,6 +439,10 @@ mod tests {
             fn new() -> Self {
                 let root = std::env::temp_dir().join(format!("mom-shader-clean-{}-{}", std::process::id(), NEXT_TOKEN.fetch_add(1, Ordering::Relaxed)));
                 fs::create_dir_all(&root).unwrap();
+                // GitHub's TEMP uses RUNNER~1. Exercise the ordinary long-path contract;
+                // production deliberately rejects aliases instead of trusting their spelling.
+                let canonical = fs::canonicalize(&root).unwrap().to_string_lossy().into_owned();
+                let root = PathBuf::from(canonical.strip_prefix(r"\\?\").unwrap_or(&canonical));
                 Self { paths: Paths::under(&root), root }
             }
             fn cache(&self) -> PathBuf { self.paths.local_appdata.join("NVIDIA").join("DXCache") }
