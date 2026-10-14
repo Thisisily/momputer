@@ -160,7 +160,7 @@ pub(crate) fn git() -> Option<PathBuf> {
 pub(crate) fn ask(git: &Path, repo: &Path, args: &[&str]) -> Option<Vec<u8>> {
     let repo = repo.to_str()?;
     let program = git.to_str()?;
-    let mut all = vec!["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "log.showSignature=false", "-C", repo];
+    let mut all = vec!["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "log.showSignature=false", "-c", "protocol.allow=never", "-C", repo];
     all.extend_from_slice(args);
     crate::util::run(program, &all, GIT_TIME).ok().filter(|o| o.ok()).map(|o| o.stdout)
 }
@@ -245,18 +245,43 @@ fn settings(repo: &Path) -> Option<String> {
         return None;
     }
     let meta = std::fs::symlink_metadata(&dot).ok()?;
-    let mut linked = meta.file_type().is_symlink();
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        linked |= meta.file_attributes() & 0x400 != 0; // a junction or other reparse point
-    }
-    if linked || !meta.is_dir() {
+    if linked(&meta) || !meta.is_dir() {
         return None;
+    }
+    // Git reads more than this file from .git: a common folder named elsewhere (then its settings
+    // are there, not here), or objects borrowed from another folder, which could be on another
+    // computer. Either, and mom leaves the project alone.
+    for elsewhere in ["commondir", "gitdir", "config.worktree", "objects/info/alternates", "objects/info/http-alternates"] {
+        if std::fs::symlink_metadata(dot.join(elsewhere)).is_ok() {
+            return None;
+        }
+    }
+    // Its folders must be real folders here, not links that lead somewhere else.
+    for folder in ["objects", "objects/info", "objects/pack", "refs", "info", "logs"] {
+        if std::fs::symlink_metadata(dot.join(folder)).is_ok_and(|m| linked(&m) || !m.is_dir()) {
+            return None;
+        }
+    }
+    let packs = std::fs::read_dir(dot.join("objects").join("pack")).into_iter().flatten().take(5_000);
+    for entry in packs {
+        if entry.ok().and_then(|e| std::fs::symlink_metadata(e.path()).ok()).is_none_or(|m| linked(&m)) {
+            return None;
+        }
     }
     let config = dot.join("config");
     std::fs::symlink_metadata(&config).ok().filter(|m| m.is_file() && m.len() <= 64 << 10)?;
     std::fs::read_to_string(&config).ok()
+}
+
+/// A link or junction: something that leads elsewhere.
+fn linked(meta: &std::fs::Metadata) -> bool {
+    let mut yes = meta.file_type().is_symlink();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        yes |= meta.file_attributes() & 0x400 != 0; // FILE_ATTRIBUTE_REPARSE_POINT
+    }
+    yes
 }
 
 /// The settings git keeps per project that are only data: names, addresses, branch links,
@@ -264,7 +289,7 @@ fn settings(repo: &Path) -> Option<String> {
 /// other settings, a setting mom doesn't know) means git might run something, so mom doesn't ask.
 const PLAIN: &[(&str, &[&str])] = &[
     ("core", &["repositoryformatversion", "filemode", "bare", "logallrefupdates", "symlinks", "ignorecase", "precomposeunicode", "autocrlf", "eol", "safecrlf", "longpaths", "quotepath", "hidedotfiles", "checkstat", "trustctime", "fscache", "sparsecheckout", "sparsecheckoutcone"]),
-    ("remote", &["url", "pushurl", "fetch", "push", "tagopt", "prune", "prunetags", "mirror", "skipdefaultupdate", "skipfetchall", "partialclonefilter", "promisor"]),
+    ("remote", &["url", "pushurl", "fetch", "push", "tagopt", "prune", "prunetags", "mirror", "skipdefaultupdate", "skipfetchall"]),
     ("branch", &["remote", "merge", "rebase", "pushremote", "description", "vscode-merge-base", "github-pr-owner-number"]),
     ("user", &["name", "email"]),
     ("gui", &["wmstate", "geometry"]),
@@ -568,6 +593,7 @@ mod settings_tests {
             "[submodule \"x\"]\n\tupdate = !run-me.exe\n",
             "[core]\n\tbare = false \\\n",
             "[core] fsmonitor = run-me.exe\n",
+            "[remote \"origin\"]\n\tpromisor = true\n\tpartialclonefilter = blob:none\n",
         ] {
             assert!(!plain(&format!("{ordinary}{program}")), "{program}");
         }
@@ -614,6 +640,15 @@ mod tests {
         std::fs::remove_dir_all(&git_dir).unwrap();
         std::fs::write(root.join(".git"), "gitdir: ../elsewhere/.git/worktrees/x\n").unwrap();
         assert_eq!(settings(&root), None, "a worktree: its settings are elsewhere, so mom leaves it alone");
+        std::fs::remove_file(root.join(".git")).unwrap();
+        std::fs::create_dir_all(git_dir.join("objects").join("info")).unwrap();
+        std::fs::write(git_dir.join("config"), "[core]\n\tbare = false\n").unwrap();
+        assert!(settings(&root).is_some(), "an ordinary project");
+        std::fs::write(git_dir.join("objects").join("info").join("alternates"), "C:\\elsewhere\\objects\n").unwrap();
+        assert_eq!(settings(&root), None, "objects borrowed from elsewhere");
+        std::fs::remove_file(git_dir.join("objects").join("info").join("alternates")).unwrap();
+        std::fs::write(git_dir.join("commondir"), "../elsewhere\n").unwrap();
+        assert_eq!(settings(&root), None, "settings in a common folder elsewhere");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
