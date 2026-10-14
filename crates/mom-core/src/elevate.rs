@@ -393,7 +393,7 @@ mod acl {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT};
     use windows_sys::Win32::Security::{
-        GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        GetAce, IsValidSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, INHERIT_ONLY_ACE, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
         PSID,
     };
 
@@ -501,6 +501,46 @@ mod acl {
         !me.is_empty() && only(path, rights, &mine, &|sid| mine(sid) || named(sid))
     }
 
+    /// Whether one ACE can be ruled out as a grant of `rights` to an untrusted account.
+    ///
+    /// SAFETY: `ace` must point to a DWORD-aligned ACE in a live allocation containing both
+    /// its header and the `AceSize` bytes it declares, as returned by a successful GetAce.
+    unsafe fn ace_is_restricted(ace: *const ACE_HEADER, rights: u32, allowed: &dyn Fn(&str) -> bool) -> bool {
+        // Read only the common header until the type and its minimum size are established.
+        let header = unsafe { *ace };
+        if (header.AceSize as usize) < std::mem::size_of::<ACE_HEADER>() || header.AceSize % 4 != 0 {
+            return false;
+        }
+        if header.AceFlags as u32 & INHERIT_ONLY_ACE != 0 {
+            return true; // affects children, not this object
+        }
+        match header.AceType {
+            1 | 6 | 10 | 12 => return true, // basic, object, callback and callback-object deny ACEs cannot grant access
+            0 => {}, // ACCESS_ALLOWED_ACE
+            _ => return false, // object/callback grants and unfamiliar types must not silently pass
+        }
+        const SID_HEADER_BYTES: usize = 8;
+        let sid_offset = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+        if (header.AceSize as usize) < sid_offset + SID_HEADER_BYTES {
+            return false;
+        }
+        // SAFETY: this is a basic allow ACE, large enough for its mask and fixed SID header.
+        let a = ace.cast::<ACCESS_ALLOWED_ACE>();
+        let (mask, sid_start) = unsafe { ((*a).Mask, (*a).SidStart.to_le_bytes()) };
+        if mask & rights == 0 {
+            return true;
+        }
+        // A SID contains an eight-byte header followed by SubAuthorityCount DWORDs. Bound
+        // the entire SID by this ACE before Windows is asked to validate or stringify it.
+        let sid_bytes = SID_HEADER_BYTES + usize::from(sid_start[1]) * 4;
+        if sid_bytes > header.AceSize as usize - sid_offset {
+            return false;
+        }
+        let sid = unsafe { std::ptr::addr_of!((*a).SidStart) } as PSID;
+        // SAFETY: the complete SID is inside the still-live, aligned ACE allocation.
+        (unsafe { IsValidSid(sid) != 0 }) && sid_string(sid).is_some_and(|s| allowed(&s))
+    }
+
     /// Is `path` owned by an account `owner` passes, with any of `rights` on it only for
     /// accounts `allowed` passes? (Both are asked with a SID string.)
     fn only(path: &Path, rights: u32, owner_ok: &dyn Fn(&str) -> bool, allowed: &dyn Fn(&str) -> bool) -> bool {
@@ -539,15 +579,9 @@ mod acl {
                 if unsafe { GetAce(dacl, i, &mut ace) } == 0 || ace.is_null() {
                     return false;
                 }
-                let a = ace as *const ACCESS_ALLOWED_ACE;
-                // SAFETY: every ACE starts with a header; allowed ACEs (type 0) are ACCESS_ALLOWED_ACE.
-                let (kind, flags, mask) = unsafe { ((*a).Header.AceType, (*a).Header.AceFlags as u32, (*a).Mask) };
-                if kind != 0 || flags & INHERIT_ONLY_ACE != 0 || mask & rights == 0 {
-                    continue; // a deny, only for what's created inside, or not the rights in question
-                }
-                // SAFETY: the SID starts at SidStart, inside the ACE.
-                let sid = unsafe { std::ptr::addr_of!((*a).SidStart) } as PSID;
-                if !sid_string(sid).is_some_and(|s| allowed(&s)) {
+                // SAFETY: successful GetAce returned an aligned ACE inside the descriptor;
+                // `sd` remains allocated until every ACE and its SID have been inspected.
+                if !unsafe { ace_is_restricted(ace.cast(), rights, allowed) } {
                     return false;
                 }
             }
@@ -556,6 +590,58 @@ mod acl {
         // SAFETY: allocated by GetNamedSecurityInfoW.
         unsafe { LocalFree(sd) };
         ok
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        // A DWORD-aligned synthetic basic allow ACE, containing one complete SID. No file's
+        // security descriptor or permissions are changed by these parser regressions.
+        fn ace(kind: u8, flags: u8, mask: u32, authority: u8, account: u32) -> [u32; 5] {
+            [u32::from_le_bytes([kind, flags, 20, 0]), mask, u32::from_le_bytes([1, 1, 0, 0]),
+                u32::from_le_bytes([0, 0, 0, authority]), account]
+        }
+
+        fn restricted(ace: &[u32; 5]) -> bool {
+            // SAFETY: the owned array is DWORD-aligned and holds the complete declared ACE;
+            // malformed fixtures keep the declared ACE within that allocation.
+            unsafe { ace_is_restricted(ace.as_ptr().cast(), 2, &trusted) }
+        }
+
+        #[test]
+        fn basic_grants_are_checked_and_denies_cannot_grant_access() {
+            assert!(restricted(&ace(0, 0, 2, 5, 18)), "LocalSystem may write");
+            assert!(!restricted(&ace(0, 0, 2, 1, 0)), "Everyone must not be allowed to write");
+            assert!(restricted(&ace(0, 0, 1, 1, 0)), "Everyone may read without receiving write rights");
+            for kind in [1, 6, 10, 12] {
+                assert!(restricted(&ace(kind, 0, 2, 1, 0)), "deny type {kind} cannot grant access");
+            }
+            assert!(restricted(&ace(0, INHERIT_ONLY_ACE as u8, 2, 1, 0)), "inherit-only grants do not affect this object");
+        }
+
+        #[test]
+        fn unsupported_grants_fail_closed_without_assuming_a_basic_allow_layout() {
+            for kind in [4, 5, 9, 11, 255] {
+                let mut entry = ace(kind, 0, 2, 1, 0);
+                entry[0] = u32::from_le_bytes([kind, 0, 4, 0]);
+                assert!(!restricted(&entry), "unsupported type {kind} must not bypass the ACL check");
+            }
+        }
+
+        #[test]
+        fn short_or_invalid_basic_allow_sids_fail_closed() {
+            for size in [0, 4, 8, 12, 16, 18] {
+                let mut entry = ace(0, 0, 2, 5, 18);
+                entry[0] = u32::from_le_bytes([0, 0, size, 0]);
+                assert!(!restricted(&entry), "size {size} cannot hold this ACE and its complete SID");
+            }
+            let mut entry = ace(0, 0, 2, 5, 18);
+            entry[2] = u32::from_le_bytes([1, 15, 0, 0]);
+            assert!(!restricted(&entry), "a SID must not run into the next ACE");
+            entry[2] = u32::from_le_bytes([0, 1, 0, 0]);
+            assert!(!restricted(&entry), "an invalid SID revision must not be accepted");
+        }
     }
 }
 

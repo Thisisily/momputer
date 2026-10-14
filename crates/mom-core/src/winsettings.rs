@@ -1625,11 +1625,43 @@ mod os {
         HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, KEY_WOW64_64KEY,
     };
 
+    fn fixed_file_major(data: &[u8], returned: *const std::ffi::c_void, len: usize) -> Option<u32> {
+        use windows_sys::Win32::Storage::FileSystem::VS_FIXEDFILEINFO;
+        if returned.is_null() || len < std::mem::size_of::<VS_FIXEDFILEINFO>() {
+            return None;
+        }
+        // VerQueryValue returns a location inside `data`. Use it only to locate a
+        // checked slice of our allocation, never to dereference a foreign pointer.
+        let offset = (returned as usize).checked_sub(data.as_ptr() as usize)?;
+        let bytes = data.get(offset..offset.checked_add(len)?)?;
+        let signature = u32::from_ne_bytes(bytes.get(..4)?.try_into().ok()?);
+        let version_offset = std::mem::offset_of!(VS_FIXEDFILEINFO, dwFileVersionMS);
+        let version = u32::from_ne_bytes(bytes.get(version_offset..version_offset + 4)?.try_into().ok()?);
+        (signature == 0xfeef04bd).then_some(version >> 16)
+    }
+
+    /// Include the terminator so this checked slice can be passed back to Win32.
+    fn terminated_utf16(value: &[u16]) -> Option<&[u16]> {
+        let end = value.iter().position(|&c| c == 0)?;
+        (end > 0).then(|| &value[..=end])
+    }
+
+    fn package_name(buffer: &[u16], returned: *const u16) -> Option<&[u16]> {
+        if returned.is_null() {
+            return None;
+        }
+        let offset = (returned as usize).checked_sub(buffer.as_ptr() as usize)?;
+        if offset % std::mem::size_of::<u16>() != 0 {
+            return None;
+        }
+        terminated_utf16(buffer.get(offset / std::mem::size_of::<u16>()..)?)
+    }
+
     pub fn executable_major(path: &std::path::Path) -> Option<u32> {
-        use windows_sys::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO};
+        use windows_sys::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
         let name = wide(&path.to_string_lossy());
-        // SAFETY: Windows fills owned buffers. The returned version pointer lives in `data`;
-        // read_unaligned does not assume the byte buffer has the structure's alignment.
+        // SAFETY: Windows fills owned buffers of the supplied size. The returned
+        // location and length are checked against `data` before parsing its bytes.
         unsafe {
             let size = GetFileVersionInfoSizeW(name.as_ptr(), std::ptr::null_mut());
             if size == 0 || size > 1024 * 1024 {
@@ -1641,11 +1673,10 @@ mod os {
             }
             let mut ptr = std::ptr::null_mut();
             let mut len = 0;
-            if VerQueryValueW(data.as_ptr().cast(), wide("\\").as_ptr(), &mut ptr, &mut len) == 0 || ptr.is_null() || len < std::mem::size_of::<VS_FIXEDFILEINFO>() as u32 {
+            if VerQueryValueW(data.as_ptr().cast(), wide("\\").as_ptr(), &mut ptr, &mut len) == 0 {
                 return None;
             }
-            let info = std::ptr::read_unaligned(ptr.cast::<VS_FIXEDFILEINFO>());
-            (info.dwSignature == 0xfeef04bd).then_some(info.dwFileVersionMS >> 16)
+            fixed_file_major(&data, ptr, len as usize)
         }
     }
 
@@ -1654,11 +1685,12 @@ mod os {
         use windows_sys::Win32::Storage::Packaging::Appx::{GetPackagePathByFullName, GetPackagesByPackageFamily};
         let family = wide("Microsoft.PowerShell_8wekyb3d8bbwe");
         let mut out = Vec::new();
-        // SAFETY: the package API fills owned arrays, with all sizes expressed in UTF-16
-        // characters. Package-name pointers refer to `buffer`, which stays alive throughout.
+        // SAFETY: the package API fills owned arrays; string sizes are UTF-16 character
+        // counts, including NUL. Returned names are checked against the live string
+        // buffer before passing a pointer derived from its checked slice back to Win32.
         unsafe {
             let (mut count, mut len) = (0, 0);
-            if GetPackagesByPackageFamily(family.as_ptr(), &mut count, std::ptr::null_mut(), &mut len, std::ptr::null_mut()) != ERROR_INSUFFICIENT_BUFFER || count > 256 || len > 65536 {
+            if GetPackagesByPackageFamily(family.as_ptr(), &mut count, std::ptr::null_mut(), &mut len, std::ptr::null_mut()) != ERROR_INSUFFICIENT_BUFFER || count == 0 || count > 256 || len == 0 || len > 65536 {
                 return out;
             }
             let mut names = vec![std::ptr::null_mut(); count as usize];
@@ -1666,19 +1698,72 @@ mod os {
             if GetPackagesByPackageFamily(family.as_ptr(), &mut count, names.as_mut_ptr(), &mut len, buffer.as_mut_ptr()) != 0 {
                 return out;
             }
-            for name in names.into_iter().take(count as usize).filter(|p| !p.is_null()) {
+            let (Some(names), Some(buffer)) = (names.get(..count as usize), buffer.get(..len as usize)) else {
+                return out;
+            };
+            for &name in names {
+                let Some(name) = package_name(buffer, name) else { continue };
                 let mut len = 0;
-                if GetPackagePathByFullName(name, &mut len, std::ptr::null_mut()) != ERROR_INSUFFICIENT_BUFFER || len > 32768 {
+                if GetPackagePathByFullName(name.as_ptr(), &mut len, std::ptr::null_mut()) != ERROR_INSUFFICIENT_BUFFER || len == 0 || len > 32768 {
                     continue;
                 }
                 let mut path = vec![0u16; len as usize];
-                if GetPackagePathByFullName(name, &mut len, path.as_mut_ptr()) == 0 {
-                    let end = path.iter().position(|c| *c == 0).unwrap_or(path.len());
-                    out.push(std::path::PathBuf::from(String::from_utf16_lossy(&path[..end])));
+                if GetPackagePathByFullName(name.as_ptr(), &mut len, path.as_mut_ptr()) == 0 {
+                    if let Some(path) = path.get(..len as usize).and_then(terminated_utf16) {
+                        out.push(std::path::PathBuf::from(String::from_utf16_lossy(&path[..path.len() - 1])));
+                    }
                 }
             }
         }
         out
+    }
+
+    #[cfg(test)]
+    mod version_and_package_tests {
+        use super::{fixed_file_major, package_name, terminated_utf16};
+        use windows_sys::Win32::Storage::FileSystem::VS_FIXEDFILEINFO;
+
+        #[test]
+        fn version_info_is_read_from_a_bounded_slice_without_alignment_requirements() {
+            let size = std::mem::size_of::<VS_FIXEDFILEINFO>();
+            let mut data = vec![0u8; size + 1];
+            data[1..5].copy_from_slice(&0xfeef04bdu32.to_ne_bytes());
+            let version = 1 + std::mem::offset_of!(VS_FIXEDFILEINFO, dwFileVersionMS);
+            data[version..version + 4].copy_from_slice(&((7u32 << 16) | 6).to_ne_bytes());
+            let returned = data.as_ptr().wrapping_add(1).cast();
+            assert_eq!(fixed_file_major(&data, returned, size), Some(7));
+            assert_eq!(fixed_file_major(&data, returned, size - 1), None);
+            assert_eq!(fixed_file_major(&data, returned, size + 1), None);
+            assert_eq!(fixed_file_major(&data, returned, usize::MAX), None);
+            assert_eq!(fixed_file_major(&data, std::ptr::null(), size), None);
+            assert_eq!(fixed_file_major(&data, data.as_ptr().wrapping_sub(1).cast(), size), None);
+            assert_eq!(fixed_file_major(&data, data.as_ptr().wrapping_add(data.len()).cast(), size), None);
+            data[1] ^= 1;
+            assert_eq!(fixed_file_major(&data, returned, size), None);
+        }
+
+        #[test]
+        fn package_names_must_be_aligned_terminated_and_inside_the_returned_buffer() {
+            let buffer = [b'A' as u16, 0, b'B' as u16, b'C' as u16, 0];
+            assert_eq!(package_name(&buffer, buffer.as_ptr()), Some(&buffer[..2]));
+            assert_eq!(package_name(&buffer, buffer.as_ptr().wrapping_add(2)), Some(&buffer[2..]));
+            assert_eq!(package_name(&buffer, std::ptr::null()), None);
+            assert_eq!(package_name(&buffer, buffer.as_ptr().wrapping_sub(1)), None);
+            assert_eq!(package_name(&buffer, buffer.as_ptr().wrapping_add(buffer.len())), None);
+            assert_eq!(package_name(&buffer, buffer.as_ptr().cast::<u8>().wrapping_add(1).cast()), None);
+            assert_eq!(package_name(&buffer[..4], buffer.as_ptr().wrapping_add(2)), None);
+            assert_eq!(package_name(&buffer, buffer.as_ptr().wrapping_add(1)), None);
+        }
+
+        #[test]
+        fn package_paths_require_a_nonempty_name_and_a_terminator_within_reported_length() {
+            let path = [b'C' as u16, b':' as u16, b'\\' as u16, 0, b'X' as u16];
+            assert_eq!(path.get(..4).and_then(terminated_utf16), Some(&path[..4]));
+            assert_eq!(path.get(..3).and_then(terminated_utf16), None);
+            assert_eq!(path.get(..6).and_then(terminated_utf16), None);
+            assert_eq!(terminated_utf16(&[0]), None);
+            assert_eq!(terminated_utf16(&[]), None);
+        }
     }
 
     /// An open registry key, closed when dropped.
