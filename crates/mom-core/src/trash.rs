@@ -12,13 +12,16 @@ mod builds;
 mod claude;
 mod forgotten;
 mod harness;
+mod shader_owner;
+mod steam_shaders;
 mod walk;
+mod windows_update;
 
 use crate::agents::AgentKind;
 use crate::config::{Config, TrashConfig};
 use crate::paths::Paths;
 use crate::procs::ProcTable;
-use crate::util::{human_age_long, human_bytes, mtime_secs, norm_path, now_secs, plural};
+use crate::util::{human_age_long, human_bytes, norm_path, now_secs, plural};
 use walk::{remove_all, remove_owned, remove_without_following, tally, tally_many, Tally};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -89,6 +92,9 @@ pub struct Item {
     pub files: u64,
     /// Since it last changed (or, in the Recycle Bin, since it was deleted).
     pub age_secs: u64,
+    /// False when the age could not be established; zero seconds then means unknown, not new.
+    #[serde(default)]
+    pub age_known: bool,
     /// Cleaning takes it (or, in a review spot, takes it unless the user unticks it).
     pub goes: bool,
     /// Stays to be careful (it's recent, or the newest older version kept as a fallback) and
@@ -96,7 +102,7 @@ pub struct Item {
     /// program is using, or Docker or a database still needs, is never optional.
     #[serde(default)]
     pub optional: bool,
-    /// Why it goes or stays ("Session ended 3 days ago", "Edge is open").
+    /// Why it goes or stays ("Last changed 3 days ago", "Edge is open").
     pub reason: String,
     /// What sort of thing it is, plural ("images", "logs"), in spots that hold several sorts.
     #[serde(default)]
@@ -113,7 +119,7 @@ pub struct CleanReport {
     pub freed: u64,
     /// Items deleted, recycled or emptied.
     pub deleted: u64,
-    /// Items that couldn't be removed (in use) or no longer qualified.
+    /// Items that couldn't be removed (in use or blocked by permissions) or no longer qualified.
     pub skipped: u64,
     pub message: String,
 }
@@ -255,6 +261,9 @@ pub struct TrashCtx<'a> {
     pub live: Option<&'a Live>,
     /// How many times the usual number of items a spot lists (1, unless someone asked to see more).
     pub list_scale: usize,
+    /// Isolated tests supply update transitions without querying or changing the host PC.
+    #[cfg(test)]
+    windows_update_probe: Option<&'a dyn Fn() -> windows_update::State>,
 }
 
 impl<'a> TrashCtx<'a> {
@@ -292,6 +301,8 @@ impl<'a> TrashCtx<'a> {
             installed: None,
             live: None,
             list_scale: 1,
+            #[cfg(test)]
+            windows_update_probe: None,
         }
     }
 
@@ -310,6 +321,40 @@ impl<'a> TrashCtx<'a> {
 }
 
 const IN_USE: &str = "In use by a running program";
+const UNKNOWN_AGE: &str = "Age unknown; could not check every file and folder";
+const BROWSER_DATA: &str = "Contains browser sign-ins or saved site data";
+
+fn windows_update_state(ctx: &TrashCtx) -> windows_update::State {
+    #[cfg(test)]
+    { ctx.windows_update_probe.map_or(windows_update::State::Clear, |probe| probe()) }
+    #[cfg(not(test))]
+    { let _ = ctx; windows_update::probe() }
+}
+
+fn windows_update_fast_state(ctx: &TrashCtx) -> windows_update::State {
+    #[cfg(test)]
+    { ctx.windows_update_probe.map_or(windows_update::State::Clear, |probe| probe()) }
+    #[cfg(not(test))]
+    { let _ = ctx; windows_update::probe_fast() }
+}
+
+/// Identify actual update locations, not arbitrary folders with similar names. The tool
+/// label also covers a candidate whose configured root uses a filesystem alias.
+fn windows_update_candidate(c: &Cand, ctx: &TrashCtx) -> bool {
+    matches!(c.tool, Some("Windows Update" | "Windows setup"))
+        || c.targets.iter().any(|path| windows_update_target(path, ctx.paths))
+}
+
+fn windows_update_target(path: &Path, paths: &Paths) -> bool {
+    let key = norm_path(&path.to_string_lossy());
+    let download = norm_path(&paths.windows.join("SoftwareDistribution").join("Download").to_string_lossy());
+    if key == download || key.starts_with(&format!("{download}\\")) { return true; }
+    std::iter::once(&paths.system_drive).chain(&paths.other_drives).any(|drive| {
+        let root = norm_path(&drive.to_string_lossy());
+        key.strip_prefix(&format!("{root}\\"))
+            .and_then(|rel| rel.split('\\').next()).is_some_and(harness::setup_folder)
+    })
+}
 /// Projects untouched this long count as idle; their build folders can go.
 const IDLE_PROJECT_DAYS: u64 = 30;
 /// Installers in Downloads older than this can go.
@@ -324,7 +369,22 @@ const ENTRY_CAP: u64 = 2_000_000;
 /// How much each path holds, and when anything in it last changed: (bytes, newest mtime). Many
 /// at once on the walker pool, for other parts of mom (browser profiles, say).
 pub(crate) fn sizes(paths: &[PathBuf]) -> Vec<(u64, u64)> {
-    tally_many(paths, ENTRY_CAP, u64::MAX).into_iter().map(|t| (t.bytes, t.newest)).collect()
+    tally_many(paths, ENTRY_CAP, u64::MAX).into_iter().map(|t| (t.bytes, if t.complete { t.newest } else { 0 })).collect()
+}
+
+/// Conservative cleanup recency, not last use. Windows creation time prevents a newly copied
+/// or extracted file from inheriting the age of its old contents. Other targets use modified
+/// time; portable Rust cannot require or backdate creation times there.
+pub(crate) fn cleanup_recency(meta: &std::fs::Metadata) -> Option<u64> {
+    fn timestamp(at: std::time::SystemTime) -> Option<u64> {
+        let secs = at.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+        (secs > 0).then_some(secs)
+    }
+    let modified = timestamp(meta.modified().ok()?)?;
+    #[cfg(windows)]
+    { Some(modified.max(timestamp(meta.created().ok()?)?)) }
+    #[cfg(not(windows))]
+    { Some(modified) }
 }
 
 struct Def {
@@ -402,7 +462,7 @@ const DEFS: &[Def] = &[
     Def {
         id: "old-conversations",
         label: "Old conversations",
-        detail: "Chats you haven't opened in a while, moved to another drive with a link left in their place.",
+        detail: "Chats that haven't changed in a while, moved to another drive with a link left in their place.",
         what: "Your agents' past conversations: Codex's and Claude Code's chats, images Codex made, and other agents' \
                sessions. They add up to gigabytes. Moving the old ones to another drive frees this one, and a link in \
                each one's place means the agents still find them where they were.",
@@ -583,9 +643,9 @@ const DEFS: &[Def] = &[
     Def {
         id: "old-build-folders",
         label: "Old build folders",
-        detail: "node_modules and build output in projects nobody has worked on for a month.",
+        detail: "node_modules and build output in projects with no recorded changes for a month.",
         what: "Installed packages (node_modules) and build output (Rust's target, .next, .turbo and the like) inside \
-               projects nobody has worked on for a month. Your code isn't in them; they're rebuilt from it.",
+               projects with no recorded changes for a month. Your code isn't in them; they're rebuilt from it.",
         group: "dev",
         action: "delete",
         safety: "review",
@@ -605,7 +665,7 @@ const DEFS: &[Def] = &[
     Def {
         id: "old-temp",
         label: "Old temp files",
-        detail: "Anything in your Temp folder nobody has touched for a week.",
+        detail: "Temp files with no creation or modification recorded in the last week.",
         what: "Files programs and installers left in your Temp folder and never cleaned up.",
         group: "windows",
         action: "delete",
@@ -617,8 +677,8 @@ const DEFS: &[Def] = &[
         label: "Browser caches",
         detail: "Saved copies of web pages, images and scripts. Browsers and apps rebuild them as you go.",
         what: "Copies of web pages, images and scripts your browsers saved so sites load faster, and the same caches \
-               inside apps built like browsers (Cursor, VS Code, the Claude and Codex apps, Slack, Discord). They're \
-               rebuilt as you go.",
+               inside apps built like browsers (Cursor, VS Code, Claude, Codex, Slack, Discord and Epic Games). \
+               Cookies, sign-ins, site storage and session recovery data are kept.",
         group: "windows",
         action: "delete",
         safety: "safe",
@@ -648,10 +708,12 @@ const DEFS: &[Def] = &[
     Def {
         id: "shader-cache",
         label: "Graphics shader caches",
-        detail: "Shaders your graphics driver compiled for games and apps. Unused ones are made again if ever needed.",
+        detail: "Compiled shaders, with game or app names where the cache records them. Cleared shaders are rebuilt when needed.",
         what: "When a game or app draws something new, the graphics driver (NVIDIA, AMD, Intel) or DirectX compiles \
                a shader for it and keeps it, so next time is quicker. Shaders of games you no longer play just sit \
-               there; these caches easily reach gigabytes.",
+               there; these caches easily reach gigabytes. Mom shows an app name when the cache records it, or a game name \
+               from Steam's library records. A missing executable or Steam entry can mean an uninstall, a move or an update; \
+               it is not proof the app was removed. Unknown owners stay marked unknown. Steam caches start unticked.",
         group: "windows",
         action: "delete",
         safety: "safe",
@@ -683,24 +745,27 @@ const DEFS: &[Def] = &[
     Def {
         id: "windows-junk",
         label: "Windows leftovers",
-        detail: "Update files Windows already installed, old error reports, and what setup left at the top of your drives.",
-        what: "Windows Update keeps the files it downloaded after installing them, and Windows keeps error reports \
+        detail: "Windows update downloads, old error reports, and setup folders at the top of your drives.",
+        what: "Windows Update keeps downloaded files, and Windows keeps error reports \
                about crashes. Windows setup and the update assistant leave their working folders at the top of \
                whichever drive had room, a disk check leaves the pieces it recovered there (found.000), and a few \
                installers (AMD, Adobe) leave a folder on C:. Mom looks at the top of every drive built into the PC. \
-               Cleaning these needs an administrator, so Windows asks you first.",
+               Update and setup files stay while updates or a restart are pending, or their status cannot be checked. \
+               Cleaning eligible items needs an administrator, so Windows asks you first.",
         group: "windows",
         action: "delete",
-        safety: "safe",
+        safety: "review",
         owner: None,
     },
     Def {
         id: "admin-leftovers",
         label: "Apps' leftovers that need admin",
-        detail: "Old driver installers, a launcher's sample downloads, old backups, crash dumps and logs in ProgramData.",
-        what: "Some apps keep their leftovers where only an administrator can delete them: NVIDIA's older driver \
-               installers, Epic's sample downloads, GlassWire's old backup, Razer's crash dumps, Driver Booster's \
-               downloads, the debuggers' symbol cache and G HUB's older versions. Windows asks you first.",
+        detail: "Installer caches, downloaded samples, settings and history backups, crash dumps and logs in ProgramData.",
+        what: "Some apps keep these files where only an administrator can delete them: NVIDIA's downloaded and extracted \
+               installers, Epic's sample downloads, GlassWire's settings and traffic history backups, Razer's crash dumps, \
+               Driver Booster's downloads, the debuggers' symbol cache and G HUB's older versions. NVIDIA's cache can \
+               include the currently installed driver version; removing it may require another download for reinstall \
+               or rollback. Deleting a backup discards the settings and history saved in it. Windows asks you first.",
         group: "windows",
         action: "delete",
         safety: "safe",
@@ -709,11 +774,12 @@ const DEFS: &[Def] = &[
     Def {
         id: "forgotten-apps",
         label: "Forgotten app data",
-        detail: "Big folders of apps you uninstalled, older versions, and things untouched for a long time.",
+        detail: "Big folders of apps you uninstalled, older versions, and data with no recent changes.",
         what: "Big folders apps keep in AppData and your home folder: the data of apps you've since uninstalled, \
-               folders of an app's older versions, and things nobody has touched in a long time. Mom guesses which \
-               app each belongs to, so nothing here is deleted: it moves to your archive drive with a link left \
-               behind. Keys, passwords, wallets and browser profiles are never offered.",
+               folders of an app's older versions, and data with no recently recorded changes. Mom guesses which \
+               app each belongs to, so review the folders first. Archive moves them to your archive drive with a \
+               link left behind. You can instead send selected folders to the Recycle Bin or delete them for good. \
+               Keys, passwords, wallets and browser profiles are never offered.",
         group: "personal",
         action: "move",
         safety: "review",
@@ -740,6 +806,8 @@ fn saved_file(paths: &Paths) -> PathBuf {
 /// The mom that's running. What goes, what stays and what can be ticked is her verdict, and a
 /// newer mom may judge differently, so a measurement is saved with the version that made it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Changes whenever stored measurement evidence/verdicts become incompatible.
+const SCAN_VERSION: u64 = 3;
 
 pub fn save(paths: &Paths, spots: &[Spot]) {
     save_as(paths, spots, VERSION);
@@ -757,7 +825,7 @@ fn save_as(paths: &Paths, spots: &[Spot], version: &str) {
             s
         })
         .collect();
-    if let Ok(json) = serde_json::to_string(&serde_json::json!({ "version": version, "spots": spots })) {
+    if let Ok(json) = serde_json::to_string(&serde_json::json!({ "version": version, "scanVersion": SCAN_VERSION, "spots": spots })) {
         let _ = crate::util::write_atomic(&saved_file(paths), &json);
     }
 }
@@ -771,6 +839,7 @@ pub fn load_saved(paths: &Paths) -> Vec<Spot> {
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .filter(|v| v.get("version").and_then(serde_json::Value::as_str) == Some(VERSION))
+        .filter(|v| v.get("scanVersion").and_then(serde_json::Value::as_u64) == Some(SCAN_VERSION))
         .and_then(|mut v| serde_json::from_value::<Vec<Spot>>(v["spots"].take()).ok())
         .map(|v| v.into_iter().filter(|s| ids.contains(&s.id.as_str())).collect())
         .unwrap_or_default()
@@ -811,6 +880,11 @@ struct Cand {
     bytes: u64,
     files: u64,
     age: u64,
+    /// Age-based cleanup needs complete, valid timestamp evidence. Other cleanups (a browser
+    /// cache or a Recycle Bin record, for example) have their own basis for removal.
+    age_known: bool,
+    age_required: bool,
+    browser_data: bool,
     goes: bool,
     /// Kept only for being recent: the user can tick it.
     optional: bool,
@@ -839,7 +913,10 @@ impl Cand {
             sub: t.sub(),
             bytes: t.bytes,
             files: t.files,
-            age: now.saturating_sub(t.newest),
+            age: if t.complete && t.recency > 0 { now.saturating_sub(t.recency) } else { 0 },
+            age_known: t.complete && t.recency > 0,
+            age_required: false,
+            browser_data: t.contains_browser_data,
             goes: false,
             optional: false,
             kind: None,
@@ -853,8 +930,25 @@ impl Cand {
     }
 
     fn verdict(mut self, goes: bool, reason: impl Into<String>) -> Cand {
+        if self.browser_data {
+            self.goes = false;
+            self.optional = false;
+            self.reason = BROWSER_DATA.into();
+            return self;
+        }
+        if self.age_required && (!self.age_known || !self.complete) {
+            self.goes = false;
+            self.optional = false;
+            self.reason = UNKNOWN_AGE.into();
+            return self;
+        }
         self.goes = goes;
         self.reason = reason.into();
+        self
+    }
+
+    fn age_sensitive(mut self) -> Cand {
+        self.age_required = true;
         self
     }
 
@@ -878,6 +972,7 @@ impl Cand {
             bytes: self.bytes,
             files: self.files,
             age_secs: self.age,
+            age_known: self.age_known,
             goes: self.goes,
             optional: self.optional,
             reason: self.reason,
@@ -947,13 +1042,14 @@ fn cands(list: Vec<(PathBuf, String)>, now: u64) -> Vec<Cand> {
 
 /// The usual verdict for scratch: in use stays, too fresh stays, otherwise it goes.
 fn judge(c: Cand, ctx: &TrashCtx, min_age: u64) -> Cand {
+    let c = c.age_sensitive();
     if ctx.in_use(&c.path) {
         c.verdict(false, IN_USE)
     } else if c.age < min_age {
         let r = too_fresh(c.age, min_age);
         c.kept_but_tickable(r)
     } else {
-        let r = format!("Untouched for {}", ago(c.age));
+        let r = format!("Last changed {} ago", ago(c.age));
         c.verdict(true, r)
     }
 }
@@ -1057,7 +1153,22 @@ pub fn set_keep(cfg: &mut TrashConfig, path: &str, on: bool) -> Result<bool, Str
 /// Everything a spot holds right now, with what you said to keep already marked as staying.
 fn find(id: &str, ctx: &TrashCtx) -> Found {
     let keep = &ctx.cfg.keep[..ctx.cfg.keep.len().min(MAX_KEPT)];
-    keep_yours(find_raw(id, ctx), keep)
+    let mut found = find_raw(id, ctx);
+    if id != "docker" && id != "recycle-bin" {
+        for c in &mut found.cands {
+            if c.browser_data || c.targets.iter().any(|p| crate::browser_data::protects_path(p)) {
+                c.browser_data = true;
+                c.goes = false;
+                c.optional = false;
+                c.reason = BROWSER_DATA.into();
+            } else if !c.complete || c.links > 0 {
+                c.goes = false;
+                c.optional = false;
+                c.reason = "Could not safely check every file and folder; kept".into();
+            }
+        }
+    }
+    keep_yours(found, keep)
 }
 
 fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
@@ -1115,6 +1226,7 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
             let hold = ctx.cfg.agent_scratch_days * 86_400;
             let signs = npx_signs(ctx.paths);
             for (c, deps) in cands(list, ctx.now).into_iter().zip(deps) {
+                let c = c.age_sensitive();
                 let named = deps.iter().find_map(|d| {
                     let d = d.to_lowercase();
                     signs.iter().find(|(_, text)| text.contains(&d)).map(|(by, _)| *by)
@@ -1122,13 +1234,13 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
                 let c = if ctx.in_use(&c.path) {
                     c.verdict(false, IN_USE)
                 } else if let Some(by) = named {
-                    let r = format!("Fetched {} ago; {by}", ago(c.age));
+                    let r = format!("Last changed {} ago; {by}", ago(c.age));
                     c.verdict(false, r)
                 } else if c.age < hold {
-                    let r = format!("Fetched {} ago (kept for {})", ago(c.age), human_age_long(hold));
+                    let r = format!("Last changed {} ago (kept for {})", ago(c.age), human_age_long(hold));
                     c.kept_but_tickable(r)
                 } else {
-                    let r = format!("Fetched {} ago, and nothing mom can see runs it", ago(c.age));
+                    let r = format!("Last changed {} ago, and nothing mom can see runs it", ago(c.age));
                     c.verdict(true, r)
                 };
                 f.cands.push(c);
@@ -1240,12 +1352,13 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
                 if kind != "model" {
                     c.sub = c.sub.map(|s| format!("{s} ({kind})"));
                 }
-                // Nothing records when a model was last used (it's only read, never written), so
-                // its age says when it was downloaded, nothing more. The user picks.
+                // Filesystem dates do not establish when a model was last used. The user picks.
                 let c = if ctx.in_use(&c.path) {
                     c.verdict(false, IN_USE)
                 } else {
-                    let r = format!("Downloaded {} ago; tick it if you're done with it", ago(c.age));
+                    let r = if c.age_known {
+                        format!("Last changed {} ago; tick it if you're done with it", ago(c.age))
+                    } else { "Age unknown; tick it only if you're done with it".into() };
                     c.kept_but_tickable(r)
                 };
                 f.cands.push(c);
@@ -1341,12 +1454,13 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
             let kinds: Vec<&str> = found.iter().map(|x| x.2).collect();
             let list = found.into_iter().map(|(p, app, _)| (p, app)).collect();
             for (mut c, kind) in cands(list, ctx.now).into_iter().zip(kinds) {
+                c = c.age_sensitive();
                 c.sub = Some(if c.files > 1 { format!("{kind}, {}", plural(c.files, "file")) } else { kind.to_string() });
                 let c = if c.age < CRASH_MIN_AGE {
-                    let r = format!("Crashed {} ago (kept for a day)", ago(c.age));
+                    let r = format!("Last changed {} ago (kept for a day)", ago(c.age));
                     c.kept_but_tickable(r)
                 } else {
-                    let r = format!("Crashed {} ago", ago(c.age));
+                    let r = format!("Last changed {} ago", ago(c.age));
                     c.verdict(true, r)
                 };
                 f.cands.push(c);
@@ -1369,14 +1483,15 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
                 })
                 .filter(|(p, n)| is_installer(n) && p.is_file());
             for mut c in cands(list.collect(), ctx.now) {
+                c = c.age_sensitive();
                 c.sub = Some(installer_kind(&c.name).to_string());
                 let c = if ctx.in_use(&c.path) {
                     c.verdict(false, "Running right now")
                 } else if c.age < min {
-                    let r = format!("Downloaded {} ago (kept for {OLD_INSTALLER_DAYS} days)", ago(c.age));
+                    let r = format!("Last changed {} ago (kept for {OLD_INSTALLER_DAYS} days)", ago(c.age));
                     c.kept_but_tickable(r)
                 } else {
-                    let r = format!("Downloaded {} ago", ago(c.age));
+                    let r = format!("Last changed {} ago", ago(c.age));
                     c.verdict(true, r)
                 };
                 f.cands.push(c);
@@ -1618,35 +1733,35 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
     let nothing = |why: &str| format!("Nothing to clean right now: {why}");
     match id {
         "claude-temp" if n == 0 => nothing(&format!(
-            "every scratch folder belongs to a session that's still running or was used in the last {kept}."
+            "no scratch folders with complete checks qualify for the {kept} cutoff. Recent, running, protected or unverified folders stay."
         )),
         "claude-temp" => format!(
             "Deletes {} from Claude Code sessions that have ended, {forever}. Folders of sessions that are still \
              running, or changed in the last {kept}, are left alone. Your projects and Claude's chat history aren't touched.",
             count_size(n, "scratch folder", "scratch folders", bytes)
         ),
-        "codex-temp" if n == 0 => nothing(&format!("everything Codex left is either in use or from the last {kept}.")),
+        "codex-temp" if n == 0 => nothing(&format!("no Codex leftovers with complete checks qualify for the {kept} cutoff. Recent, in-use, protected or unverified items stay.")),
         "codex-temp" => format!(
-            "Deletes {} that Codex left behind and nobody has touched in {kept}, {forever}: {}. Codex's threads, \
+            "Deletes {} that Codex left behind with no recorded changes in {kept}, {forever}: {}. Codex's threads, \
              settings and memories aren't touched; anything newer stays.",
             count_size(n, "temp file", "temp files and folders", bytes),
             harness::kinds(goes)
         ),
-        "render-temp" if n == 0 => nothing(&format!("no render folders older than {render_age}.")),
+        "render-temp" if n == 0 => nothing(&format!("no render folders with complete checks qualify for the {render_age} cutoff.")),
         "render-temp" => format!(
             "Deletes {} from your Temp folder, {forever}. They're copies made while rendering; your projects and \
-             finished videos aren't touched. Anything used in the last {render_age} stays.",
+             finished videos aren't touched. Anything with recorded changes in the last {render_age} stays.",
             count_size(n, "render folder", "render folders", bytes)
         ),
         "old-conversations" => {
             let days = human_age_long(ctx.cfg.conversations_after_days * 86_400);
             let place = ctx.cfg.archive_dir.as_ref().map(|d| d.display().to_string()).unwrap_or_else(|| "a drive you choose".into());
             if n == 0 {
-                nothing(&format!("every conversation was opened in the last {days}, or has been moved already."))
+                nothing(&format!("no conversation is known to have stayed unchanged for {days}, or they have been moved already."))
             } else {
                 let tools = harness::tools(goes);
                 format!(
-                    "Moves {} of {tools} conversations nobody has opened in {days} to {place}, and leaves a link in each \
+                    "Moves {} of {tools} conversations with no recorded changes in {days} to {place}, and leaves a link in each \
                      one's place, so they still open from where they were. Nothing is deleted, and Bring back puts any of \
                      them back here. While that drive is unplugged, those conversations can't be opened.",
                     count_size(n, "folder", "folders", bytes)
@@ -1659,28 +1774,39 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
                 nothing("no big folders of uninstalled apps, older versions or long-forgotten things.")
             } else {
                 format!(
-                    "Moves {} to {place}, with a link left in each one's place: data of {}. Nothing is deleted. Bring back \
-                     puts any of them back, and once you're sure you don't need one, Delete for good removes it from \
-                     there. Mom guesses which app a folder belongs to, so look through the list first.",
+                    "Archive moves {} to {place}, with a link left in each one's place: data of {}. Bring back puts \
+                     them back. You can instead choose Recycle Bin or Delete for good for the folders you select; \
+                     deleting for good cannot be undone. Mom guesses which app a folder belongs to, so look through the list first.",
                     count_size(n, "folder", "folders", bytes),
                     harness::tools(goes)
                 )
             }
         }
-        "cursor-worktrees" if n == 0 => nothing(&format!("every worktree is in use or was worked in during the last {kept}.")),
+        "cursor-worktrees" if n == 0 => nothing(&format!("no worktrees with complete checks qualify for the {kept} cutoff. Recent, in-use, protected or unverified worktrees stay.")),
         "cursor-worktrees" => format!(
-            "Moves {} that Cursor's agents made, and nobody has touched in {kept}, to the Recycle Bin. Changes in them \
+            "Moves {} that Cursor's agents made, with no recorded changes in {kept}, to the Recycle Bin. Changes in them \
              that were never committed go too, so look through the list first; restore any from the Recycle Bin. Your \
              projects aren't touched (Git keeps a note of each worktree until you run `git worktree prune`).",
             count_size(n, "worktree", "worktrees", bytes)
         ),
-        "claude-leftovers" | "agent-leftovers" | "app-leftovers" | "shader-cache" | "game-junk" | "dev-leftovers" | "windows-junk"
-        | "admin-leftovers" => {
+        "shader-cache" => {
             if n == 0 {
-                nothing(&format!("everything they left is in use or from the last {kept}."))
+                "Mom has not selected any shader caches by default. Steam caches start unticked; you can select them after reviewing their app details.".into()
             } else {
                 format!(
-                    "Deletes {} that {} left behind and nobody has touched in {kept}, {forever}: {}. {} \
+                    "Deletes {} of compiled shaders, {forever}. Games and apps rebuild shaders they need; the first run may stutter. \
+                     Cache age is when files last changed, not when a game was last played.",
+                    count_size(n, "item", "items", bytes)
+                )
+            }
+        }
+        "claude-leftovers" | "agent-leftovers" | "app-leftovers" | "game-junk" | "dev-leftovers" | "windows-junk"
+        | "admin-leftovers" => {
+            if n == 0 {
+                nothing(&format!("no eligible leftovers qualify for the {kept} cutoff. Recent, in-use, protected or unverified items stay."))
+            } else {
+                format!(
+                    "Deletes {} that {} left behind with no recorded changes in {kept}, {forever}: {}. {} \
                      Anything newer, or in use, stays.",
                     count_size(n, "item", "items", bytes),
                     harness::tools(goes),
@@ -1692,10 +1818,10 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
         "old-temp" => {
             let days = human_age_long(ctx.cfg.temp_min_age_days * 86_400);
             if n == 0 {
-                nothing(&format!("everything in Temp was used in the last {days} or is in use."))
+                nothing(&format!("no Temp items with complete checks qualify for the {days} cutoff. Recent, in-use, protected or unverified items stay."))
             } else {
                 format!(
-                    "Deletes {} from your Temp folder that nobody has touched in {days}, {forever}. Anything newer, or in \
+                    "Deletes {} from your Temp folder with no recorded changes in {days}, {forever}. Anything newer, or in \
                      use by a running program, stays. Programs make new temp files when they need them.",
                     count_size(n, "item", "items", bytes)
                 )
@@ -1774,15 +1900,15 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
             if stays.is_empty() {
                 nothing("no build folders found in your projects.")
             } else {
-                nothing(&format!("every project with build folders was worked on in the last {IDLE_PROJECT_DAYS} days or has something running."))
+                nothing("no build folders have sufficient evidence of old project activity; recent, active or incompletely checked projects stay.")
             }
         }
         "old-build-folders" => {
             let projects: HashSet<&Path> = goes.iter().filter_map(|c| c.path.parent()).collect();
             format!(
-                "Deletes {} from {} nobody has worked on for {IDLE_PROJECT_DAYS} days, {forever}. Your code isn't touched: \
-                 `npm install` (or pnpm, yarn, bun) and `cargo build` bring them back. Projects you worked on recently, \
-                 or that have something running, are left alone.",
+                "Deletes {} from {} with no recorded changes for {IDLE_PROJECT_DAYS} days, {forever}. Your code isn't touched: \
+                 `npm install` (or pnpm, yarn, bun) and `cargo build` bring them back. Recent changes, running programs \
+                 or incomplete checks keep a project's folders in place.",
                 count_size(n, "build folder", "build folders", bytes),
                 plural(projects.len() as u64, "project")
             )
@@ -1793,8 +1919,8 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
                 nothing("no browser caches to clear.")
             } else {
                 format!(
-                    "Deletes the saved web data of {}, {forever}. Pages load a bit slower the first time you visit them \
-                     again. Logins, history, bookmarks, passwords and open tabs aren't touched.",
+                    "Deletes cached pages, images and scripts for {}, {forever}. Pages may load more slowly at first. \
+                     Cookies, sign-ins, site storage, history, bookmarks, passwords and session recovery data are kept.",
                     count_size(n, "browser profile or app", "browser profiles and apps", bytes)
                 )
             };
@@ -1858,8 +1984,11 @@ pub struct Pick {
     pub new: bool,
     pub ticked: Vec<String>,
     pub unticked: Vec<String>,
-    /// Send it to the Recycle Bin instead of deleting it for good (spots that delete).
+    /// Send it to the Recycle Bin instead of deleting it for good (delete spots, or `discard`).
     pub recycle: bool,
+    /// Forgotten app data only: discard these exact folders instead of archiving them.
+    /// Requires both list defaults off; `ticked` is the complete, explicit selection.
+    pub discard: bool,
     /// Things never to take, whatever else is ticked: what you said to keep, handed along to the
     /// administrator run, which may be reading another account's settings.
     pub keep: Vec<String>,
@@ -1867,13 +1996,25 @@ pub struct Pick {
 
 impl Default for Pick {
     fn default() -> Pick {
-        Pick { goes: true, new: false, ticked: vec![], unticked: vec![], recycle: false, keep: vec![] }
+        Pick { goes: true, new: false, ticked: vec![], unticked: vec![], recycle: false, discard: false, keep: vec![] }
     }
 }
 
 impl Pick {
     fn is_default(&self) -> bool {
-        self.goes && !self.new && !self.recycle && self.ticked.is_empty() && self.unticked.is_empty() && self.keep.is_empty()
+        self.goes && !self.new && !self.recycle && !self.discard && self.ticked.is_empty() && self.unticked.is_empty() && self.keep.is_empty()
+    }
+
+    fn discard_error(&self, id: &str) -> Option<&'static str> {
+        if !self.discard {
+            None
+        } else if id != "forgotten-apps" {
+            Some("Direct removal is only available for Forgotten app data.")
+        } else if self.goes || self.new {
+            Some("Choose the exact app data folders to remove; direct removal cannot include an entire unseen list.")
+        } else {
+            None
+        }
     }
 }
 
@@ -1907,11 +2048,16 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         r.message = format!("Mom doesn't know a spot called {id:?}.");
         return r;
     };
+    if let Some(reason) = pick.and_then(|p| p.discard_error(id)) {
+        r.message = reason.into();
+        return r;
+    }
     let pick = pick.filter(|p| !p.is_default());
+    let discard = pick.is_some_and(|p| p.discard);
     // As administrator, mom only cleans what needs one. Your own files are cleaned as you.
     let elevated = ctx.elevated;
     // Asked for the Recycle Bin instead: only where mom deletes your own files as you.
-    let recycle = pick.is_some_and(|p| p.recycle) && def.action == "delete" && !elevated && !needs_admin(id);
+    let recycle = pick.is_some_and(|p| p.recycle) && (def.action == "delete" || discard) && !elevated && !needs_admin(id);
     if elevated && !needs_admin(id) {
         r.message = "Run this as yourself, not as administrator: it cleans your own files.".into();
         return r;
@@ -1923,6 +2069,27 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     }
     let f = find_for(id, ctx, pick);
     let chosen = choose(&f, pick);
+    let update_reason = std::cell::Cell::new(
+        [windows_update::State::Pending, windows_update::State::Unknown].into_iter()
+            .filter_map(|state| state.reason())
+            .find(|reason| f.note.as_deref() == Some(*reason)
+                || f.cands.iter().any(|c| c.reason == *reason && windows_update_candidate(c, ctx)))
+    );
+    let update_checked = std::cell::Cell::new(false);
+    // Refresh the local update catalog before the first affected operation, then check
+    // native servicing/restart/process state before later items without launching WUA for
+    // every small cache entry. Never reuse a Clear result across cleanup requests. Once
+    // pending or unknown, keep the rest of this request even if the state changes again.
+    let update_block_reason = |c: &Cand| {
+        if id == "recycle-bin" || !windows_update_candidate(c, ctx) { return None; }
+        let reason = update_reason.get().or_else(|| {
+            if update_checked.replace(true) { windows_update_fast_state(ctx) }
+            else { windows_update_state(ctx) }.reason()
+        });
+        if reason.is_some() { update_reason.set(reason); }
+        reason
+    };
+    let update_allowed = |c: &Cand| update_block_reason(c).is_none();
     if let Some(p) = pick {
         // Ticked, but can't go now (in use since the user looked, or already gone).
         let taken: HashSet<String> = chosen.iter().map(|c| norm_path(&c.path.to_string_lossy())).collect();
@@ -1932,8 +2099,8 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     if let Some(l) = live {
         l.start(&chosen);
     }
-    if def.action == "move" {
-        return move_chosen(&chosen, ctx, r);
+    if def.action == "move" && !discard {
+        return move_chosen(&chosen, ctx, r, &update_block_reason);
     }
     let stopped = || live.is_some_and(Live::stopped);
     // What an item's going (or not) freed, told to whoever is watching as soon as it's known: a
@@ -1970,7 +2137,10 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
                 if let Some(l) = live {
                     l.working_on(c);
                 }
-                let ok = remove(c);
+                let safe = (id == "recycle-bin" || c.targets.iter().all(|t| crate::browser_data::tree_is_safe(t)))
+                    && (id != "browser-cache" || browsers::still_closed(&c.path, ctx))
+                    && update_allowed(c);
+                let ok = safe && remove(c);
                 settle(i, ok, !counted);
                 Some(ok)
             })
@@ -1979,10 +2149,13 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     // What was too big for the Recycle Bin, and so stayed.
     let mut big = vec![false; chosen.len()];
     let per_batch = batch_items(chosen.len());
-    let gone: Vec<Option<bool>> = if def.action == "recycle" {
+    let gone: Vec<Option<bool>> = if id == "recycle-bin" {
+        // The data and its restore record are a pair. Keep the record if data could not go.
+        each(false, &bin::remove_record)
+    } else if def.action == "recycle" {
         each(false, &|c: &Cand| c.targets.iter().all(|t| !t.exists() || ::trash::delete(t).is_ok()))
     } else if recycle {
-        recycle_chosen(&chosen, live, &mut big, &|i, ok| match ok {
+        recycle_chosen(&chosen, live, &mut big, &|c| (id != "browser-cache" || browsers::still_closed(&c.path, ctx)) && update_allowed(c), &|i, ok| match ok {
             Some(ok) => settle(i, ok, false), // it counts the files of each batch itself
             None => {
                 // Too big for the Recycle Bin, so it stays: said as soon as it's known.
@@ -2000,12 +2173,13 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
         // As you: what's in folders anyone can change is yours to clean anyway. The rest waits
         // for the administrator run.
         each(false, &|c: &Cand| c.targets.iter().all(|t| crate::elevate::admin_may_delete(t).is_err() && remove_without_following(t)))
-    } else if id == "old-build-folders" {
+    } else if id == "old-build-folders" || id == "browser-cache" || discard {
         // Projects can sit outside your own folders, where other people on this PC can write
         // (the top of a second drive), and a folder in your profile can be a link to such a
         // place. So each is held open while mom checks it's a real folder of yours and empties
-        // it: the check and the delete are about the same folder, with no moment between them
-        // for anyone to swap it. One project at a time, but everything inside it at once, each
+        // it. Direct removal of forgotten app data uses the same protection: the check and the
+        // delete are about the same folder, with no moment between them for anyone to swap it.
+        // One folder at a time, but everything inside it at once, each
         // folder in it held the same way while its own contents go.
         each(true, &|c: &Cand| c.targets.iter().all(|t| remove_owned(t, live)))
     } else {
@@ -2027,7 +2201,13 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
                 l.working_on(chosen[start]);
             }
             let targets: Vec<PathBuf> = chosen[start..end].iter().flat_map(|c| c.targets.iter().cloned()).collect();
-            let mut done = remove_all(&targets, live).into_iter();
+            let safe: Vec<bool> = chosen[start..end].iter().flat_map(|c| {
+                let allowed = update_allowed(c);
+                c.targets.iter().map(move |t| allowed && (id == "recycle-bin" || crate::browser_data::tree_is_safe(t)))
+            }).collect();
+            let allowed: Vec<PathBuf> = targets.iter().zip(&safe).filter(|(_, safe)| **safe).map(|(p, _)| p.clone()).collect();
+            let mut removed = remove_all(&allowed, live).into_iter();
+            let mut done = safe.into_iter().map(|safe| safe && removed.next().unwrap_or(false));
             for (i, c) in chosen.iter().enumerate().take(end).skip(start) {
                 let ok = c.targets.iter().map(|_| done.next().unwrap_or(false)).fold(true, |a, b| a & b);
                 settle(i, ok, false); // remove_all counted the files as they went
@@ -2076,7 +2256,14 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
             }
         }
     }
-    r.message = if recycle { recycled_message(&r) } else { cleaned_message(def, &r) };
+    r.message = if recycle { recycled_message(&r) } else if discard { discarded_message(&r) } else { cleaned_message(def, &r) };
+    if let Some(reason) = update_reason.get() {
+        if r.deleted == 0 && r.freed == 0 {
+            r.message = format!("Nothing was removed. {reason}");
+        } else {
+            r.message.push_str(&format!(" {reason}"));
+        }
+    }
     if too_big > 0 {
         r.skipped += too_big;
         r.message.push_str(&format!(
@@ -2098,7 +2285,7 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
 /// marked in `big` and stays. Links are recycled as links, never followed.
 /// Sends what was chosen to the Recycle Bin, a batch at a time. `done(i, Some(gone))` is called
 /// for each item as its batch finishes, and `done(i, None)` for one too big for the bin.
-fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool], done: &dyn Fn(usize, Option<bool>)) -> Vec<Option<bool>> {
+fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool], allowed: &dyn Fn(&Cand) -> bool, done: &dyn Fn(usize, Option<bool>)) -> Vec<Option<bool>> {
     let stopped = || live.is_some_and(Live::stopped);
     let per_batch = batch_items(chosen.len());
     let mut room = bin::Room::default();
@@ -2126,7 +2313,9 @@ fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool], done:
         if let Some(l) = live {
             l.working_on(chosen[start]);
         }
-        let targets: Vec<&PathBuf> = chosen[start..end].iter().flat_map(|c| c.targets.iter()).filter(|t| std::fs::symlink_metadata(t).is_ok()).collect();
+        let targets: Vec<&PathBuf> = chosen[start..end].iter()
+            .filter(|c| c.targets.iter().all(|t| crate::browser_data::tree_is_safe(t)) && allowed(c))
+            .flat_map(|c| c.targets.iter()).collect();
         if !targets.is_empty() {
             // Whatever couldn't go (in use) shows up below as still there.
             let _ = ::trash::delete_all(&targets);
@@ -2145,6 +2334,20 @@ fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool], done:
     out
 }
 
+fn discarded_message(r: &CleanReport) -> String {
+    let mut message = if r.deleted > 0 {
+        format!("Deleted {} ({}) for good.", plural(r.deleted, "app data folder"), human_bytes(r.freed))
+    } else if r.freed > 0 {
+        format!("Deleted {} from app data, but some folders remain.", human_bytes(r.freed))
+    } else {
+        "No app data was deleted.".into()
+    };
+    if r.skipped > 0 {
+        message.push_str(&format!(" {} stayed: in use, kept, linked, blocked by permissions, or changed since mom looked.", plural(r.skipped, "folder")));
+    }
+    message
+}
+
 fn recycled_message(r: &CleanReport) -> String {
     let mut msg = if r.deleted == 0 {
         "Nothing went to the Recycle Bin.".to_string()
@@ -2152,7 +2355,7 @@ fn recycled_message(r: &CleanReport) -> String {
         format!("Moved {} ({}) to the Recycle Bin. Changed your mind? It's all in there.", plural(r.deleted, "item"), human_bytes(r.freed))
     };
     if r.skipped > 0 {
-        msg.push_str(&format!(" {} stayed: in use, or changed since mom looked.", plural(r.skipped, "item")));
+        msg.push_str(&format!(" {} stayed: in use, blocked by permissions, or changed since mom looked.", plural(r.skipped, "item")));
     }
     msg
 }
@@ -2229,6 +2432,8 @@ fn choose<'f>(f: &'f Found, pick: Option<&Pick>) -> Vec<&'f Cand> {
     f.cands
         .iter()
         .filter(|c| {
+            if c.browser_data { return false; }
+            if c.age_required && (!c.age_known || !c.complete) { return false; }
             let starts_ticked = match (c.goes, c.optional) {
                 (true, _) => pick.goes,
                 (false, true) => pick.new,
@@ -2245,7 +2450,7 @@ fn choose<'f>(f: &'f Found, pick: Option<&Pick>) -> Vec<&'f Cand> {
 }
 
 /// Moves each folder to the archive, leaving a link behind. One that can't move stays put.
-fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport) -> CleanReport {
+fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport, update_block_reason: &dyn Fn(&Cand) -> Option<&'static str>) -> CleanReport {
     let Some(root) = ctx.cfg.archive_dir.clone() else {
         r.message = "Choose where to keep them first.".into();
         return r;
@@ -2255,6 +2460,16 @@ fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport) -> CleanRep
     for c in chosen {
         if ctx.live.is_some_and(Live::stopped) {
             left_alone += 1;
+            continue;
+        }
+        if !c.targets.iter().all(|t| crate::browser_data::tree_is_safe(t)) {
+            r.skipped += 1;
+            why.get_or_insert_with(|| BROWSER_DATA.to_string());
+            continue;
+        }
+        if let Some(reason) = update_block_reason(c) {
+            r.skipped += 1;
+            why.get_or_insert_with(|| reason.to_string());
             continue;
         }
         if let Some(l) = ctx.live {
@@ -2300,6 +2515,9 @@ fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport) -> CleanRep
 /// write anything back.
 pub fn plan(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> Vec<(Vec<PathBuf>, u64)> {
     let Some(def) = def(id) else { return vec![] };
+    if pick.is_some_and(|p| p.discard_error(id).is_some()) {
+        return vec![];
+    }
     if def.action == "tool" {
         return vec![];
     }
@@ -2315,7 +2533,13 @@ pub fn result_message(id: &str, r: &CleanReport) -> String {
 
 fn cleaned_message(def: &Def, r: &CleanReport) -> String {
     let mut msg = if r.deleted == 0 {
-        "Already spotless.".to_string()
+        if r.freed > 0 {
+            format!("Took out {} of trash, but some items remain.", human_bytes(r.freed))
+        } else if r.skipped > 0 {
+            "Nothing was removed.".to_string()
+        } else {
+            "Already spotless.".to_string()
+        }
     } else {
         match def.action {
             "recycle" => format!(
@@ -2330,9 +2554,9 @@ fn cleaned_message(def: &Def, r: &CleanReport) -> String {
     };
     if r.skipped > 0 {
         let why = if needs_admin(def.id) {
-            "in use, changed since mom looked, or in a folder other users can change"
+            "in use, blocked by permissions, changed since mom looked, or in a folder other users can change"
         } else {
-            "in use, or changed since mom looked"
+            "in use, blocked by permissions, or changed since mom looked"
         };
         msg.push_str(&format!(" {} stayed: {why}.", plural(r.skipped, "item")));
     }
@@ -2393,7 +2617,8 @@ pub fn describe(s: &Spot) -> String {
 
 /// Age of a file in seconds (0 if unknown).
 pub fn age_of(path: &Path, now: u64) -> u64 {
-    std::fs::metadata(path).map(|m| now.saturating_sub(mtime_secs(&m))).unwrap_or(0)
+    std::fs::symlink_metadata(path).ok().filter(|m| !m.is_symlink())
+        .and_then(|m| cleanup_recency(&m)).map(|at| now.saturating_sub(at)).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -2406,9 +2631,50 @@ mod tests {
     }
 
     pub(super) fn touch_secs(path: &Path, secs: u64) {
-        let f = std::fs::File::options().write(true).open(path).unwrap();
         let t = std::time::SystemTime::now() - Duration::from_secs(secs);
-        f.set_modified(t).unwrap();
+        let root = path.ancestors().find(|p| p.file_name().is_some_and(|n| {
+            let n = n.to_string_lossy();
+            n.starts_with("mom-trash-") && n.ends_with(&format!("-{}", std::process::id()))
+        })).expect("only backdate an isolated trash fixture");
+        set_fixture_time(path, t);
+        if path == root { return; }
+        // Creating children changes directory dates. Model a genuinely old tree by setting each
+        // ancestor to its newest child's evidence, stopping at the isolated fixture boundary.
+        for dir in path.ancestors().skip(1) {
+            let at = std::fs::read_dir(dir).unwrap().map(|e| {
+                let e = e.unwrap();
+                cleanup_recency(&std::fs::symlink_metadata(e.path()).unwrap()).unwrap()
+            }).max().unwrap_or_else(|| t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+            set_fixture_time(dir, std::time::UNIX_EPOCH + Duration::from_secs(at));
+            if dir == root { break; }
+        }
+    }
+
+    pub(super) fn touch_directory(path: &Path, secs: u64) {
+        assert!(path.ancestors().any(|p| p.file_name().is_some_and(|n| {
+            let n = n.to_string_lossy();
+            n.starts_with("mom-trash-") && n.ends_with(&format!("-{}", std::process::id()))
+        })), "only backdate an isolated trash fixture directory");
+        set_fixture_time(path, std::time::SystemTime::now() - Duration::from_secs(secs));
+    }
+
+    fn set_fixture_time(path: &Path, at: std::time::SystemTime) {
+        let mut options = std::fs::OpenOptions::new();
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.write(true).custom_flags(0x0200_0000); // directories need BACKUP_SEMANTICS
+        }
+        #[cfg(not(windows))]
+        { options.read(true); }
+        let file = options.open(path).unwrap();
+        let times = std::fs::FileTimes::new().set_modified(at);
+        #[cfg(windows)]
+        let times = {
+            use std::os::windows::fs::FileTimesExt;
+            times.set_created(at)
+        };
+        file.set_times(times).unwrap();
     }
 
     pub(super) fn write(path: &Path, bytes: usize, days_old: u64) {
@@ -2432,6 +2698,7 @@ mod tests {
             installed: Some(crate::installed::Installed::with(&[])), // nothing, unless a test says otherwise
             live: None,
             list_scale: 1,
+            windows_update_probe: None,
         }
     }
 
@@ -2448,13 +2715,116 @@ mod tests {
     }
 
     pub(super) fn fixture(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("mom-trash-{name}-{}", std::process::id()));
+        assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')), "fixture name must be one path component");
+        // Failed/interrupted fixtures must never appear in a user's real Old temp files scan.
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/mom-test-fixtures");
+        std::fs::create_dir_all(&base).unwrap();
+        let base = std::fs::canonicalize(base).unwrap();
+        let root = base.join(format!("mom-trash-{name}-{}", std::process::id()));
+        assert_eq!(root.parent(), Some(base.as_path()));
         let _ = std::fs::remove_dir_all(&root);
         root
     }
 
     fn item<'s>(spot: &'s Spot, name_part: &str) -> &'s Item {
         spot.items.iter().find(|i| i.name.contains(name_part)).unwrap_or_else(|| panic!("no item like {name_part:?} in {:#?}", spot.items))
+    }
+
+    #[test]
+    fn recent_folder_activity_keeps_old_contents_in_temp_and_claude() {
+        let root = fixture("recent-containers");
+        let paths = Paths::under(&root);
+        let temp = paths.temp.join("unpacked-yesterday");
+        let session = paths.temp.join("claude").join("C--Workspace-demo").join("11111111-2222-3333-4444-555555555555");
+        write(&temp.join("old-payload.bin"), 3, 100);
+        write(&session.join("scratchpad").join("old.txt"), 3, 100);
+        touch_directory(&temp, 0);
+        touch_directory(&session, 0);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let temp_spot = measure("old-temp", &ctx).unwrap();
+        let claude_spot = measure("claude-temp", &ctx).unwrap();
+        let temp_item = item(&temp_spot, "unpacked-yesterday");
+        let claude_item = item(&claude_spot, "Session 11111111");
+        for candidate in [temp_item, claude_item] {
+            assert!(candidate.age_known && candidate.age_secs < 60);
+            assert!(!candidate.goes, "a fresh container cannot inherit old contents' age");
+        }
+        assert!(plan("old-temp", &ctx, None).is_empty());
+        assert!(plan("claude-temp", &ctx, None).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn incomplete_age_cannot_be_selected_even_if_a_verdict_or_pick_requests_it() {
+        let root = fixture("unknown-age-picks");
+        let paths = Paths::under(&root);
+        let dir = paths.temp.join("partial");
+        write(&dir.join("one.bin"), 3, 100);
+        write(&dir.join("two.bin"), 3, 100);
+        let t = tally_many(std::slice::from_ref(&dir), 2, u64::MAX).pop().unwrap();
+        assert!(!t.complete);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let mut c = judge(Cand::new(dir.clone(), "partial", &t, ctx.now), &ctx, 86_400);
+        assert!(!c.age_known && !c.goes && !c.optional);
+        assert_eq!(c.reason, UNKNOWN_AGE);
+        c = c.kept_but_tickable("a caller tried to override unknown evidence");
+        assert!(!c.optional);
+        let item = Cand::new(dir.clone(), "partial", &t, ctx.now).into_item();
+        assert_eq!(serde_json::to_value(item).unwrap()["ageKnown"], false);
+        // Defense at selection time also rejects a future collector accidentally setting flags.
+        c.goes = true;
+        c.optional = true;
+        let mut f = Found::at(dir.clone());
+        f.cands.push(c);
+        let pick = Pick { new: true, ticked: vec![dir.to_string_lossy().into_owned()], ..Default::default() };
+        assert!(choose(&f, None).is_empty() && choose(&f, Some(&pick)).is_empty());
+        assert_eq!(sizes(&[root.join("missing")]), vec![(0, 0)]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn cached_scans_need_current_age_evidence_and_legacy_items_have_unknown_age() {
+        let root = fixture("scan-evidence-version");
+        let paths = Paths::under(&root);
+        write(&paths.temp.join("old.bin"), 3, 100);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("old-temp", &ctx).unwrap();
+        let mut legacy = serde_json::to_value(&spot.items[0]).unwrap();
+        legacy.as_object_mut().unwrap().remove("ageKnown");
+        assert!(!serde_json::from_value::<Item>(legacy).unwrap().age_known);
+        save(&paths, &[spot]);
+        assert_eq!(load_saved(&paths).len(), 1);
+        let saved = saved_file(&paths);
+        let mut old: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+        old.as_object_mut().unwrap().remove("scanVersion");
+        std::fs::write(&saved, serde_json::to_vec(&old).unwrap()).unwrap();
+        assert!(load_saved(&paths).is_empty(), "a matching app version cannot revive old age evidence");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn broad_temp_cleanup_keeps_nested_browser_data_even_when_explicitly_picked() {
+        let root = fixture("temp-browser-data");
+        let paths = Paths::under(&root);
+        let profile = paths.temp.join("portable-tool");
+        write(&profile.join("nested").join("Network").join("Cookies"), 3, 100);
+        let disposable = paths.temp.join("ordinary-cache");
+        write(&disposable.join("Cache").join("data_1"), 3, 100);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let found = find("old-temp", &ctx);
+        let protected = found.cands.iter().find(|c| c.path == profile).unwrap();
+        assert!(protected.browser_data && !protected.goes && !protected.optional);
+        assert_eq!(protected.reason, BROWSER_DATA);
+        let pick = Pick { goes: false, new: true, ticked: vec![profile.to_string_lossy().into_owned()], ..Default::default() };
+        assert!(choose(&found, Some(&pick)).is_empty());
+        let chosen = choose(&found, None);
+        assert_eq!(chosen.len(), 1);
+        assert_eq!(chosen[0].path, disposable);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2501,7 +2871,7 @@ mod tests {
         assert!(gone.goes);
         assert!(gone.name.starts_with("storefront · "), "{}", gone.name);
         assert_eq!(gone.sub.as_deref(), Some("1 file"));
-        assert!(gone.reason.starts_with("Session ended 70 days ago"), "{}", gone.reason);
+        assert!(gone.reason.starts_with("Last changed 70 days ago"), "{}", gone.reason);
         let running = item(&spot, "Session e9c3412f");
         assert!(!running.goes);
         assert_eq!(running.reason, "Session is still running");
@@ -2561,6 +2931,153 @@ mod tests {
         assert!(!paths.temp.join("new-c").exists());
         assert!(paths.temp.join("busy-d").exists());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Reach the real Forgotten app data threshold without allocating a large byte buffer.
+    fn forgotten_folder(paths: &Paths, name: &str) -> PathBuf {
+        let folder = paths.local_appdata.join(name);
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("data.bin");
+        std::fs::File::create(&file).unwrap().set_len(100 << 20).unwrap();
+        touch_old(&file, 400);
+        folder
+    }
+
+    #[test]
+    fn forgotten_discard_takes_only_exact_folders_without_an_archive_and_default_still_moves() {
+        let root = fixture("forgotten-discard-exact");
+        let paths = Paths::under(&root);
+        let selected = forgotten_folder(&paths, "Antigravity Fixture");
+        let unseen = forgotten_folder(&paths, "Unseen App Fixture");
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("forgotten-apps", &ctx).unwrap();
+        assert_eq!(spot.action, "move");
+        assert!(cfg.archive_dir.is_none());
+        assert_eq!(spot.reclaimable_items, 2);
+        let default = clean("forgotten-apps", &ctx, None);
+        assert_eq!(default.deleted, 0);
+        assert_eq!(default.message, "Choose where to keep them first.");
+        assert!(selected.exists() && unseen.exists());
+        // Recycle alone does not silently change an existing archive action.
+        assert_eq!(clean("forgotten-apps", &ctx, Some(&Pick { recycle: true, ..Default::default() })).deleted, 0);
+        let pick = Pick {
+            goes: false,
+            new: false,
+            ticked: vec![selected.to_string_lossy().to_string()],
+            discard: true,
+            ..Default::default()
+        };
+        let planned = plan("forgotten-apps", &ctx, Some(&pick));
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].0, vec![selected.clone()]);
+        // Recycle uses the same exact, freshly revalidated targets without invoking it here.
+        let recycled = Pick { recycle: true, ..pick.clone() };
+        assert_eq!(plan("forgotten-apps", &ctx, Some(&recycled)), planned);
+        let r = clean("forgotten-apps", &ctx, Some(&pick));
+        assert_eq!((r.deleted, r.skipped, r.freed), (1, 0, 100 << 20), "{r:?}");
+        assert!(r.message.contains("for good"));
+        assert!(!selected.exists() && unseen.join("data.bin").exists());
+        assert!(crate::archive::list(&paths).is_empty(), "direct removal creates no archive record");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn forgotten_discard_rechecks_kept_busy_recent_linked_and_unknown_paths() {
+        let root = fixture("forgotten-discard-blocked");
+        let paths = Paths::under(&root);
+        let busy = forgotten_folder(&paths, "Busy App Fixture");
+        let kept = forgotten_folder(&paths, "Kept App Fixture");
+        let recent = forgotten_folder(&paths, "Recent App Fixture");
+        let linked = forgotten_folder(&paths, "Linked App Fixture");
+        let mut cfg = TrashConfig::default();
+        let before = measure("forgotten-apps", &ctx(&paths, &cfg)).unwrap();
+        assert_eq!(before.reclaimable_items, 4);
+        let outside = root.join("outside");
+        write(&outside.join("precious.txt"), 20, 400);
+        let inside = linked.join("elsewhere");
+        link(&inside, &outside);
+        touch_old(&recent.join("data.bin"), 0);
+        cfg.keep.push(kept.to_string_lossy().to_string());
+        let mut ctx = ctx(&paths, &cfg);
+        ctx.in_use = norm_path(&busy.join("app.exe").to_string_lossy());
+        let mut ticked: Vec<String> = before.items.iter().filter(|i| i.goes).map(|i| i.path.clone()).collect();
+        ticked.push(outside.to_string_lossy().to_string());
+        let pick = Pick { goes: false, new: false, discard: true, ticked, ..Default::default() };
+        assert!(plan("forgotten-apps", &ctx, Some(&pick)).is_empty());
+        let r = clean("forgotten-apps", &ctx, Some(&pick));
+        assert_eq!((r.deleted, r.skipped, r.freed), (0, 5, 0), "{r:?}");
+        for folder in [&busy, &kept, &recent, &linked] {
+            assert!(folder.join("data.bin").exists());
+        }
+        assert!(outside.join("precious.txt").exists());
+        unlink(&inside);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn forgotten_discard_rejects_broad_selection_and_other_spots_before_cleaning() {
+        let root = fixture("forgotten-discard-validation");
+        let paths = Paths::under(&root);
+        let folder = paths.temp.join("old-data");
+        write(&folder.join("data.bin"), 20, 400);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let exact = Pick { goes: false, new: false, discard: true, ticked: vec![folder.to_string_lossy().to_string()], ..Default::default() };
+        let r = clean("old-temp", &ctx, Some(&exact));
+        assert_eq!(r.deleted, 0);
+        assert!(r.message.contains("only available for Forgotten app data"));
+        assert!(plan("old-temp", &ctx, Some(&exact)).is_empty());
+        for broad in [Pick { goes: true, ..exact.clone() }, Pick { new: true, ..exact.clone() }] {
+            assert!(plan("forgotten-apps", &ctx, Some(&broad)).is_empty());
+            let r = clean("forgotten-apps", &ctx, Some(&broad));
+            assert_eq!(r.deleted, 0);
+            assert!(r.message.contains("exact app data folders"));
+        }
+        assert!(folder.join("data.bin").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn legacy_picks_never_enable_discard_and_explicit_mode_survives_serialization() {
+        let legacy: Pick = serde_json::from_str(r#"{"goes":false,"new":false,"ticked":["C:\\old-app"],"recycle":true}"#).unwrap();
+        assert!(!legacy.discard);
+        let empty: Pick = serde_json::from_str("{}").unwrap();
+        assert!(empty.is_default() && !empty.discard);
+        let explicit = Pick { discard: true, ..legacy };
+        assert!(!explicit.is_default());
+        let back: Pick = serde_json::from_str(&serde_json::to_string(&explicit).unwrap()).unwrap();
+        assert!(back.discard && back.recycle && !back.goes && !back.new);
+        assert_eq!(back.ticked, explicit.ticked);
+    }
+
+    #[test]
+    fn failed_and_partial_cleanups_are_not_reported_as_spotless() {
+        let mut r = CleanReport { id: "dev-leftovers".into(), skipped: 1, ..Default::default() };
+        let failed = result_message(&r.id, &r);
+        assert!(failed.starts_with("Nothing was removed."), "{failed}");
+        assert!(failed.contains("blocked by permissions"), "{failed}");
+        assert!(!failed.contains("spotless"), "{failed}");
+
+        // A folder can lose some files while the folder itself cannot be removed.
+        r.freed = 2048;
+        let partial = result_message(&r.id, &r);
+        assert!(partial.contains(&human_bytes(r.freed)) && partial.contains("some items remain"), "{partial}");
+        assert!(!partial.contains("spotless"), "{partial}");
+
+        let empty = CleanReport { id: r.id.clone(), ..Default::default() };
+        assert_eq!(result_message(&empty.id, &empty), "Already spotless.");
+    }
+
+    #[test]
+    fn skipped_recycling_and_admin_cleanup_include_permission_restrictions() {
+        let r = CleanReport { skipped: 1, ..Default::default() };
+        let recycled = recycled_message(&r);
+        assert!(recycled.starts_with("Nothing went to the Recycle Bin."), "{recycled}");
+        assert!(recycled.contains("blocked by permissions"), "{recycled}");
+        let admin = result_message("windows-junk", &r);
+        assert!(admin.starts_with("Nothing was removed.") && admin.contains("blocked by permissions"), "{admin}");
+        assert!(admin.contains("a folder other users can change"), "{admin}");
     }
 
     #[test]
@@ -2809,7 +3326,7 @@ mod tests {
         let old = spot.items.iter().find(|i| i.path.ends_with("aaa")).unwrap();
         let new = spot.items.iter().find(|i| i.path.ends_with("bbb")).unwrap();
         let used = spot.items.iter().find(|i| i.path.ends_with("ccc")).unwrap();
-        assert!(old.goes && old.reason.starts_with("Fetched 90 days ago"), "{}", old.reason);
+        assert!(old.goes && old.reason.starts_with("Last changed 90 days ago"), "{}", old.reason);
         assert!(!new.goes && new.optional && new.reason.contains("kept for"), "{}", new.reason);
         assert!(!used.goes && !used.optional && used.reason.contains("shell history"), "{}", used.reason);
         std::fs::remove_dir_all(&root).unwrap();
@@ -2906,6 +3423,84 @@ mod tests {
         assert_eq!((r.deleted, now.done, now.total, now.files, now.total_files), (2, 2, 2, 4, 4));
         assert_eq!(now.freed, r.freed);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn windows_update_that_becomes_pending_after_discovery_blocks_actual_removal() {
+        use windows_update::State;
+        for elevated in [false, true] {
+            for blocked in [State::Pending, State::Unknown] {
+                let root = fixture(&format!("update-race-{elevated}-{blocked:?}"));
+                let mut paths = Paths::under(&root);
+                paths.other_drives.push(root.join("d"));
+                let setup = paths.system_drive.join("Windows10Upgrade");
+                let other = paths.other_drives[0].join("$GetCurrent");
+                let cache = paths.windows.join("SoftwareDistribution").join("Download").join("old-update");
+                for path in [&setup, &other, &cache] { write(&path.join("payload.bin"), 100, 200); }
+                let cfg = TrashConfig::default();
+                let calls = std::cell::Cell::new(0);
+                let probe = || {
+                    calls.set(calls.get() + 1);
+                    if calls.get() == 1 { State::Clear } else { blocked }
+                };
+                let mut ctx = ctx(&paths, &cfg);
+                ctx.elevated = elevated;
+                ctx.windows_update_probe = Some(&probe);
+                let pick = Pick { new: true, ticked: [&setup, &other, &cache].iter().map(|p| p.to_string_lossy().into_owned()).collect(), ..Default::default() };
+                let result = clean("windows-junk", &ctx, Some(&pick));
+                assert_eq!(calls.get(), 2, "fresh discovery clears, first mutation blocks, later items stay blocked");
+                assert_eq!((result.deleted, result.freed, result.skipped), (0, 0, 3));
+                assert!(result.message.contains(blocked.reason().unwrap()));
+                assert!(!result.message.contains("spotless"));
+                for path in [&setup, &other, &cache] { assert_eq!(std::fs::read(path.join("payload.bin")).unwrap(), vec![b'x'; 100]); }
+                std::fs::remove_dir_all(&root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn windows_update_that_starts_mid_cleanup_keeps_remaining_items() {
+        use windows_update::State;
+        for blocked in [State::Pending, State::Unknown] {
+            let root = fixture(&format!("update-mid-clean-{blocked:?}"));
+            let paths = Paths::under(&root);
+            let targets: Vec<_> = ["$GetCurrent", "Windows10Upgrade", "$WINDOWS.~TMP"]
+                .into_iter().map(|name| paths.system_drive.join(name)).collect();
+            for path in &targets { write(&path.join("payload.bin"), 100, 200); }
+            let cfg = TrashConfig::default();
+            let calls = std::cell::Cell::new(0);
+            let probe = || {
+                calls.set(calls.get() + 1);
+                if calls.get() <= 2 { State::Clear } else { blocked }
+            };
+            let mut ctx = ctx(&paths, &cfg);
+            ctx.windows_update_probe = Some(&probe);
+            let result = clean("windows-junk", &ctx, Some(&Pick { new: true, ..Default::default() }));
+            assert_eq!(calls.get(), 3, "discovery and the first operation clear; the next native check blocks and latches");
+            assert_eq!((result.deleted, result.freed, result.skipped), (1, 100, 2));
+            assert!(result.message.contains(blocked.reason().unwrap()));
+            let remaining: Vec<_> = targets.iter().filter(|path| path.exists()).collect();
+            assert_eq!(remaining.len(), 2);
+            for path in remaining { assert_eq!(std::fs::read(path.join("payload.bin")).unwrap(), vec![b'x'; 100]); }
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+    }
+
+    #[test]
+    fn windows_update_paths_use_folder_boundaries_on_each_configured_drive() {
+        let mut paths = Paths::under(Path::new("fixture"));
+        paths.other_drives.push(PathBuf::from("other-drive"));
+        for drive in std::iter::once(&paths.system_drive).chain(&paths.other_drives) {
+            for name in ["$GetCurrent", "Windows10Upgrade", "$WINDOWS.~BT", "$WINDOWS.~WS", "$WINDOWS.~TMP", "$SysReset", "WUDownloadCache"] {
+                assert!(windows_update_target(&drive.join(name), &paths));
+                assert!(windows_update_target(&drive.join(name).join("inside").join("data.bin"), &paths));
+                assert!(!windows_update_target(&drive.join(format!("{name}-backup")), &paths));
+                assert!(!windows_update_target(&drive.join("photos").join(name), &paths));
+            }
+        }
+        let downloads = paths.windows.join("SoftwareDistribution").join("Download");
+        assert!(windows_update_target(&downloads.join("queued").join("payload.cab"), &paths));
+        assert!(!windows_update_target(&downloads.with_file_name("Download-old").join("payload.cab"), &paths));
     }
 
     #[test]

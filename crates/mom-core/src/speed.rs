@@ -473,20 +473,10 @@ fn parse_events(xml: &str) -> Vec<Event> {
         .collect()
 }
 
-/// "2026-10-05T03:39:17.1234567Z" -> unix seconds.
+/// A timestamp with an explicit UTC offset -> unix seconds. An absent or invalid offset
+/// is unknown, not an instruction to interpret local wall time as UTC.
 pub(crate) fn parse_time(s: &str) -> Option<u64> {
-    let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
-    let (y, m, d) = (num(0..4)?, num(5..7)?, num(8..10)?);
-    let (hh, mm, ss) = (num(11..13)?, num(14..16)?, num(17..19)?);
-    // Days since 1970-01-01, for the proleptic Gregorian calendar.
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
+    u64::try_from(chrono::DateTime::parse_from_rfc3339(s).ok()?.timestamp()).ok()
 }
 
 /// "1 process", "79 processes".
@@ -1064,6 +1054,17 @@ mod tests {
         assert_eq!(e[2].id, 19);
         assert_eq!(parse_time("1970-01-02T00:00:00Z"), Some(86_400));
         assert_eq!(parse_time("2000-03-01T00:00:00Z"), Some(951_868_800));
+    }
+
+    #[test]
+    fn timestamp_offsets_are_applied_and_ambiguous_dates_are_unknown() {
+        let utc = parse_time("2026-10-14T09:00:00Z").unwrap();
+        assert_eq!(parse_time("2026-10-14T12:00:00.1234567+03:00"), Some(utc));
+        assert_eq!(parse_time("2026-10-14T04:00:00-05:00"), Some(utc));
+        assert_eq!(parse_time("2026-10-14T00:30:00+03:00"), parse_time("2026-10-13T21:30:00Z"));
+        for invalid in ["2026-10-14T12:00:00", "2026-02-30T12:00:00Z", "2026-13-01T12:00:00Z", "2026-10-14T25:00:00Z", "1969-12-31T23:59:59Z"] {
+            assert_eq!(parse_time(invalid), None, "{invalid}");
+        }
     }
 
     #[test]

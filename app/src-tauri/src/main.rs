@@ -1599,11 +1599,45 @@ fn open_url(url: String, app: AppHandle) -> Res<()> {
 
 #[tauri::command(async)]
 fn reveal(path: String, app: AppHandle) -> Res<()> {
+    // Recycle Bin storage has generated $R names. Its shell view supplies the original names,
+    // locations and Restore action; old reports and every reveal caller must use that view.
+    if is_recycle_bin_path(&path) {
+        return open_recycle_bin(app);
+    }
     app.opener().reveal_item_in_dir(path).map_err(err)
 }
 
-/// BIG MODE: the widget becomes a normal-sized window, in the taskbar and in the middle of the
-/// screen. And back: the small widget by the tray again.
+fn is_recycle_bin_path(path: &str) -> bool {
+    path.split(['\\', '/']).any(|part| part.eq_ignore_ascii_case("$Recycle.Bin"))
+}
+
+#[tauri::command(async)]
+fn open_recycle_bin(app: AppHandle) -> Res<()> {
+    #[cfg(windows)]
+    {
+        let windows = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        let explorer = windows.join("explorer.exe").to_string_lossy().into_owned();
+        app.opener().open_path("shell:RecycleBinFolder", Some(explorer)).map_err(err)
+    }
+    #[cfg(not(windows))]
+    { let _ = app; Err("The Windows Recycle Bin is only available on Windows.".into()) }
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    #[test]
+    fn recycled_paths_use_the_shell_view_without_matching_similar_folder_names() {
+        for path in [r"C:\$Recycle.Bin", r"D:\$RECYCLE.BIN\S-1-5-21\$R123.pdf", "C:/$Recycle.Bin/S-1-5-21/$R123.pdf", r"\\?\C:\$Recycle.Bin\S-1-5-21\$R123.pdf"] {
+            assert!(super::is_recycle_bin_path(path), "{path}");
+        }
+        for path in [r"C:\Documents\report.pdf", r"C:\Downloads\$Recycle.Bin notes.txt", r"C:\$Recycle.Bin-old\report.pdf"] {
+            assert!(!super::is_recycle_bin_path(path), "{path}");
+        }
+    }
+}
+
+/// BIG MODE: the widget becomes a normal-sized window in the middle of the screen. And back:
+/// the small widget by the tray again. Both sizes keep the main window in the taskbar.
 /// `smooth`: a stand-in card carries the change (see `make_card`) while the real window moves
 /// unseen. Then this returns true, and the widget calls `big_arrived` once its page is laid out
 /// for the new size. Off for anyone who asked Windows for less motion. `bg`: the page's colour.
@@ -1625,7 +1659,6 @@ fn set_big(on: bool, smooth: Option<bool>, bg: Option<String>, app: AppHandle, s
             h = h.min(area.height - 60.0).max(620.0);
         }
         let _ = win.set_always_on_top(false);
-        let _ = win.set_skip_taskbar(false);
         if let Some(monitor) = monitor.as_ref().filter(|_| smooth) {
             // To the middle of the screen.
             let area = monitor.work_area();
@@ -1648,7 +1681,6 @@ fn set_big(on: bool, smooth: Option<bool>, bg: Option<String>, app: AppHandle, s
             let _ = win.set_size(tauri::LogicalSize::new(420.0, 680.0));
             place_window(&win);
         }
-        let _ = win.set_skip_taskbar(true);
         let _ = win.set_always_on_top(s.cfg().ui.always_on_top);
     }
     carried
@@ -1807,6 +1839,7 @@ fn main() {
             get_diary,
             open_url,
             reveal,
+            open_recycle_bin,
             hide_window,
             set_big,
             big_arrived,

@@ -70,7 +70,12 @@ pub(super) struct Tally {
     pub files: u64,
     /// Newest file mtime; the folder's own mtime if it holds no files.
     pub newest: u64,
-    /// False when mom stopped counting (too many files to count quickly).
+    /// Newest creation/modification evidence, including every directory. Cleanup age uses this,
+    /// while `newest` keeps its raw file-modification meaning for other consumers.
+    pub recency: u64,
+    /// Sign-in or site-storage markers found anywhere in the measured tree.
+    pub contains_browser_data: bool,
+    /// False when anything could not be inspected, timed, or counted within the limits.
     pub complete: bool,
     /// Links and junctions in it (or it is one). Never followed, so what they point at isn't
     /// counted, and a folder holding one isn't really empty.
@@ -81,7 +86,7 @@ pub(super) struct Tally {
 
 impl Default for Tally {
     fn default() -> Self {
-        Tally { bytes: 0, files: 0, newest: 0, complete: true, links: 0, kinds: [0; KINDS.len()] }
+        Tally { bytes: 0, files: 0, newest: 0, recency: 0, contains_browser_data: false, complete: true, links: 0, kinds: [0; KINDS.len()] }
     }
 }
 
@@ -91,7 +96,18 @@ impl Tally {
         Tally { bytes, files, ..Default::default() }
     }
 
+    fn observe(&mut self, meta: &std::fs::Metadata) {
+        match super::cleanup_recency(meta) {
+            Some(at) => self.recency = self.recency.max(at),
+            None => self.complete = false,
+        }
+    }
+
     fn add_file(&mut self, name: &Path, meta: &std::fs::Metadata) {
+        if let Some(name) = name.file_name() {
+            self.contains_browser_data |= crate::browser_data::sensitive_entry(name, false);
+        }
+        self.observe(meta);
         let len = meta.len();
         self.bytes += len;
         self.files += 1;
@@ -103,6 +119,8 @@ impl Tally {
         self.bytes += other.bytes;
         self.files += other.files;
         self.newest = self.newest.max(other.newest);
+        self.recency = self.recency.max(other.recency);
+        self.contains_browser_data |= other.contains_browser_data;
         self.complete &= other.complete;
         self.links += other.links;
         for (k, v) in self.kinds.iter_mut().zip(other.kinds) {
@@ -113,9 +131,9 @@ impl Tally {
     /// "38 files, mostly images".
     pub fn sub(&self) -> Option<String> {
         if self.files == 0 {
-            return Some(if self.complete { "Empty".into() } else { "Too big to count".into() });
+            return Some(if self.complete { "Empty".into() } else { "Contents could not be fully checked".into() });
         }
-        let count = if self.complete { plural(self.files, "file") } else { format!("Over {}", plural(self.files, "file")) };
+        let count = if self.complete { plural(self.files, "file") } else { format!("At least {}; partly checked", plural(self.files, "file")) };
         let (top, top_bytes) = self.kinds.iter().enumerate().max_by_key(|(_, b)| **b).map(|(i, b)| (i, *b)).unwrap_or((OTHER, 0));
         if self.files > 1 && top != OTHER && top_bytes * 2 > self.bytes {
             Some(format!("{count}, mostly {}", KINDS[top]))
@@ -141,40 +159,51 @@ pub(super) fn tally_many(paths: &[PathBuf], cap: u64, budget: u64) -> Vec<Tally>
     // The paths themselves go through the pool too: even looking one up can wait on the antivirus.
     let start: Vec<(usize, PathBuf)> = paths.iter().cloned().enumerate().rev().collect();
     let found = in_parallel(start, |mine: &mut HashMap<usize, Tally>, i, dir, more| {
-        if cut[i].load(Ordering::Relaxed) || seen[i].load(Ordering::Relaxed) > cap || spent.load(Ordering::Relaxed) > budget {
+        if cut[i].load(Ordering::Relaxed) {
+            return;
+        }
+        let t = mine.entry(i).or_default();
+        // A root is an entry too. Descendants were reserved while enumerating their parent.
+        if dir == paths[i] && (seen[i].fetch_add(1, Ordering::Relaxed) >= cap || spent.fetch_add(1, Ordering::Relaxed) >= budget) {
             cut[i].store(true, Ordering::Relaxed);
             return;
         }
-        if dir == paths[i] {
-            match std::fs::symlink_metadata(dir) {
-                Ok(m) if m.is_file() => return mine.entry(i).or_default().add_file(dir, &m),
-                Ok(m) if m.is_dir() => own_mtime[i].store(mtime_secs(&m), Ordering::Relaxed),
-                Ok(m) if m.is_symlink() => {
-                    mine.entry(i).or_default().links += 1;
-                    return; // a link: never followed
-                }
-                _ => return, // gone
+        match std::fs::symlink_metadata(dir) {
+            Ok(m) if m.is_symlink() => {
+                t.links += 1;
+                return; // a link: never followed
             }
+            Ok(m) if m.is_file() && dir == paths[i] => return t.add_file(dir, &m),
+            Ok(m) if m.is_dir() => {
+                if let Some(name) = dir.file_name() {
+                    t.contains_browser_data |= crate::browser_data::sensitive_entry(name, true);
+                }
+                t.observe(&m);
+                if dir == paths[i] { own_mtime[i].store(mtime_secs(&m), Ordering::Relaxed); }
+            }
+            _ => { t.complete = false; return; }
         }
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
-        let t = mine.entry(i).or_default();
-        let mut n = 0;
-        for e in rd.flatten() {
-            n += 1;
-            let Ok(ft) = e.file_type() else { continue };
+        let Ok(rd) = std::fs::read_dir(dir) else { t.complete = false; return };
+        for entry in rd {
+            let Ok(e) = entry else { t.complete = false; continue };
+            if seen[i].fetch_add(1, Ordering::Relaxed) >= cap || spent.fetch_add(1, Ordering::Relaxed) >= budget {
+                cut[i].store(true, Ordering::Relaxed);
+                break;
+            }
+            let Ok(ft) = e.file_type() else { t.complete = false; continue };
+            t.contains_browser_data |= crate::browser_data::sensitive_entry(&e.file_name(), ft.is_dir());
             if ft.is_dir() {
                 more.push((i, e.path())); // links and junctions aren't dirs here, so never followed
             } else if ft.is_file() {
                 if let Ok(m) = e.metadata() {
                     t.add_file(Path::new(&e.file_name()), &m);
-                }
+                } else { t.complete = false; }
             } else if ft.is_symlink() {
                 t.links += 1;
+            } else {
+                t.complete = false;
             }
         }
-        // Counted per folder, not per file: two dozen threads bumping one counter slow each other down.
-        seen[i].fetch_add(n, Ordering::Relaxed);
-        spent.fetch_add(n, Ordering::Relaxed);
     });
     for part in found {
         for (i, t) in part {
@@ -182,7 +211,7 @@ pub(super) fn tally_many(paths: &[PathBuf], cap: u64, budget: u64) -> Vec<Tally>
         }
     }
     for (i, t) in out.iter_mut().enumerate() {
-        t.complete = !cut[i].load(Ordering::Relaxed);
+        t.complete &= !cut[i].load(Ordering::Relaxed);
         if t.files == 0 {
             t.newest = own_mtime[i].load(Ordering::Relaxed);
         }
@@ -248,12 +277,17 @@ pub(super) fn remove_all(paths: &[PathBuf], live: Option<&super::Live>) -> Vec<b
 /// folder it's in and never follows a link, even one swapped in while it works. (remove_all
 /// above goes by path, which is fine as you but not as an administrator.)
 pub(super) fn remove_without_following(p: &Path) -> bool {
+    if crate::browser_data::protects_entry_name(p, false) || crate::browser_data::protects_entry_name(p, true) { return false; }
     match std::fs::symlink_metadata(p) {
         Ok(m) if m.is_symlink() => remove_link(p),
         Ok(m) if m.is_dir() => {
+            if !crate::browser_data::tree_is_safe(p) { return false; }
             let _ = std::fs::remove_dir_all(p);
         }
-        Ok(_) => remove_file(p),
+        Ok(_) => {
+            if crate::browser_data::protects_path(p) { return false; }
+            remove_file(p);
+        },
         Err(_) => {}
     }
     std::fs::symlink_metadata(p).is_err()
@@ -359,11 +393,14 @@ fn hold(p: &Path) -> Option<std::fs::File> {
 /// whoever takes the job; a file that became a link since the listing is removed as the link.
 #[cfg(windows)]
 fn empty(dir: &std::sync::Arc<Held>, live: Option<&super::Live>, more: &mut Vec<(std::sync::Arc<Held>, PathBuf)>) {
+    if crate::browser_data::protects_entry_name(&dir.path, true) { return; }
     let Ok(rd) = std::fs::read_dir(&dir.path) else { return };
     for e in rd.flatten() {
         let Ok(kind) = e.file_type() else { continue };
         if kind.is_dir() {
-            more.push((dir.clone(), e.path()));
+            if !crate::browser_data::protects_entry_name(&e.path(), true) {
+                more.push((dir.clone(), e.path()));
+            }
         } else if kind.is_symlink() {
             remove_link(&e.path());
         } else {
@@ -398,6 +435,7 @@ pub(super) fn remove_owned(p: &Path, live: Option<&super::Live>) -> bool {
 }
 
 fn remove_file(p: &Path) {
+    if crate::browser_data::protects_entry_name(p, false) { return; }
     if std::fs::remove_file(p).is_ok() {
         return;
     }
@@ -590,9 +628,69 @@ mod tests {
         assert_eq!(t[4].bytes, 0);
         let capped = tally_many(&paths[..1], 10, u64::MAX);
         assert!(!capped[0].complete && capped[0].files < 30);
-        assert!(capped[0].sub().unwrap().starts_with("Over") || capped[0].files == 0);
+        assert!(capped[0].sub().unwrap().starts_with("At least") || capped[0].files == 0);
         let broke = tally_many(&paths[..2], u64::MAX, 5);
         assert!(!broke[0].complete || !broke[1].complete);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn cleanup_recency_includes_directories_and_keeps_raw_file_mtime_separate() {
+        use crate::trash::tests::{touch_directory, touch_old};
+        let root = fixture("recency-dirs");
+        let dir = root.join("old");
+        let file = dir.join("nested").join("old.bin");
+        write(&file, 1, 100);
+        let before = tally(&dir);
+        assert!(before.complete && before.recency > 0);
+        assert!(crate::util::now_secs().saturating_sub(before.recency) >= 99 * 86_400);
+        std::fs::create_dir_all(dir.join("nested").join("new-empty")).unwrap();
+        // Even when the target directory itself stayed old, a new empty descendant is activity.
+        touch_directory(&dir, 100 * 86_400);
+        let after = tally(&dir);
+        assert_eq!(after.newest, before.newest, "raw file mtime did not change");
+        assert!(after.complete && crate::util::now_secs().saturating_sub(after.recency) < 60);
+        touch_old(&file, 100);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn missing_invalid_and_capped_evidence_is_incomplete_including_a_flat_folder() {
+        let root = fixture("recency-unknown");
+        for n in 0..5 { write(&root.join("flat").join(format!("{n}.bin")), 1, 100); }
+        let limited = tally_many(&[root.join("flat")], 3, u64::MAX).pop().unwrap();
+        assert!(!limited.complete && limited.files <= 2, "the root also consumes one entry");
+        let missing = tally(&root.join("missing"));
+        assert!(!missing.complete && missing.recency == 0);
+        assert_ne!(missing.sub().as_deref(), Some("Empty"));
+        let invalid = root.join("invalid.bin");
+        std::fs::write(&invalid, b"x").unwrap();
+        std::fs::File::options().write(true).open(&invalid).unwrap().set_modified(std::time::UNIX_EPOCH).unwrap();
+        let invalid = tally(&invalid);
+        assert!(!invalid.complete && invalid.files == 1 && invalid.recency == 0);
+        let mut aggregate = tally(&root.join("flat"));
+        aggregate.add(&missing);
+        assert!(!aggregate.complete, "a valid sibling cannot erase missing evidence");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn copied_file_creation_protects_it_even_if_every_modified_time_is_old() {
+        use crate::trash::tests::touch_directory;
+        let root = fixture("recency-birth");
+        let dir = root.join("copied");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("download.bin");
+        std::fs::write(&file, b"x").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(100 * 86_400);
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(old).unwrap();
+        touch_directory(&dir, 100 * 86_400);
+        let t = tally(&dir);
+        let now = crate::util::now_secs();
+        assert!(t.complete && now.saturating_sub(t.newest) >= 99 * 86_400);
+        assert!(now.saturating_sub(t.recency) < 60, "new creation survives restored mtimes");
+        assert!(crate::trash::age_of(&file, now) < 60, "Room log cleanup uses the same birth evidence");
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -1,16 +1,16 @@
 //! Big folders apps left behind: the data of apps you've uninstalled, folders of an app's older
 //! versions, and ones nobody has touched in a long time.
 //!
-//! Matching a folder to its app is a guess (see installed.rs), so everything here moves to the
-//! archive drive with a link left behind instead of being deleted: a wrong guess is undone with
-//! Bring back, and the rest can be deleted for good from there once you're sure. Anything that
-//! looks like keys, passwords, wallets or browser profiles is never offered.
+//! Matching a folder to its app is a guess (see installed.rs), so Archive is the default: it
+//! leaves a link, and Bring back undoes the move. The user can instead explicitly select folders
+//! for the Recycle Bin or permanent removal. All actions recheck the same keep, age, in-use and
+//! link protections. Keys, passwords, wallets and browser profiles are never offered.
 
 use super::{ago, entries, name_of, tally_many, Cand, Found, TrashCtx, ENTRY_CAP, IN_USE};
 use crate::installed::{squash, unversioned, Installed};
 use std::path::{Path, PathBuf};
 
-/// Smaller than this isn't worth a link.
+/// Smaller folders aren't included in this review.
 const MIN_SIZE: u64 = 100 << 20;
 /// An uninstalled app's data untouched this long is ticked; from 67 days it can be.
 const LONG_AGO: u64 = 180 * 86_400;
@@ -63,6 +63,23 @@ pub(super) fn precious(name: &str) -> bool {
     PRECIOUS.iter().any(|p| n.contains(p))
 }
 
+/// A candidate must not be reached through a junction or other reparse point. Check from
+/// the root down before enumerating, including the profile roots and vendor folders.
+fn unlinked_directory(path: &Path) -> bool {
+    let mut ancestors: Vec<&Path> = path.ancestors().collect();
+    ancestors.reverse();
+    ancestors.into_iter().all(|p| {
+        let Ok(meta) = std::fs::symlink_metadata(p) else { return false };
+        if !meta.is_dir() || meta.is_symlink() { return false; }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if meta.file_attributes() & 0x400 != 0 { return false; }
+        }
+        true
+    })
+}
+
 /// A folder worth a look: where it is, what to call it, who it belongs to.
 struct Spot {
     path: PathBuf,
@@ -105,9 +122,10 @@ fn spots(ctx: &TrashCtx, agent_homes: &[PathBuf]) -> Vec<Spot> {
         SKIP.iter().any(|s| s.eq_ignore_ascii_case(&n))
             || precious(&n)
             || agent_homes.iter().any(|h| h.starts_with(d) || d.starts_with(h))
-            || !std::fs::symlink_metadata(d).map(|m| m.is_dir()).unwrap_or(false)
+            || !unlinked_directory(d)
     };
     for (root, where_) in roots {
+        if !unlinked_directory(root) { continue; }
         for d in entries(root) {
             let n = name_of(&d);
             if root == p.home.as_path() && !n.starts_with('.') {
@@ -147,8 +165,9 @@ fn spots(ctx: &TrashCtx, agent_homes: &[PathBuf]) -> Vec<Spot> {
         for _ in 0..depth {
             level = level
                 .into_iter()
+                .filter(|(d, _)| unlinked_directory(d))
                 .flat_map(|(d, rel)| {
-                    entries(&d).into_iter().filter(|x| x.is_dir()).map(move |x| {
+                    entries(&d).into_iter().filter(|x| unlinked_directory(x)).map(move |x| {
                         let mut r = rel.clone();
                         r.push(name_of(&x));
                         (x, r)
@@ -171,7 +190,15 @@ fn version_of(name: &str) -> Vec<u64> {
 }
 
 pub(super) fn find(ctx: &TrashCtx, agent_homes: &[PathBuf]) -> Found {
-    find_with(ctx, agent_homes, &Installed::scan(ctx.paths), &super::builds::my_projects(&ctx.project_roots), MIN_SIZE)
+    let scanned;
+    let installed = match &ctx.installed {
+        Some(installed) => installed,
+        None => {
+            scanned = Installed::scan(ctx.paths);
+            &scanned
+        }
+    };
+    find_with(ctx, agent_homes, installed, &super::builds::my_projects(&ctx.project_roots), MIN_SIZE)
 }
 
 fn find_with(ctx: &TrashCtx, agent_homes: &[PathBuf], installed: &Installed, mine: &[super::builds::Mine], min_size: u64) -> Found {
@@ -186,7 +213,7 @@ fn find_with(ctx: &TrashCtx, agent_homes: &[PathBuf], installed: &Installed, min
         if t.bytes < min_size.max(1) || !t.complete || t.links > 0 {
             continue;
         }
-        let c = Cand::new(s.path.clone(), s.name.clone(), &t, ctx.now);
+        let c = Cand::new(s.path.clone(), s.name.clone(), &t, ctx.now).age_sensitive();
         let age = c.age;
         let here = s.owner.split('|').any(|o| installed.has(o)) || s.vendor.as_deref().is_some_and(|v| installed.has(v));
         // An app you're building was never installed, and it isn't gone: its data is your
@@ -195,13 +222,13 @@ fn find_with(ctx: &TrashCtx, agent_homes: &[PathBuf], installed: &Installed, min
         let c = if ctx.in_use(&s.path) {
             c.verdict(false, IN_USE)
         } else if let Some(newer) = &s.newer {
-            let r = format!("An older version; {newer} is the one in use. Untouched for {}", ago(age));
+            let r = format!("An older version; {newer} is the one in use. Last changed {} ago", ago(age));
             if age >= A_WHILE { c.verdict(true, r) } else { c.kept_but_tickable(r) }
         } else if let Some(what) = s.thing {
             // A model or a game: still yours to use, so only ever offered, never ticked for you.
             let r = match what {
-                "model" => format!("A model downloaded {} ago", ago(age)),
-                _ => format!("A {what} nobody has opened in {}", ago(age)),
+                "model" => format!("A model last changed {} ago", ago(age)),
+                _ => format!("A {what} last changed {} ago", ago(age)),
             };
             if age >= LONG_AGO || (!here && age >= A_WHILE) { c.kept_but_tickable(r) } else { continue }
         } else if let Some(project) = project {
@@ -209,17 +236,17 @@ fn find_with(ctx: &TrashCtx, agent_homes: &[PathBuf], installed: &Installed, min
             if age < VERY_LONG_AGO {
                 continue;
             }
-            c.kept_but_tickable(format!("From your project {project}. Untouched for {}", ago(age)))
+            c.kept_but_tickable(format!("From your project {project}. Last changed {} ago", ago(age)))
         } else if s.saves && !here && age >= A_WHILE {
-            c.kept_but_tickable(format!("Probably a game's saves and settings; the game isn't installed any more. Untouched for {}", ago(age)))
+            c.kept_but_tickable(format!("Probably a game's saves and settings; the game isn't installed any more. Last changed {} ago", ago(age)))
         } else if s.saves {
             continue;
         } else if !here && age >= LONG_AGO {
-            c.verdict(true, format!("Its app isn't installed any more. Untouched for {}", ago(age)))
+            c.verdict(true, format!("Its app isn't installed any more. Last changed {} ago", ago(age)))
         } else if !here && age >= A_WHILE {
-            c.kept_but_tickable(format!("Its app isn't installed any more. Untouched for {}", ago(age)))
+            c.kept_but_tickable(format!("Its app isn't installed any more. Last changed {} ago", ago(age)))
         } else if here && age >= VERY_LONG_AGO {
-            c.kept_but_tickable(format!("Its app is still installed, but nobody has touched this in {}", ago(age)))
+            c.kept_but_tickable(format!("Its app is still installed. Last changed {} ago", ago(age)))
         } else {
             continue; // in use lately, or its app is: nothing to say
         };
@@ -318,7 +345,7 @@ mod tests {
         assert_eq!(names, ["Nimbus Studio (AppData\\Local)", "com.elsewhere.app (AppData\\Local)", "com.lanternfall.beta (AppData\\Local)"], "{after:#?}");
         assert!(after[0].1 && after[1].1, "nobody's project: still an uninstalled app's");
         let (_, goes, optional, why) = &after[2];
-        assert!(!goes && *optional && why.starts_with("From your project lanternfall. Untouched for"), "{after:#?}");
+        assert!(!goes && *optional && why.starts_with("From your project lanternfall. Last changed"), "{after:#?}");
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -327,5 +354,21 @@ mod tests {
         assert!(version_of("PyCharm2024.2") > version_of("PyCharm2023.10"));
         assert!(version_of("AndroidStudio2022.3") > version_of("AndroidStudio4.2"));
         assert!(precious("Ledger Live") && precious("atomic") && precious(".ssh") && precious("Coinpocket") && !precious("Genymobile"));
+    }
+
+    #[test]
+    fn linked_profile_root_never_exposes_its_target_as_forgotten_app_data() {
+        let root = fixture("forgotten-linked-root");
+        let paths = Paths::under(&root);
+        let outside = root.join("elsewhere");
+        write(&outside.join("Old App Fixture").join("data.bin"), 200, 400);
+        crate::trash::tests::link(&paths.local_appdata, &outside);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        assert!(!unlinked_directory(&paths.local_appdata));
+        assert!(find_with(&ctx, &[], &Installed::with(&[]), &[], 100).cands.is_empty());
+        assert!(outside.join("Old App Fixture").join("data.bin").exists());
+        crate::trash::tests::unlink(&paths.local_appdata);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

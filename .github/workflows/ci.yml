@@ -14,6 +14,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Test the core and the CLI
         run: cargo test -p mom-core -p mom-cli
+      - name: Test Files selection and refresh behavior
+        run: npm run test:ui
       - name: Build the app
         shell: pwsh
         run: ./scripts/build.ps1 -NoBundle

@@ -100,7 +100,7 @@ pub fn cached() -> Option<System> {
 const SCRIPT: &str = r#"
 $ErrorActionPreference = 'SilentlyContinue'
 $o = [ordered]@{}
-$d = { param($x) if ($x) { ([datetime]$x).ToString('o') } }
+$d = { param($x) if ($x) { ([datetime]$x).ToUniversalTime().ToString('o') } }
 $o.mem = @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { @{ cap = [int64]$_.Capacity; speed = $_.Speed; conf = $_.ConfiguredClockSpeed; slot = "$($_.DeviceLocator)"; part = "$($_.PartNumber)".Trim(); maker = "$($_.Manufacturer)".Trim(); type = $_.SMBIOSMemoryType; form = $_.FormFactor } })
 $o.input = @(Get-PnpDevice -PresentOnly -Class Keyboard,Mouse | ForEach-Object { $p = (Get-PnpDeviceProperty -InstanceId $_.InstanceId -KeyName 'DEVPKEY_Device_Parent').Data; $n = if ($p) { (Get-PnpDeviceProperty -InstanceId $p -KeyName 'DEVPKEY_Device_BusReportedDeviceDesc').Data }; @{ class = "$($_.Class)"; name = "$($_.FriendlyName)"; product = "$n" } })
 $o.optimize = "$((Get-ScheduledTask -TaskPath '\Microsoft\Windows\Defrag\' -TaskName 'ScheduledDefrag').State)"
@@ -794,18 +794,18 @@ fn hardware(f: &Value, gpu: Option<&crate::speed::Gpu>, now: u64) -> Vec<Check> 
         let laptop = num(first, "form") == 12;
         if let Some(rated) = rated.filter(|r| running > 0 && *r as f32 > running as f32 * 1.08) {
             let profile = profile_name(&text(&f["board"], "maker"), &text(&f["cpu"], "name"), ddr5);
-            let four = if mem.len() >= 4 { format!(" With {} sticks, if {rated} isn't stable, the next step down is.", mem.len()) } else { String::new() };
-            let ryzen = if text(&f["cpu"], "name").to_ascii_uppercase().contains("RYZEN") { "On a Ryzen, part of the processor runs at memory speed too, so it's real speed. " } else { "" };
+            let four = if mem.len() >= 4 { format!(" With {} sticks, a lower speed may be needed. If a change causes errors, return to the last stable setting.", mem.len()) } else { String::new() };
+            let ryzen = if text(&f["cpu"], "name").to_ascii_uppercase().contains("RYZEN") { " On Ryzen, memory and fabric clocks can both affect performance." } else { "" };
             let (maker, part) = (tidy_maker(&text(first, "maker")), text(first, "part").split('.').next().unwrap_or_default().to_string());
             out.push(check(
                 "memory-speed",
                 "Hardware",
                 if laptop { "tip" } else { "warn" },
-                format!("Your memory runs at {running} MT/s, but it's made for {rated}"),
+                format!("Memory is configured at {running} MT/s; its rated speed is {rated}"),
                 if laptop {
-                    format!("{maker} {part} sticks run at the safe standard speed unless a faster profile is switched on. Some laptops have that setting in the BIOS (it's called {profile}); many don't, and then this is as fast as they go here.")
+                    format!("The {maker} {part} model number indicates {rated} MT/s. The profile may be off, or the BIOS may be using a lower setting. Some laptops expose {profile} in the BIOS; many don't. Check the laptop maker's supported speeds before changing settings, and test stability afterward.")
                 } else {
-                    format!("{maker} {part} sticks run at the safe standard speed until their profile is switched on in the BIOS (it's called {profile}). {ryzen}It's one setting and costs nothing.{four}")
+                    format!("The {maker} {part} model number indicates {rated} MT/s. The profile may be off, or the BIOS may be using a lower setting. Check {profile} in the BIOS. Stable speeds depend on the CPU, motherboard and memory; test stability after a change.{ryzen}{four}")
                 },
                 None,
             ));
@@ -1086,18 +1086,24 @@ fn listing(list: &[Leftover]) -> String {
 
 /// The command that fixes every user's leftovers, for Terminal (Admin): each key saved to a .reg
 /// file first, then removed; services switched off (not removed), so they can be switched back.
+/// Registry backups get a new directory on each execution. Every export must succeed before
+/// any key is removed, and a script block keeps error handling local to this command.
 /// None if a name can't be put in a command safely.
 fn admin_command(kind: &str, list: &[Leftover]) -> Option<String> {
     if kind == "services" {
         let parts: Option<Vec<String>> = list.iter().map(|l| quoted(&l.key).map(|k| format!("sc.exe config {k} start= disabled"))).collect();
         return parts.map(|p| p.join("; "));
     }
-    let mut parts = vec![r"$b = Join-Path $env:USERPROFILE '.momputer\backups\registry'; New-Item -ItemType Directory -Force $b | Out-Null".to_string()];
+    let mut parts = vec![r"$ErrorActionPreference = 'Stop'; $b = Join-Path (Join-Path $env:USERPROFILE '.momputer\backups\registry') ([guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Path $b -ErrorAction Stop | Out-Null".to_string()];
+    let mut deletes = Vec::new();
     for (i, l) in list.iter().enumerate() {
         let key = quoted(&format!(r"HKLM\{}", l.key))?;
-        parts.push(format!("reg.exe export {key} (Join-Path $b '{kind}-{i}.reg') /y; reg.exe delete {key} /f"));
+        let file = quoted(&format!("{kind}-{i}.reg"))?;
+        parts.push(format!("reg.exe export {key} (Join-Path $b {file}); if ($LASTEXITCODE -ne 0) {{ throw 'Registry backup failed; nothing was removed.' }}"));
+        deletes.push(format!("reg.exe delete {key} /f; if ($LASTEXITCODE -ne 0) {{ throw ('Registry removal failed. Backups are in ' + $b) }}"));
     }
-    Some(parts.join("; "))
+    parts.extend(deletes);
+    Some(format!("& {{ {} }}", parts.join("; ")))
 }
 
 /// A name for a PowerShell command line: in single quotes, which PowerShell never expands (no
@@ -1141,7 +1147,7 @@ fn registry() -> Vec<Check> {
                 ),
                 _ => (
                     format!("{} set to start with Windows, but {} gone", if one { "1 service is".to_string() } else { format!("{n} services are") }, if one { "its program is" } else { "their programs are" }),
-                    format!("{}. Windows tries to start {} at every boot, waits, and gives up, which slows starting up.", listing(&list), if one { "it" } else { "each one" }),
+                    format!("{}. Windows is set to start {} at boot, but the executable {} not found. If you still use the software, repair its installation; otherwise disable the entry.", listing(&list), if one { "it" } else { "them" }, if one { "was" } else { "files were" }),
                     "warn",
                 ),
             };
@@ -1296,7 +1302,7 @@ mod tests {
         });
         let checks = hardware(&f, None, crate::speed::parse_time("2026-10-12T00:00:00Z").unwrap());
         let mem = checks.iter().find(|c| c.id == "memory-speed").unwrap();
-        assert_eq!(mem.title, "Your memory runs at 2666 MT/s, but it's made for 3600");
+        assert_eq!(mem.title, "Memory is configured at 2666 MT/s; its rated speed is 3600");
         assert!(mem.detail.contains("D.O.C.P.") && mem.detail.contains("Ryzen"), "{}", mem.detail);
         assert!(!checks.iter().any(|c| c.id == "memory-channels"), "A and B: two channels");
         assert!(!checks.iter().any(|c| c.id == "windows-on-hdd" || c.id == "bios-old"));
@@ -1315,7 +1321,7 @@ mod tests {
             "board": {"maker": "Gigabyte Technology Co., Ltd.", "product": "B650 AORUS"}, "cpu": {"name": "AMD Ryzen 7 7700X"}});
         let c = hardware(&f, None, now);
         let m = c.iter().find(|c| c.id == "memory-speed").unwrap();
-        assert_eq!((m.level, m.title.as_str()), ("warn", "Your memory runs at 4800 MT/s, but it's made for 5600"));
+        assert_eq!((m.level, m.title.as_str()), ("warn", "Memory is configured at 4800 MT/s; its rated speed is 5600"));
         assert!(m.detail.contains("EXPO"), "{}", m.detail);
         assert_eq!(describe(&f, &Reg::default(), None)[1].1, "32 GB DDR5: 2 × 16 GB at 4800 MT/s");
         // A laptop stick: said gently, because many laptops have no setting for it.
@@ -1435,6 +1441,89 @@ mod tests {
         let broken = vec![Leftover { user: false, key: "bad\nname".into(), shown: "x".into() }];
         assert!(admin_command("services", &broken).is_none());
         assert!(!gone(r"Q:\nowhere\x.exe"), "a drive that isn't there may come back");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn registry_admin_command_preserves_backups_and_stops_on_failures() {
+        use std::os::windows::process::CommandExt;
+        use std::path::Path;
+
+        // Run the generated PowerShell unchanged, with a function standing in for reg.exe.
+        // It only writes fixture backup files and records calls; it never opens the registry.
+        fn execute(command: &str, home: &Path, fail: &str) -> Value {
+            std::fs::create_dir_all(home).unwrap();
+            let script = format!(r#"
+$global:mockCalls = @()
+function reg.exe {{
+    $global:mockCalls += @([ordered]@{{ op = "$($args[0])"; key = "$($args[1])"; file = "$($args[2])" }})
+    if (($env:MOM_REGISTRY_TEST_FAIL -eq 'export' -and $args[0] -eq 'export' -and $args[1].EndsWith('second.exe')) -or
+        ($env:MOM_REGISTRY_TEST_FAIL -eq 'delete' -and $args[0] -eq 'delete')) {{
+        $global:LASTEXITCODE = 5
+        return
+    }}
+    if ($args[0] -eq 'export') {{ Set-Content -LiteralPath $args[2] -Value $args[1] -ErrorAction Stop }}
+    $global:LASTEXITCODE = 0
+}}
+if ((Get-Command reg.exe).CommandType -ne 'Function') {{ throw 'Registry stub is missing; test will not run.' }}
+$failed = $false
+$message = ''
+try {{ {command} }} catch {{ $failed = $true; $message = $_.Exception.Message }}
+[ordered]@{{ failed = $failed; message = $message; calls = @($global:mockCalls) }} | ConvertTo-Json -Depth 4 -Compress
+"#);
+            let file = home.join("run.ps1");
+            std::fs::write(&file, script).unwrap();
+            let output = std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+                .arg(&file)
+                .env("USERPROFILE", home)
+                .env("MOM_REGISTRY_TEST_FAIL", fail)
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            serde_json::from_slice(&output.stdout).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&output.stdout)))
+        }
+
+        let temp = std::env::temp_dir();
+        let root = temp.join(format!("mom-reg-command-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&root).unwrap();
+        let list: Vec<Leftover> = ["first.exe", "second.exe"].iter().map(|name| Leftover {
+            user: false,
+            key: format!(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{name}"),
+            shown: name.to_string(),
+        }).collect();
+        let command = admin_command("app-paths", &list).unwrap();
+        let operations = |result: &Value| result["calls"].as_array().unwrap().iter().map(|c| c["op"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+
+        let home = root.join("success");
+        let first = execute(&command, &home, "");
+        assert_eq!(first["failed"], false, "{first}");
+        assert_eq!(operations(&first), ["export", "export", "delete", "delete"]);
+        let saved = Path::new(first["calls"][0]["file"].as_str().unwrap());
+        let original = std::fs::read(saved).unwrap();
+        let second = execute(&command, &home, "");
+        assert_eq!(second["failed"], false, "{second}");
+        assert_ne!(first["calls"][0]["file"], second["calls"][0]["file"], "executing the same copied command again needs new backups");
+        assert_eq!(std::fs::read(saved).unwrap(), original, "the previous backup stays intact");
+
+        let failed_export = execute(&command, &root.join("export-fails"), "export");
+        assert_eq!(failed_export["failed"], true, "{failed_export}");
+        assert_eq!(operations(&failed_export), ["export", "export"], "a later failed backup must prevent all removals");
+
+        let blocked = root.join("mkdir-fails");
+        std::fs::create_dir_all(blocked.join(".momputer/backups")).unwrap();
+        std::fs::write(blocked.join(".momputer/backups/registry"), "a file blocks the backup directory").unwrap();
+        let failed_directory = execute(&command, &blocked, "");
+        assert_eq!(failed_directory["failed"], true, "{failed_directory}");
+        assert!(operations(&failed_directory).is_empty(), "no registry command may run without a backup directory");
+
+        let failed_delete = execute(&command, &root.join("delete-fails"), "delete");
+        assert_eq!(failed_delete["failed"], true, "{failed_delete}");
+        assert_eq!(operations(&failed_delete), ["export", "export", "delete"], "a failed native delete is reported and stops the batch");
+
+        assert!(root.canonicalize().unwrap().starts_with(temp.canonicalize().unwrap()));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

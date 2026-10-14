@@ -67,10 +67,12 @@ struct Source {
     /// The app makes this again by itself the next time it starts (a cache of its own code), so
     /// the newest one is kept because deleting it frees nothing, and mom says so.
     remade: bool,
+    /// Visible for accounting, but only the owning tool can safely clean it.
+    manual_cleanup: Option<&'static str>,
 }
 
 fn src(dir: PathBuf, kind: (&'static str, &'static str), pick: fn(&str) -> bool) -> Source {
-    Source { dir, kind, pick, name: |_, rel| rel.join(" / "), depth: 0, files_only: false, keep_newest: 0, sessions: false, empty_only: false, together: false, remade: false }
+    Source { dir, kind, pick, name: |_, rel| rel.join(" / "), depth: 0, files_only: false, keep_newest: 0, sessions: false, empty_only: false, together: false, remade: false, manual_cleanup: None }
 }
 
 impl Source {
@@ -106,6 +108,10 @@ impl Source {
         self.remade = true;
         self
     }
+    fn manual_cleanup(mut self, reason: &'static str) -> Source {
+        self.manual_cleanup = Some(reason);
+        self
+    }
 }
 
 fn any(_: &str) -> bool {
@@ -118,11 +124,11 @@ fn at_the_top(drive: &Path, rel: &[String]) -> String {
     format!("{d}{}{}", if d.ends_with(['\\', '/']) { "" } else { "\\" }, rel.join(" / "))
 }
 
-/// Folders Windows setup and the update assistant make at the top of a drive and leave there:
-/// the files of an upgrade that's long done, and what "go back" needed for its ten days.
+/// Working folders Windows setup and the update assistant make at the top of a drive.
+/// Their age alone does not establish that an update has finished using them.
 const SETUP_FOLDERS: &[&str] = &["$WINDOWS.~TMP", "$WINDOWS.~BT", "$WINDOWS.~WS", "$GetCurrent", "$SysReset", "Windows10Upgrade", "WUDownloadCache"];
 
-fn setup_folder(n: &str) -> bool {
+pub(super) fn setup_folder(n: &str) -> bool {
     SETUP_FOLDERS.iter().any(|f| f.eq_ignore_ascii_case(n))
 }
 
@@ -583,18 +589,15 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
             .keep_newest(1)
             .named(|dir, rel| format!("{} {} plug-in data", name_of(dir), rel[0]))]));
     }
-    let epic = local.join("EpicGamesLauncher").join("Saved");
-    list.push(agent("Epic Games", Spot::Apps, vec![epic.clone(), local.join("Epic Games")]).junk(vec![
-        src(epic, ("Older web cache", "older web caches"), |n| n.starts_with("webcache")).keep_newest(1),
-        src(local.join("Epic Games").join("EOSOverlay"), ("Overlay browser cache", "overlay browser caches"), |n| n == "BrowserCache"),
-    ]));
+    // Epic's webcache and overlay BrowserCache are complete browser profiles, including sign-ins.
+    // Only their disposable subcaches are collected by browser-cache.
     list.push(agent("PowerToys", Spot::Apps, vec![local.join("Microsoft").join("PowerToys")]).junk(vec![src(
         local.join("Microsoft").join("PowerToys").join("Updates"),
         ("Downloaded update", "downloaded update installers"),
         any,
     )]));
 
-    // ---- Graphics drivers' shader caches: per file, so only shaders nobody has used go.
+    // ---- Graphics drivers' shader caches: per file. Age is last modification, not last use.
     let low = local.parent().map(|a| a.join("LocalLow")).unwrap_or_default();
     let mut nvidia = Vec::new();
     for base in [local.join("NVIDIA"), low.join("NVIDIA"), low.join("NVIDIA").join("PerDriverVersion")] {
@@ -651,7 +654,11 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
         src(local.join("node-gyp").join("Cache"), ("Node headers", "Node headers node-gyp downloaded"), any).named(|_, rel| format!("node-gyp · Node {}", rel[0])),
         src(roaming.clone(), ("Old npm cache", "an old npm cache nothing uses"), |n| n == "npm-cache").named(|_, _| "npm · old cache in AppData\\Roaming".into()),
         src(home.clone(), ("Old npm cache", "an old npm cache nothing uses"), |n| n == "npm-cache").named(|_, _| "npm · old cache in your home folder".into()),
-        src(local.join("0install.net"), ("Zero Install download", "Zero Install downloads"), |n| n == "implementations").named(|_, _| "Zero Install · downloaded apps".into()),
+        // Zero Install protects implementations with deny ACLs and may share files through
+        // hard links. Its own cache manager must handle removal; ordinary deletion cannot.
+        src(local.join("0install.net"), ("Zero Install download", "Zero Install downloads"), |n| n == "implementations")
+            .named(|_, _| "Zero Install · downloaded apps".into())
+            .manual_cleanup("Protected by Zero Install; open its cache manager to remove downloaded apps"),
         src(local.clone(), ("Installer temp files", "installer temp files"), |n| n == "SquirrelTemp").named(|_, _| "Squirrel installer temp files".into()),
         src(local.join("Microsoft"), ("Editor extension cache", "editor extension caches"), |n| n == "vscode-cpptools" || n == "TypeScript")
             .named(|_, rel| format!("VS Code · {} cache", rel[0])),
@@ -666,7 +673,7 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
     let wer = data.join("Microsoft").join("Windows").join("WER");
     list.push(agent("Windows Update", Spot::Windows, vec![win.join("SoftwareDistribution").join("Download")]).junk(vec![src(
         win.join("SoftwareDistribution").join("Download"),
-        ("Downloaded update", "downloaded updates that are installed already"),
+        ("Downloaded update", "downloaded update files"),
         any,
     )
     .named(|_, rel| format!("update files {}", rel[0].chars().take(12).collect::<String>()))]));
@@ -701,16 +708,25 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
     }
     let nvidia = data.join("NVIDIA Corporation");
     list.push(agent("NVIDIA", Spot::AdminApps, vec![nvidia.clone()]).junk(vec![
-        src(nvidia.join("NVIDIA app").join("UpdateFramework").join("ota-artifacts").join("grd"), ("Driver installer", "older driver installers"), any)
+        src(nvidia.join("NVIDIA app").join("UpdateFramework").join("ota-artifacts").join("grd"), ("Driver installer cache", "cached driver installation files"), any)
             .keep_newest(1)
-            .named(|_, rel| format!("driver installer {}", rel[0])),
-        src(nvidia.join("Downloader"), ("Downloaded installer", "older downloaded installers"), any).keep_newest(1),
+            .named(|_, rel| {
+                if rel[0].eq_ignore_ascii_case("post-processing") {
+                    "extracted driver installers".into()
+                } else {
+                    format!("driver installer download {}", rel[0])
+                }
+            }),
+        src(nvidia.join("Downloader"), ("Download cache entry", "installer downloads and download metadata"), any)
+            .keep_newest(1)
+            .named(|_, rel| format!("download cache {}", rel[0])),
     ]));
     let epic = p.program_files_x86.join("Epic Games").join("Launcher").join("VaultCache");
     list.push(agent("Epic Games", Spot::AdminApps, vec![epic.clone()]).junk(vec![src(epic, ("Downloaded sample", "downloaded samples (the Launcher gets them again if asked)"), any)]));
     let glass = data.join("GlassWire");
     list.push(agent("GlassWire", Spot::AdminApps, vec![glass.clone()]).junk(vec![
-        src(glass.clone(), ("Old backup", "old backups"), |n| n.contains(".backup_")),
+        src(glass.clone(), ("Settings and traffic history backup", "settings and traffic history backups"), |n| n.contains(".backup_"))
+            .named(|_, rel| format!("settings and traffic history backup {}", rel[0])),
         src(glass.join("service-full").join("log"), ("Log", "logs"), any),
     ]));
     let razer = data.join("Razer");
@@ -835,7 +851,7 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             }
         }
     }
-    let each: Vec<(Cand, &Agent, &Source)> = super::cands(list, ctx.now).into_iter().zip(from).map(|(c, (a, s))| (c, a, s)).collect();
+    let each: Vec<(Cand, &Agent, &Source)> = super::cands(list, ctx.now).into_iter().zip(from).map(|(c, (a, s))| (c.age_sensitive(), a, s)).collect();
     // What a source keeps together becomes one item: everything it found, named from the first to
     // the last, as new as its newest part. Cleaning it takes them all.
     let mut found: Vec<(Cand, &Agent, &Source)> = Vec::new();
@@ -846,6 +862,8 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
                 first.files += c.files;
                 first.links += c.links;
                 first.age = first.age.min(c.age);
+                first.age_known &= c.age_known;
+                first.browser_data |= c.browser_data;
                 first.complete &= c.complete;
                 first.targets.extend(c.targets);
             }
@@ -860,7 +878,10 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
     // version where the names have one (Photoshop 27 over 26, even if 26 was touched later), else
     // by when it last changed.
     found.sort_by(|(a, _, sa), (b, _, sb)| {
-        sa.dir.cmp(&sb.dir).then_with(|| version_in(&name_of(&b.path)).cmp(&version_in(&name_of(&a.path)))).then(a.age.cmp(&b.age))
+        sa.dir.cmp(&sb.dir)
+            .then_with(|| version_in(&name_of(&b.path)).cmp(&version_in(&name_of(&a.path))))
+            .then_with(|| b.age_known.cmp(&a.age_known))
+            .then_with(|| if a.age_known && b.age_known { a.age.cmp(&b.age) } else { std::cmp::Ordering::Equal })
     });
     let mut kept_per: std::collections::HashMap<PathBuf, usize> = std::collections::HashMap::new();
     // What's installed, looked up only if something asks (most clean-ups never do).
@@ -869,6 +890,12 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
         Some(i) => i,
         None => looked_up.get_or_init(|| crate::installed::Installed::scan(ctx.paths)),
     };
+    // Query Windows only if update-related files are actually present, and share the result
+    // across setup folders on every drive and the downloaded update entries in this scan.
+    let windows_update = std::cell::OnceCell::new();
+    // Metadata is descriptive only. Bound extra I/O even for unexpectedly large caches.
+    let mut shader_reads = 0;
+    let mut shader_metadata_budget = 64 << 20;
     for (mut c, a, s) in found {
         if s.empty_only && (c.files > 0 || c.links > 0 || c.bytes > 0) {
             continue; // not empty after all: it isn't a leftover
@@ -880,7 +907,9 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             *n += 1;
             *n <= s.keep_newest
         };
-        let label = if newest { "Newest version" } else { s.kind.0 };
+        // Cache retention is a precaution, not a check of the installed driver version.
+        let nvidia_cache = a.name == "NVIDIA" && a.spot == Spot::AdminApps;
+        let label = if newest && nvidia_cache { "Kept cache entry" } else if newest { "Newest version" } else { s.kind.0 };
         c.sub = Some(match c.sub.take() {
             Some(inside) => format!("{label}, {inside}"),
             None => label.to_string(),
@@ -892,6 +921,39 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
         }
         c.kind = Some(s.kind.1);
         c.tool = Some(a.name);
+        if spot == Spot::Windows && matches!(a.name, "Windows Update" | "Windows setup") {
+            if let Some(reason) = windows_update.get_or_init(|| super::windows_update_state(ctx)).reason() {
+                // Pending or unknown state is a hard stop, including for recent folders the
+                // generic age rule would otherwise let the user explicitly tick.
+                c.optional = false;
+                f.note.get_or_insert_with(|| reason.to_string());
+                f.cands.push(c.verdict(false, reason));
+                continue;
+            }
+        }
+        if spot == Spot::Shaders {
+            let owner = if c.links == 0 && shader_reads < 4096 && matches!(a.name, "NVIDIA" | "DirectX") {
+                shader_reads += 1;
+                super::shader_owner::describe(&c.path, &mut shader_metadata_budget)
+            } else {
+                None
+            };
+            let tail = c.name.strip_prefix(&format!("{} · ", a.name)).unwrap_or(&c.name);
+            let (name, detail) = match owner {
+                Some(owner) => (owner.name, owner.detail),
+                None => ("App unknown".into(), "App could not be identified".into()),
+            };
+            c.name = format!("{} · {name} · {tail}", a.name);
+            c.sub = Some(match c.sub.take() {
+                Some(sub) => format!("{detail} · {sub}"),
+                None => detail,
+            });
+        }
+        if let Some(reason) = s.manual_cleanup {
+            f.note.get_or_insert_with(|| reason.to_string());
+            f.cands.push(c.verdict(false, reason));
+            continue;
+        }
         if s.empty_only {
             f.cands.push(c.verdict(true, "Empty, from an older version"));
             continue;
@@ -904,11 +966,38 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             } else if s.remade && one_app {
                 c.verdict(false, format!("{} makes it again when it starts", a.name))
             } else {
-                c.verdict(false, NEWEST)
+                c.verdict(false, if nvidia_cache { "Kept as a precaution" } else { NEWEST })
             });
             continue;
         }
-        f.cands.push(judge(c, ctx, min_age, s.sessions));
+        c = judge(c, ctx, min_age, s.sessions);
+        if spot == Spot::Shaders && c.goes {
+            c.reason = format!("Last changed {} ago", ago(c.age));
+        }
+        f.cands.push(c);
+    }
+    if spot == Spot::Shaders {
+        let caches = super::steam_shaders::discover(ctx.paths);
+        let paths = caches.iter().map(|cache| (cache.path.clone(), format!("Steam · {} · Shader cache", cache.name))).collect();
+        for (mut c, cache) in super::cands(paths, ctx.now).into_iter().zip(caches) {
+            if c.files == 0 && c.links == 0 && c.complete {
+                continue;
+            }
+            c.sub = Some(match c.sub.take() {
+                Some(sub) => format!("{} · {sub}", cache.detail),
+                None => cache.detail,
+            });
+            c.kind = Some("shader caches");
+            c.tool = Some("Steam");
+            c = judge(c, ctx, min_age, false);
+            // Adding an ownership view must not silently expand automatic cleanup. An absent
+            // game is evidence to show, never a reason to tick a cache or bypass safety checks.
+            if c.goes {
+                let reason = format!("Last changed {} ago; select to clear", ago(c.age));
+                c = c.kept_but_tickable(reason);
+            }
+            f.cands.push(c);
+        }
     }
     f.available = f.available || !f.cands.is_empty();
     f
@@ -957,6 +1046,7 @@ const MANY_APPS: &[&str] = &["Squirrel apps", "Developer tools", "App updaters"]
 const LINKED: &str = "Holds a link to another folder (a shared skill, say)";
 
 fn judge(c: Cand, ctx: &TrashCtx, min_age: u64, sessions: bool) -> Cand {
+    let c = c.age_sensitive();
     if c.links > 0 {
         c.verdict(false, LINKED)
     } else if sessions && ctx.session_live(&name_of(&c.path)) {
@@ -967,7 +1057,7 @@ fn judge(c: Cand, ctx: &TrashCtx, min_age: u64, sessions: bool) -> Cand {
         let r = too_fresh(c.age, min_age);
         c.kept_but_tickable(r)
     } else {
-        let r = format!("Untouched for {}", ago(c.age));
+        let r = format!("Last changed {} ago", ago(c.age));
         c.verdict(true, r)
     }
 }
@@ -998,7 +1088,7 @@ pub(super) fn temp_owners(ctx: &TrashCtx) -> TempOwners {
     owners
 }
 
-/// What a clean-up never touches, for its explanation.
+/// What a clean-up preserves, and what removing its contents means.
 pub(super) fn untouched(id: &str) -> &'static str {
     match id {
         "claude-leftovers" => "Your chats, projects, settings, plugins and memory aren't touched.",
@@ -1006,8 +1096,8 @@ pub(super) fn untouched(id: &str) -> &'static str {
         "shader-cache" => "Games and apps keep working: a shader one needs is made again the first time it's used.",
         "game-junk" => "Saves and settings aren't touched.",
         "dev-leftovers" => "Your projects and tools aren't touched; anything needed is downloaded or built again.",
-        "windows-junk" => "Windows and your programs keep working; nothing they still need is in here.",
-        "admin-leftovers" => "The apps keep working: the driver, version and installer they use now stay.",
+        "windows-junk" => "Update downloads and setup folders stay when an update is pending or Windows update status cannot be checked. Review other leftovers before deleting them.",
+        "admin-leftovers" => "Installed drivers stay. Cached installers may need to be downloaded again for reinstall or rollback. Deleting backups discards the settings and history saved in them.",
         _ => "Their chats, sessions, settings, sign-ins, skills and memory aren't touched.",
     }
 }
@@ -1056,7 +1146,7 @@ pub(super) fn conversations(ctx: &TrashCtx, min_age: u64) -> Found {
                 if t.files == 0 && t.links == 0 {
                     continue; // nothing in it worth a link
                 }
-                let age = ctx.now.saturating_sub(t.newest);
+                let age = ctx.now.saturating_sub(t.recency);
                 // (A folder too big to count in full isn't known to be old.)
                 if d >= s.min_depth && ((age >= min_age && t.complete) || d == s.depth) {
                     let rel: Vec<String> = dir
@@ -1077,19 +1167,20 @@ pub(super) fn conversations(ctx: &TrashCtx, min_age: u64) -> Found {
 }
 
 fn chat_verdict(c: Cand, ctx: &TrashCtx, min_age: u64) -> Cand {
+    let c = c.age_sensitive();
     if c.links > 0 {
         c.verdict(false, LINKED)
     } else if ctx.in_use(&c.path) {
         c.verdict(false, IN_USE)
     } else if c.age < 86_400 {
         // Today's might still be being written.
-        let r = format!("Opened {} ago", ago(c.age));
+        let r = format!("Last changed {} ago", ago(c.age));
         c.verdict(false, r)
     } else if c.age < min_age {
-        let r = format!("Opened {} ago (kept here for {})", ago(c.age), super::human_age_long(min_age));
+        let r = format!("Last changed {} ago (kept here for {})", ago(c.age), super::human_age_long(min_age));
         c.kept_but_tickable(r)
     } else {
-        let r = format!("Not opened for {}", ago(c.age));
+        let r = format!("Last changed {} ago", ago(c.age));
         c.verdict(true, r)
     }
 }
@@ -1279,6 +1370,60 @@ mod tests {
     }
 
     #[test]
+    fn zero_install_is_visible_but_never_sent_to_generic_deletion() {
+        let root = fixture("zero-install");
+        let paths = Paths::under(&root);
+        let cache = paths.local_appdata.join("0install.net").join("implementations");
+        let app = cache.join("sha256new_example").join("app.exe");
+        write(&app, 500, 400);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("dev-leftovers", &ctx).unwrap();
+        let item = spot.items.iter().find(|i| i.path == cache.to_string_lossy()).unwrap();
+        assert_eq!((item.goes, item.optional), (false, false));
+        assert!(item.reason.contains("cache manager"));
+        assert_eq!((spot.reclaimable_bytes, spot.kept_bytes), (0, 500));
+        assert!(spot.note.as_deref().unwrap().contains("Zero Install"));
+        // Even an explicit request from a stale UI cannot bypass the fresh verdict.
+        let pick = crate::trash::Pick { ticked: vec![item.path.clone()], new: true, ..Default::default() };
+        let report = clean("dev-leftovers", &ctx, Some(&pick));
+        assert_eq!((report.deleted, report.skipped), (0, 1));
+        assert!(app.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn steam_shader_ownership_does_not_select_new_caches_for_automatic_cleanup() {
+        let root = fixture("steam-shader-selection");
+        let paths = Paths::under(&root);
+        let steam = paths.program_files_x86.join("Steam");
+        let apps = steam.join("steamapps");
+        let installed = apps.join("shadercache").join("123").join("cache.bin");
+        let leftover = apps.join("shadercache").join("456").join("cache.bin");
+        write(&installed, 300, 400);
+        write(&leftover, 500, 400);
+        std::fs::create_dir_all(apps.join("common").join("Example Game")).unwrap();
+        std::fs::write(apps.join("libraryfolders.vdf"), format!(
+            "\"libraryfolders\" {{ \"0\" {{ \"path\" \"{}\" }} }}",
+            steam.to_string_lossy().replace('\\', "\\\\")
+        )).unwrap();
+        std::fs::write(apps.join("appmanifest_123.acf"),
+            r#""AppState" { "appid" "123" "name" "Example Game" "installdir" "Example Game" }"#
+        ).unwrap();
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("shader-cache", &ctx).unwrap();
+        assert_eq!(spot.items.len(), 2);
+        assert!(spot.items.iter().all(|item| !item.goes && item.optional));
+        assert!(spot.items.iter().any(|item| item.name == "Steam · Example Game · Shader cache"));
+        assert!(spot.items.iter().any(|item| item.sub.as_deref().is_some_and(|s| s.contains("Not found in installed Steam games"))));
+        assert_eq!(spot.reclaimable_bytes, 0);
+        assert_eq!(clean("shader-cache", &ctx, None).deleted, 0);
+        assert!(installed.exists() && leftover.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn shaders_game_logs_dev_caches_and_older_versions_go_saves_and_newest_stay() {
         let root = fixture("more");
         let paths = Paths::under(&root);
@@ -1303,7 +1448,7 @@ mod tests {
             v.sort();
             v
         };
-        assert_eq!(going("shader-cache"), vec!["NVIDIA · DXCache old.toc"]);
+        assert_eq!(going("shader-cache"), vec!["NVIDIA · App unknown · DXCache old.toc"]);
         assert_eq!(going("game-junk"), vec!["Unity games · Swordship · Player.log", "Unreal games · Atlas · Atlas.log"]);
         assert_eq!(going("dev-leftovers"), vec!["Developer tools · Dart · package cache"]);
         assert_eq!(going("app-leftovers"), vec!["Chrome · version 151.0.1 snapshot", "Squirrel apps · Slack 4.40.0"]);
@@ -1369,6 +1514,122 @@ mod tests {
         for kept in ["found.things", "found.0001", "AMD", "Games", "System Volume Information"] {
             assert!(d.join(kept).exists(), "{kept}");
         }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn pending_or_unknown_windows_updates_lock_setup_and_downloads_on_every_drive() {
+        use crate::trash::windows_update::State;
+        for (name, state) in [("pending", State::Pending), ("unknown", State::Unknown)] {
+            let root = fixture(&format!("windows-update-{name}"));
+            let mut paths = Paths::under(&root);
+            let other_drive = root.join("d");
+            paths.other_drives = vec![other_drive.clone()];
+            let protected = [
+                paths.system_drive.join("$GetCurrent"),
+                other_drive.join("Windows10Upgrade"),
+                other_drive.join("$WINDOWS.~BT"),
+                paths.windows.join("SoftwareDistribution").join("Download").join("download-id"),
+            ];
+            for (i, path) in protected.iter().enumerate() {
+                // Recent setup data must be locked too, rather than merely unticked.
+                write(&path.join("data.bin"), 100, if i == 2 { 1 } else { 200 });
+            }
+            let installer = paths.system_drive.join("AMD");
+            let report = paths.program_data.join("Microsoft").join("Windows").join("WER").join("ReportArchive").join("old-report");
+            write(&installer.join("driver.cab"), 50, 200);
+            write(&report.join("report.wer"), 60, 200);
+
+            let cfg = TrashConfig::default();
+            let calls = std::cell::Cell::new(0);
+            let probe = || {
+                calls.set(calls.get() + 1);
+                state
+            };
+            let mut ctx = ctx(&paths, &cfg);
+            ctx.windows_update_probe = Some(&probe);
+            let spot = measure("windows-junk", &ctx).unwrap();
+            assert_eq!(calls.get(), 1, "one probe serves all update candidates in a scan");
+            assert_eq!(spot.note.as_deref(), state.reason());
+            for path in &protected {
+                let item = spot.items.iter().find(|item| item.path == path.to_string_lossy()).unwrap();
+                assert!(!item.goes && !item.optional, "{} must stay locked: {item:?}", path.display());
+                assert_eq!(Some(item.reason.as_str()), state.reason());
+            }
+            for path in [&installer, &report] {
+                assert!(spot.items.iter().any(|item| item.path == path.to_string_lossy() && item.goes), "unrelated old files retain their verdict");
+            }
+
+            // A stale UI or explicit tick of a recent item cannot turn the hard stop into a
+            // deletion. This also exercises the fresh finding used by clean(), not only UI.
+            let pick = crate::trash::Pick {
+                goes: false,
+                new: true,
+                ticked: protected.iter().map(|path| path.to_string_lossy().into_owned()).collect(),
+                ..Default::default()
+            };
+            let result = clean("windows-junk", &ctx, Some(&pick));
+            assert_eq!((result.deleted, result.skipped), (0, protected.len() as u64));
+            assert!(protected.iter().all(|path| path.join("data.bin").exists()));
+            assert!(installer.exists() && report.exists());
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+    }
+
+    #[test]
+    fn clear_windows_update_state_preserves_normal_age_verdicts() {
+        use crate::trash::windows_update::State;
+        let root = fixture("windows-update-clear");
+        let paths = Paths::under(&root);
+        let old = paths.system_drive.join("$GetCurrent");
+        let recent = paths.system_drive.join("Windows10Upgrade");
+        let download = paths.windows.join("SoftwareDistribution").join("Download").join("old-download");
+        write(&old.join("data.bin"), 100, 200);
+        write(&recent.join("data.bin"), 100, 1);
+        write(&download.join("update.cab"), 100, 200);
+        let cfg = TrashConfig::default();
+        let calls = std::cell::Cell::new(0);
+        let probe = || {
+            calls.set(calls.get() + 1);
+            State::Clear
+        };
+        let mut ctx = ctx(&paths, &cfg);
+        ctx.windows_update_probe = Some(&probe);
+        let spot = measure("windows-junk", &ctx).unwrap();
+        assert_eq!(calls.get(), 1);
+        assert!(spot.note.is_none());
+        for path in [&old, &download] {
+            assert!(spot.items.iter().any(|item| item.path == path.to_string_lossy() && item.goes));
+        }
+        let item = spot.items.iter().find(|item| item.path == recent.to_string_lossy()).unwrap();
+        assert!(!item.goes && item.optional);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn unrelated_windows_leftovers_do_not_probe_update_state() {
+        use crate::trash::windows_update::State;
+        let root = fixture("windows-update-unrelated");
+        let paths = Paths::under(&root);
+        let installer = paths.system_drive.join("AMD");
+        let report = paths.program_data.join("Microsoft").join("Windows").join("WER").join("ReportArchive").join("old-report");
+        write(&installer.join("driver.cab"), 50, 200);
+        write(&report.join("report.wer"), 60, 200);
+        let cfg = TrashConfig::default();
+        let calls = std::cell::Cell::new(0);
+        let probe = || {
+            calls.set(calls.get() + 1);
+            State::Unknown
+        };
+        let mut ctx = ctx(&paths, &cfg);
+        ctx.windows_update_probe = Some(&probe);
+        let spot = measure("windows-junk", &ctx).unwrap();
+        assert_eq!(calls.get(), 0, "no update data means no update-state query");
+        assert_eq!(spot.reclaimable_items, 2);
+        assert!(spot.note.is_none());
+        let result = clean("windows-junk", &ctx, None);
+        assert_eq!(result.deleted, 2);
+        assert_eq!(calls.get(), 0);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

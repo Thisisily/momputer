@@ -4,8 +4,8 @@
 
 use super::{ago, name_of, tally_many, Cand, Found, TrashCtx, ENTRY_CAP, IDLE_PROJECT_DAYS, IN_USE};
 use crate::paths::Paths;
-use crate::util::{mtime_secs, norm_path};
-use std::collections::HashSet;
+use crate::util::norm_path;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Build folders a JavaScript project (one with a package.json) can make again.
@@ -13,9 +13,6 @@ const JS_BUILD: &[&str] = &["node_modules", ".next", ".turbo", ".parcel-cache", 
 
 /// Files that change when someone works on a project.
 const ACTIVITY: &[&str] = &[
-    ".git/index",
-    ".git/HEAD",
-    ".git/logs/HEAD",
     "package.json",
     "package-lock.json",
     "pnpm-lock.yaml",
@@ -34,6 +31,9 @@ const MAX_DEPTH: usize = 3;
 
 /// Files mom will count across all build folders before she stops measuring the rest.
 const BUDGET: u64 = 10_000_000;
+/// Metadata entries across source trees, independent of the build-folder size budget.
+const ACTIVITY_BUDGET: usize = 250_000;
+const ACTIVITY_DEPTH: usize = 32;
 
 /// Folder names people keep code under at the top of a drive.
 const DRIVE_ROOTS: &[&str] = &["Workspace", "Projects", "Code", "dev", "Development", "src", "repos", "GitHub", "git", "work"];
@@ -79,8 +79,9 @@ struct Project {
     dir: PathBuf,
     /// Where it sits under its root: "storefront", "tools/old-cli", "storefront/apps/web".
     name: String,
-    /// Newest sign of work, unix seconds (including the work on a repo or project around it).
-    active: u64,
+    /// Newest sign of work, including the surrounding repository. None means some activity
+    /// could not be checked; Some(0) is only the neutral value when no repository was found.
+    active: Option<u64>,
     js: bool,
     rust: bool,
 }
@@ -90,20 +91,92 @@ fn my_file(path: &Path) -> bool {
     std::fs::symlink_metadata(path).map(|m| m.is_file()).unwrap_or(false) && crate::elevate::owned_by_me(path)
 }
 
-fn newest_activity(dir: &Path, project: bool) -> u64 {
-    let mut newest = ACTIVITY
-        .iter()
-        .filter_map(|f| std::fs::metadata(dir.join(f)).ok())
-        .map(|m| mtime_secs(&m))
-        .max()
-        .unwrap_or(0);
-    if project {
-        newest = newest.max(std::fs::metadata(dir).map(|m| mtime_secs(&m)).unwrap_or(0));
+/// An optional activity entry: only NotFound establishes absence. Links, the wrong entry
+/// type, invalid dates and all other errors leave activity unknown.
+fn activity_timestamp(metadata: std::io::Result<std::fs::Metadata>, directory: bool) -> Option<Option<u64>> {
+    let meta = match metadata {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(None),
+        Err(_) => return None,
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if meta.file_attributes() & 0x400 != 0 { return None; }
     }
-    newest
+    if meta.file_type().is_symlink() || if directory { !meta.is_dir() } else { !meta.is_file() } {
+        return None;
+    }
+    super::cleanup_recency(&meta).map(Some)
 }
 
-fn walk(dir: &Path, rel: &str, depth: usize, inherited: u64, seen: &mut HashSet<String>, out: &mut Vec<Project>) {
+/// Inspect a fixed set of Git metadata paths, including the directories that contain them.
+/// Never recurse through Git objects or follow a linked/external worktree Git directory.
+fn newest_activity(dir: &Path, project: bool) -> Option<u64> {
+    let at = |path: &Path, directory| activity_timestamp(std::fs::symlink_metadata(path), directory);
+    let mut newest = 0;
+    let git = dir.join(".git");
+    if let Some(time) = at(&git, true)? {
+        newest = newest.max(time);
+        for name in ["index", "HEAD"] {
+            newest = newest.max(at(&git.join(name), false)?.unwrap_or(0));
+        }
+        let logs = git.join("logs");
+        if let Some(time) = at(&logs, true)? {
+            newest = newest.max(time).max(at(&logs.join("HEAD"), false)?.unwrap_or(0));
+        }
+    }
+    if project {
+        for name in ACTIVITY {
+            newest = newest.max(at(&dir.join(name), false)?.unwrap_or(0));
+        }
+        // A project directory itself is required, unlike its optional lockfiles.
+        newest = newest.max(at(dir, true)??);
+    }
+    Some(newest)
+}
+
+/// Edits to existing source files need not touch a manifest, Git index or parent directory.
+/// Read only metadata, omit generated trees, and retain the project if evidence is incomplete.
+fn source_activity(dir: &Path, budget: &mut usize) -> Option<u64> {
+    let mut newest = 0;
+    let mut stack = vec![(dir.to_path_buf(), 0)];
+    while let Some((path, depth)) = stack.pop() {
+        if *budget == 0 {
+            return None;
+        }
+        *budget -= 1;
+        let meta = std::fs::symlink_metadata(&path).ok()?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if meta.file_attributes() & 0x400 != 0 {
+                return None;
+            }
+        }
+        if meta.file_type().is_symlink() || (!meta.is_dir() && !meta.is_file()) {
+            return None;
+        }
+        newest = newest.max(super::cleanup_recency(&meta)?);
+        if !meta.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(&path).ok()? {
+            let entry = entry.ok()?;
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name == ".git" || name == ".venv" || DONT_WALK.contains(&name.as_str()) || JS_BUILD.contains(&name.as_str()) {
+                continue;
+            }
+            if depth >= ACTIVITY_DEPTH || stack.len() >= *budget {
+                return None;
+            }
+            stack.push((entry.path(), depth + 1));
+        }
+    }
+    (newest > 0).then_some(newest)
+}
+
+fn walk(dir: &Path, rel: &str, depth: usize, inherited: Option<u64>, seen: &mut HashSet<String>, out: &mut Vec<Project>) {
     if !seen.insert(norm_path(&dir.to_string_lossy())) {
         return;
     }
@@ -113,7 +186,8 @@ fn walk(dir: &Path, rel: &str, depth: usize, inherited: u64, seen: &mut HashSet<
     let js = my_file(&dir.join("package.json"));
     let rust = my_file(&dir.join("Cargo.toml"));
     let project = js || rust;
-    let active = if project || dir.join(".git").exists() { newest_activity(dir, project).max(inherited) } else { inherited };
+    // Even an unreadable .git must protect descendant packages; exists() would hide errors.
+    let active = inherited.zip(newest_activity(dir, project)).map(|(around, here)| around.max(here));
     // Only your own projects: under a shared folder, someone else's can sit next to yours.
     if project && crate::elevate::owned_by_me(dir) {
         let name = if rel.is_empty() { name_of(dir) } else { rel.to_string() };
@@ -144,7 +218,7 @@ fn projects(roots: &[PathBuf]) -> Vec<Project> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for root in roots {
-        walk(root, "", 0, 0, &mut seen, &mut out);
+        walk(root, "", 0, Some(0), &mut seen, &mut out);
     }
     out
 }
@@ -247,19 +321,38 @@ pub(super) fn find(ctx: &TrashCtx) -> Found {
     let mut list: Vec<(&Project, PathBuf)> =
         projects.iter().flat_map(|p| build_dirs(p).into_iter().map(move |d| (p, d))).collect();
     // Measure what could go first, so a huge active project can't use up the budget.
-    list.sort_by_key(|(p, _)| p.active);
+    list.sort_by_key(|(p, _)| p.active.unwrap_or(u64::MAX));
     let dirs: Vec<PathBuf> = list.iter().map(|(_, d)| d.clone()).collect();
     let tallies = tally_many(&dirs, ENTRY_CAP, BUDGET);
+    let mut budget = ACTIVITY_BUDGET;
+    let mut activity: HashMap<PathBuf, Option<u64>> = HashMap::new();
+    for (p, _) in &list {
+        activity.entry(p.dir.clone()).or_insert_with(|| p.active.and_then(|around| source_activity(&p.dir, &mut budget).map(|t| t.max(around))));
+    }
+    // A fresh build protects every generated folder in its project, including dependencies.
+    // A partial measurement cannot establish that the project's artifacts are all old.
+    for ((p, _), t) in list.iter().zip(&tallies) {
+        let active = activity.get_mut(&p.dir).unwrap();
+        if !t.complete || t.recency == 0 {
+            *active = None;
+        } else if let Some(newest) = active {
+            *newest = (*newest).max(t.recency);
+        }
+    }
     for ((p, dir), t) in list.into_iter().zip(tallies) {
-        let mut c = Cand::new(dir.clone(), format!("{} · {}", p.name, name_of(&dir)), &t, ctx.now);
-        c.age = ctx.now.saturating_sub(p.active);
+        let mut c = Cand::new(dir.clone(), format!("{} · {}", p.name, name_of(&dir)), &t, ctx.now).age_sensitive();
+        let active = activity[&p.dir];
+        c.age_known &= active.is_some();
+        c.age = active.map_or(0, |t| ctx.now.saturating_sub(t));
         let c = if ctx.in_use(&p.dir) {
             c.verdict(false, IN_USE)
+        } else if active.is_none() {
+            c.verdict(false, "Project activity could not be fully checked")
         } else if c.age < idle_after {
-            let r = format!("Worked on {} ago", ago(c.age));
+            let r = format!("Project activity recorded {} ago", ago(c.age));
             c.kept_but_tickable(r)
         } else {
-            let r = format!("Not worked on for {}", ago(c.age));
+            let r = format!("No newer project activity recorded for {}", ago(c.age));
             c.verdict(true, r)
         };
         f.cands.push(c);
@@ -327,7 +420,7 @@ mod tests {
             ]
         );
         let storefront = spot.items.iter().find(|i| i.name.starts_with("storefront")).unwrap();
-        assert_eq!(storefront.reason, "Worked on 2 days ago");
+        assert_eq!(storefront.reason, "Project activity recorded 2 days ago");
         assert_eq!(spot.items.iter().find(|i| i.name.starts_with("busy")).unwrap().reason, IN_USE);
         assert_eq!(spot.reclaimable_bytes, 10_500);
         assert!(spot.effect.contains("from 2 projects"), "{}", spot.effect);
@@ -341,17 +434,123 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    #[test]
+    fn edits_and_new_artifacts_protect_every_build_folder_without_a_manifest_change() {
+        let root = fixture("build-activity");
+        let ws = root.join("Workspace");
+        for name in ["source-edit", "new-build"] {
+            let dir = ws.join(name);
+            write(&dir.join("package.json"), 20, 90);
+            write(&dir.join("src").join("main.js"), 20, if name == "source-edit" { 2 } else { 90 });
+            write(&dir.join("node_modules").join("dep").join("index.js"), 40, 90);
+            write(&dir.join(".next").join("cache").join("output"), 40, if name == "new-build" { 2 } else { 90 });
+            age_dir(&dir, 90);
+        }
+        let paths = Paths::under(&root);
+        let cfg = TrashConfig::default();
+        let mut context = ctx(&paths, &cfg);
+        context.project_roots = vec![ws];
+        let found = find(&context);
+        assert_eq!(found.cands.len(), 4);
+        assert!(found.cands.iter().all(|c| !c.goes && c.age < 3 * 86_400), "{:?}", found.cands.iter().map(|c| (&c.name, c.age, &c.reason)).collect::<Vec<_>>());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn incomplete_source_activity_never_becomes_an_old_project() {
+        let root = fixture("build-activity-limit");
+        write(&root.join("src").join("main.js"), 20, 90);
+        assert_eq!(source_activity(&root, &mut 0), None);
+        assert_eq!(source_activity(&root, &mut 1), None);
+        assert_eq!(source_activity(&root.join("missing"), &mut 10), None);
+        // Generated dependencies do not consume the source scan's entry budget.
+        let small = root.join("tiny");
+        write(&small.join("package.json"), 20, 90);
+        write(&small.join("node_modules").join("many").join("files.js"), 20, 90);
+        assert!(source_activity(&small, &mut 2).is_some());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn newly_created_git_activity_protects_direct_and_nested_projects_with_old_write_times() {
+        use std::os::windows::fs::FileTimesExt;
+        use std::time::{Duration, SystemTime};
+
+        let root = fixture("build-git-created");
+        let ws = root.join("Workspace");
+        let mut indexes = Vec::new();
+        for name in ["direct", "nested"] {
+            let repo = ws.join(name);
+            let project = if name == "nested" { repo.join("packages").join("web") } else { repo.clone() };
+            let index = repo.join(".git").join("index");
+            write(&index, 20, 90);
+            write(&project.join("package.json"), 20, 90);
+            write(&project.join("node_modules").join("dep.js"), 40, 90);
+            indexes.push(index);
+        }
+        let paths = Paths::under(&root);
+        let cfg = TrashConfig::default();
+        let mut context = ctx(&paths, &cfg);
+        context.project_roots = vec![ws];
+        let before = find(&context);
+        assert_eq!(before.cands.len(), 2);
+        assert!(before.cands.iter().all(|c| c.goes));
+
+        let old = SystemTime::now() - Duration::from_secs(90 * 86_400);
+        for index in indexes {
+            std::fs::File::options().write(true).open(index).unwrap()
+                .set_times(std::fs::FileTimes::new().set_modified(old).set_created(SystemTime::now())).unwrap();
+        }
+        let after = find(&context);
+        assert_eq!(after.cands.len(), 2);
+        assert!(after.cands.iter().all(|c| c.age_known && !c.goes && c.age < 86_400));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn invalid_repository_activity_stays_unknown_in_descendant_projects() {
+        let root = fixture("build-git-unknown");
+        let ws = root.join("Workspace");
+        let repo = ws.join("repo");
+        let project = repo.join("packages").join("web");
+        write(&project.join("package.json"), 20, 90);
+        write(&project.join("node_modules").join("dep.js"), 40, 90);
+        // A directory cannot stand in for the Git index. Its old contents must not make this
+        // malformed/uncheckable repository look inactive to its nested package.
+        write(&repo.join(".git").join("index").join("unexpected"), 20, 90);
+        assert_eq!(newest_activity(&repo, false), None);
+        let paths = Paths::under(&root);
+        let cfg = TrashConfig::default();
+        let mut context = ctx(&paths, &cfg);
+        context.project_roots = vec![ws];
+        let found = find(&context);
+        assert_eq!(found.cands.len(), 1);
+        let candidate = &found.cands[0];
+        assert!(!candidate.age_known && !candidate.goes && !candidate.optional);
+        let pick = crate::trash::Pick { new: true, ticked: vec![candidate.path.to_string_lossy().into_owned()], ..Default::default() };
+        assert!(crate::trash::choose(&found, Some(&pick)).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn activity_absence_is_distinct_from_errors_and_invalid_dates() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(activity_timestamp(Err(Error::from(ErrorKind::NotFound)), false), Some(None));
+        for kind in [ErrorKind::PermissionDenied, ErrorKind::NotADirectory, ErrorKind::Other] {
+            assert_eq!(activity_timestamp(Err(Error::from(kind)), false), None);
+        }
+        let root = fixture("build-git-invalid-date");
+        let index = root.join(".git").join("index");
+        write(&index, 20, 90);
+        std::fs::File::options().write(true).open(&index).unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH)).unwrap();
+        assert_eq!(newest_activity(&root, false), None);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// Folders get "now" as their mtime when files are made in them; age them like their files.
     fn age_dir(dir: &Path, days: u64) {
-        let mut o = std::fs::OpenOptions::new();
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            o.write(true).custom_flags(0x0200_0000); // FILE_FLAG_BACKUP_SEMANTICS: lets us open a folder
-        }
-        #[cfg(not(windows))]
-        o.read(true);
-        let f = o.open(dir).unwrap();
-        f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400)).unwrap();
+        crate::trash::tests::touch_directory(dir, days * 86_400);
     }
 }

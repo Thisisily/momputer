@@ -74,6 +74,7 @@
     sheet: null, // { kind: "spot", id } or { kind: "settings" }
     picks: {}, // clean-up id -> what's ticked in its lists (see pickOf)
     cleanConfirm: null,
+    cleanConfirmSelection: null, // exact folders and action confirmed for forgotten app data
     cleaning: null,
     archive: null, // where old conversations go, and what's been moved there
     adminBlock: undefined, // why mom can't ask for an administrator from this copy (null: she can)
@@ -100,10 +101,11 @@
     files: null, // { report, busy }: copies and big forgotten files
     filesProgress: null,
     filesKeep: {}, // a set of copies' hash -> the copy to keep instead of mom's pick
-    filesUntick: new Set(), // extra copies the user wants to keep as well
+    filesTicked: new Map(), // explicitly selected path -> content hash; new copies start unticked
     bigTicked: new Set(), // big files the user ticked
-    filesConfirm: false,
+    filesConfirm: null, // the exact paths confirmed by the first press
     filesWorking: false,
+    filesVersion: 0, // invalidates reads started before a scan, event or recycle
     showAllCopies: false,
     winsettings: null, // Windows settings that drifted from the defaults
     winLoading: false,
@@ -120,6 +122,7 @@
     version: "",
     tipCoin: "Solana", // which address the tip jar shows
     recycle: loadRecycle(), // clean-ups that delete send things to the Recycle Bin instead
+    forgottenMode: "move", // archive by default; discarding app data is an explicit choice
     rules: null,
     rulesDraft: null,
     rulesEditing: false,
@@ -903,7 +906,7 @@
   };
 
   function extRow(b, e) {
-    const saved = e.lastSaved ? `saved something ${agoText(e.lastSaved)}` : "has never saved anything";
+    const saved = e.lastSaved ? `storage changed ${agoText(e.lastSaved)}` : "storage activity unknown";
     const meta = [e.can[0] || "Asks for nothing special", e.on ? saved : "switched off", e.added ? `added ${agoText(e.added)}` : ""].filter(Boolean);
     const led = !e.on ? "off" : e.everywhere ? "red" : e.lastSaved ? "green" : "off";
     return `<div class="row ext${e.on ? "" : " is-off"}" id="ex-${hash(b.id + e.id)}" data-led="${led}" title="${esc(e.description || e.name)}">
@@ -944,9 +947,9 @@
     const key = `${b.id}|${p.dir}`;
     const open = state.browserOpen === key;
     const on = p.extensions.filter((e) => e.on).length;
-    const meta = [p.lastUsed ? `used ${agoText(p.lastUsed)}` : "", p.extensions.length ? `${on} of ${plural(p.extensions.length, "extension")} on` : "no extensions"].filter(Boolean);
+    const meta = [p.lastUsed ? `browser recorded activity ${agoText(p.lastUsed)}` : "profile activity unknown", p.extensions.length ? `${on} of ${plural(p.extensions.length, "extension")} on` : "no extensions"].filter(Boolean);
     const idle = p.lastUsed && Date.now() / 1000 - p.lastUsed > 180 * 86400;
-    return `<div class="row prof${open ? " is-open" : ""}" id="pr-${hash(key)}" data-led="${p.notes.length ? "red" : idle ? "off" : "green"}">
+    return `<div class="row prof${open ? " is-open" : ""}" id="pr-${hash(key)}" data-led="${p.notes.length ? "red" : !p.lastUsed || idle ? "off" : "green"}">
       <button class="row-name" data-act="profile-open" data-key="${esc(key)}" aria-expanded="${open}">${esc(p.name)}</button>
       <div class="row-meta"><span class="why">${esc(meta.join(" · "))}${p.notes.length ? ` · <span class="hot">${plural(p.notes.length, "note")}</span>` : ""}</span></div>
       <div class="row-nums num">${bytes(p.size)}</div>
@@ -1442,11 +1445,12 @@ in ${x.cwd}`)}">
     if (!h) return `<p class="empty">Checking…</p>`;
     const unusedApps = h.unusedApps || [];
     const now = Date.now() / 1000;
-    // One you haven't opened in a year: how big, since when, where it is, and a way to remove it.
+    // Older activity evidence can be a play record, an update, or an app data change.
     const appRow = (a) => {
       const sure = state.uninstallConfirm === a.key;
       const opened = state.uninstalled.has(a.key);
-      const since = `${a.from ? "played" : "opened"} ${yearsAgo(now - a.lastUsed)} ago`;
+      const activity = a.lastUsedSource === "played" ? "played" : a.lastUsedSource === "updated" ? "updated" : "activity recorded";
+      const since = Number.isFinite(a.lastUsed) && a.lastUsed > 0 && a.lastUsed <= now ? `${activity} ${yearsAgo(now - a.lastUsed)} ago` : "activity date unknown";
       // Where it is, in full; whoever made it when there's no folder to show.
       const where = a.dir || (a.from ? "" : a.publisher);
       const folder = a.dir ? `<button class="mini-btn" data-act="reveal-path" data-path="${esc(a.dir)}" title="${esc(`Show in File Explorer: ${a.dir}`)}" aria-label="Show ${esc(a.name)} in File Explorer">${ICON.folder}</button>` : "";
@@ -1472,12 +1476,12 @@ in ${x.cwd}`)}">
     return (
       unusedList(
         "unused",
-        "Apps you haven't opened in a year",
+        "Apps with older activity records",
         apps,
-        "Uninstall opens the app's own uninstaller. Drivers, runtimes, wallets, messengers and command-line tools are never listed.",
-        "None. Everything installed gets used."
+        "Dates may come from app data changes, not launches. Apps with unknown activity are omitted. Uninstall opens the app's own uninstaller. Drivers, runtimes, wallets, messengers and command-line tools are never listed.",
+        "No apps with known activity records over a year old. Apps with unknown activity are not listed."
       ) +
-      unusedList("unused-games", "Games you haven't played in a year", games, "Going by Steam's own record. Uninstall hands the game to Steam, which asks first.", "") +
+      unusedList("unused-games", "Games with older activity records", games, "Steam dates distinguish recorded play from updates. Games with unknown activity are omitted. Uninstall opens Steam, which asks first.", "") +
       section(
         "what-runs",
         "What runs",
@@ -1957,15 +1961,42 @@ in ${x.cwd}`)}">
   const parentOf = (p) => String(p).replace(/[\\/][^\\/]*$/, "");
 
   async function loadFiles() {
+    const version = ++state.filesVersion;
     try {
-      state.files = await invoke("files_state");
-    } catch {
-      state.files = { report: null, busy: false };
+      const next = await invoke("files_state");
+      if (version !== state.filesVersion) return;
+      applyFiles(next);
+    } catch (e) {
+      if (version !== state.filesVersion) return;
+      cancelFilesConfirm();
+      // Keep the last known list, including files the recycle result already removed.
+      if (!state.files) state.files = { report: null, busy: false };
+      toast(`Couldn't refresh the file list: ${e}`, true);
     }
     render();
   }
 
-  const keptPath = (g) => state.filesKeep[g.hash] || (g.files.find((f) => f.keep) || g.files[0]).path;
+  function cancelFilesConfirm() {
+    clearTimeout(filesTimer);
+    state.filesConfirm = null;
+  }
+
+  /** Keep only selections still available in this measurement; returning files need a new tick. */
+  function applyFiles(next) {
+    ++state.filesVersion;
+    cancelFilesConfirm();
+    state.files = next;
+    const availableCopies = new Map((next?.report?.groups || []).flatMap((g) => extrasOf(g).map((f) => [f.path, g.hash])));
+    for (const [path, hash] of state.filesTicked) if (availableCopies.get(path) !== hash) state.filesTicked.delete(path);
+    const availableBig = new Set((next?.report?.big || []).filter((b) => !b.kept).map((b) => b.path));
+    for (const path of state.bigTicked) if (!availableBig.has(path)) state.bigTicked.delete(path);
+    state.filesProgress = null;
+  }
+
+  const filesLocked = () => state.filesWorking || !!(state.files && state.files.busy);
+  const keptPath = (g) => (g.files.find((f) => f.path === state.filesKeep[g.hash]) || g.files.find((f) => f.keep) || g.files[0]).path;
+  const visibleCopyGroups = (r) => state.showAllCopies ? r.groups : r.groups.slice(0, 20);
+  const copyIsTicked = (g, f) => state.filesTicked.get(f.path) === g.hash;
 
   /** The extra copies in a group: every one but the copy that stays and any you said to keep (Settings, "Always kept"). */
   const extrasOf = (g) => g.files.filter((f) => f.path !== keptPath(g) && !f.kept);
@@ -1977,7 +2008,7 @@ in ${x.cwd}`)}">
     for (const g of r.groups) {
       const keep = keptPath(g);
       for (const f of g.files) {
-        if (f.path !== keep && !f.kept && !state.filesUntick.has(f.path)) {
+        if (f.path !== keep && !f.kept && copyIsTicked(g, f)) {
           paths.push(f.path);
           size += g.size;
         }
@@ -1992,25 +2023,43 @@ in ${x.cwd}`)}">
     return { paths, size };
   }
 
+  /** Remove only files the backend actually recycled, before asking for the refreshed report. */
+  function filesRecycled(done) {
+    const gone = new Set(done.recycled || []);
+    const report = state.files && state.files.report;
+    if (!report || !gone.size) return;
+    const groups = report.groups
+      .map((g) => ({ ...g, files: g.files.filter((f) => !gone.has(f.path)) }))
+      .filter((g) => g.files.length > 1);
+    applyFiles({
+      ...state.files,
+      report: { ...report, groups, big: report.big.filter((b) => !gone.has(b.path)), wasted: groups.reduce((n, g) => n + extrasOf(g).length * g.size, 0) },
+    });
+    for (const path of gone) {
+      state.filesTicked.delete(path);
+      state.bigTicked.delete(path);
+    }
+  }
+
   function copiesList(r) {
     const now = Date.now() / 1000;
-    const groups = state.showAllCopies ? r.groups : r.groups.slice(0, 20);
+    const groups = visibleCopyGroups(r);
     const html = groups
       .map((g) => {
         const keep = keptPath(g);
         const rows = g.files
           .map((f) => {
             const isKeep = f.path === keep || !!f.kept;
-            const on = !isKeep && !state.filesUntick.has(f.path);
+            const on = !isKeep && copyIsTicked(g, f);
             const sub = `${f.folder} · ${parentOf(f.path)} · changed ${ageLong(Math.max(0, now - f.modified))} ago`;
             const box = isKeep
-              ? `<span class="led green" title="${f.kept ? "You said to keep this (Settings, Always kept)" : "This copy stays"}"></span>`
-              : `<input type="checkbox" data-act="files-pick" data-path="${esc(f.path)}" ${on ? "checked" : ""} aria-label="Recycle this copy">`;
+              ? `<span class="led green" title="${f.kept ? "You said to keep this (Settings, Always kept)" : "Keeper for this group; review its name and location"}"></span>`
+              : `<input type="checkbox" data-act="files-pick" data-path="${esc(f.path)}" ${on ? "checked" : ""} ${filesLocked() ? "disabled" : ""} aria-label="Recycle this copy">`;
             const swap = f.kept
               ? `<span class="keep-tag" title="You said to keep this. Settings, Always kept, lets it go again.">Always kept</span>`
               : isKeep
-                ? `<span class="keep-tag">Stays</span>`
-                : `<button class="mini-btn wide" data-act="files-keep" data-hash="${esc(g.hash)}" data-path="${esc(f.path)}">Keep this</button>`;
+                ? `<span class="keep-tag">${state.filesKeep[g.hash] === f.path ? "You kept this" : "Suggested keeper"}</span>`
+                : `<button class="mini-btn wide" data-act="files-keep" data-hash="${esc(g.hash)}" data-path="${esc(f.path)}" ${filesLocked() ? "disabled" : ""}>Keep this</button>`;
             return `<label class="item copy${isKeep ? " keep" : ""}" id="cp-${hash(f.path)}">${box}
               <span class="item-main"><span class="item-name" title="${esc(f.path)}">${esc(baseName(f.path))}</span><span class="item-sub" title="${esc(sub)}">${esc(sub)}</span></span>
               ${swap}<button class="mini-btn" data-act="reveal-path" data-path="${esc(f.path)}" title="Show in File Explorer">${ICON.folder}</button></label>`;
@@ -2022,7 +2071,7 @@ in ${x.cwd}`)}">
             <div class="items">${rows}</div></div>`;
       })
       .join("");
-    const more = r.groups.length > 20 ? `<button class="quiet-toggle" data-act="toggle-copies">${state.showAllCopies ? "Show fewer" : `Show all ${r.groups.length}`}</button>` : "";
+    const more = r.groups.length > 20 ? `<button class="quiet-toggle" data-act="toggle-copies" ${filesLocked() ? "disabled" : ""}>${state.showAllCopies ? "Show fewer" : `Show all ${r.groups.length}`}</button>` : "";
     return html + more;
   }
 
@@ -2030,12 +2079,14 @@ in ${x.cwd}`)}">
     const now = Date.now() / 1000;
     return `<div class="items">${r.big
       .map((b) => {
-        const when = r.accessTimes ? `opened ${ageLong(Math.max(0, now - b.accessed))} ago` : `changed ${ageLong(Math.max(0, now - b.modified))} ago`;
+        const observed = r.accessTimes ? b.accessed : b.modified;
+        const last = Number.isFinite(b.recency) && b.recency > 0 && Number.isFinite(observed) && observed > 0 ? Math.max(b.recency, observed) : null;
+        const when = last && last <= now ? `file activity recorded ${ageLong(now - last)} ago` : "file activity date unknown";
         const sub = `${b.folder} · ${parentOf(b.path)} · ${when}`;
         const ticked = !b.kept && state.bigTicked.has(b.path);
         const box = b.kept
           ? `<span class="led green" title="You said to keep this (Settings, Always kept)"></span>`
-          : `<input type="checkbox" data-act="big-pick" data-path="${esc(b.path)}" ${ticked ? "checked" : ""}>`;
+          : `<input type="checkbox" data-act="big-pick" data-path="${esc(b.path)}" ${ticked ? "checked" : ""} ${filesLocked() ? "disabled" : ""}>`;
         return `<label class="item${ticked ? " added" : " stays"}" id="bf-${hash(b.path)}">
           ${box}
           <span class="item-main"><span class="item-name" title="${esc(b.path)}">${esc(baseName(b.path))}</span><span class="item-sub" title="${esc(sub)}">${esc(sub)}</span></span>
@@ -2053,7 +2104,7 @@ in ${x.cwd}`)}">
     const now = Date.now() / 1000;
     let said;
     if (f.busy) said = prog ? `${prog.stage === "comparing" ? "Comparing" : "Looking through"} ${plural(prog.files, "file")} (${bytes(prog.bytes)})…` : "Looking…";
-    else if (!r) said = "Copies of the same file, and big files nobody opens.";
+    else if (!r) said = "Copies of the same file, and big files with old activity records.";
     else said = r.groups.length ? "in extra copies of the same files." : "No copies of the same file.";
     const small = f.busy
       ? ""
@@ -2061,16 +2112,20 @@ in ${x.cwd}`)}">
         ? "Mom looks through the places below. She only reads; nothing moves until you say."
         : `Looked through ${plural(r.scannedFiles, "file")} ${ageLong(Math.max(0, now - r.measuredAt))} ago${r.complete ? "" : ", but was stopped early"}.`;
     let html = `<div class="lead"><div class="lead-text">${r && r.groups.length && !f.busy ? `<div class="big">${sizeDots(r.wasted)}</div>` : ""}<p>${esc(said)}${small ? `<small>${esc(small)}</small>` : ""}</p></div>
-      ${f.busy ? `<button class="secondary" data-act="files-stop">${ICON.stop}Stop</button>` : `<button class="secondary" data-act="files-scan">${r ? "Look again" : "Look"}</button>`}</div>`;
+      ${f.busy ? `<button class="secondary" data-act="files-stop">${ICON.stop}Stop</button>` : `<button class="secondary" data-act="files-scan" ${state.filesWorking ? "disabled" : ""}>${r ? "Look again" : "Look"}</button>`}</div>`;
     if (f.busy && prog) html += `<div class="progress solo"><div class="progress-bar unknown"><span></span></div></div>`;
     html += placesBox();
     if (!r || f.busy) return html;
-    const note = `<p class="group-note">A copy is only ever another file with exactly the same contents: the same size, the same fingerprint (BLAKE3) and, right before anything goes, the same bytes as the copy that stays. Ticked ones go to the Recycle Bin, and mom never sends the last copy of anything.</p>`;
-    const extras = r.groups.flatMap((g) => extrasOf(g).map((f) => f.path));
-    const allExtras = extras.every((x) => !state.filesUntick.has(x));
+    const note = `<p class="group-note">Only files with identical contents are grouped. A higher number in a name does not prove a newer version. Matching contents do not show whether an app or project still needs a particular name or location. Nothing starts ticked. Review the keeper and tick only copies you can remove. Before recycling, mom checks for another matching file that is staying.</p>`;
+    const shownGroups = visibleCopyGroups(r);
+    const extras = shownGroups.flatMap((g) => extrasOf(g).map((f) => ({ g, f })));
+    const allExtras = extras.length > 0 && extras.every(({ g, f }) => copyIsTicked(g, f));
+    const copiesAll = `<button class="link-btn" data-act="files-pick-all" title="Only changes extra copies in the ${shownGroups.length} groups shown" ${filesLocked() || !extras.length ? "disabled" : ""}>${allExtras ? "Untick all shown" : "Tick all shown"}</button>`;
+    const hiddenSelected = r.groups.slice(shownGroups.length).reduce((n, g) => n + extrasOf(g).filter((f) => copyIsTicked(g, f)).length, 0);
+    const hiddenNote = hiddenSelected ? `<p class="group-note">${plural(hiddenSelected, "previously selected copy", "previously selected copies")} in hidden groups ${hiddenSelected === 1 ? "is" : "are"} still ticked. Show all to review them.</p>` : "";
     const allBig = r.big.every((b) => b.kept || state.bigTicked.has(b.path));
-    if (r.groups.length) html += section("copies", "Copies of the same file", tickAllButton("files-pick-all", allExtras), copiesList(r) + note);
-    if (r.big.length) html += section("big", r.accessTimes ? "Big files nobody has opened in a year" : "Big files nobody has changed in a year", tickAllButton("big-pick-all", allBig), bigList(r));
+    if (r.groups.length) html += section("copies", "Copies of the same file", copiesAll, copiesList(r) + hiddenNote + note);
+    if (r.big.length) html += section("big", "Big files with old activity records", tickAllButton("big-pick-all", allBig, "", filesLocked()), bigList(r) + `<p class="group-note">Dates use the latest creation or modification time${r.accessTimes ? ", or recorded file access" : ""}. They do not establish when you last used a file.</p>`);
     if (r.groups.length || r.big.length) {
       const c = filesChosen(r);
       const label = state.filesWorking ? "Moving…" : !c.paths.length ? "Nothing ticked" : state.filesConfirm ? `Sure? Press again to move ${plural(c.paths.length, "file")}` : `Move ${plural(c.paths.length, "file")} (${bytes(c.size)}) to the Recycle Bin`;
@@ -2083,7 +2138,7 @@ in ${x.cwd}`)}">
   function placesBox() {
     const pl = state.filesPlaces;
     if (!pl) return "";
-    const busy = state.files && state.files.busy;
+    const busy = filesLocked();
     const chip = (x) => {
       const sub = x.kind === "drive" ? `${bytes(x.free)} free of ${bytes(x.total)}` : x.kind === "added" ? "added by you" : "";
       return `<button class="place${x.on ? " on" : ""}" data-act="files-place" data-path="${esc(x.path)}" aria-pressed="${x.on}" title="${esc(x.path)}" ${busy ? "disabled" : ""}>
@@ -2115,7 +2170,11 @@ in ${x.cwd}`)}">
   // Clean-ups that delete your own files can send them to the Recycle Bin instead. Docker's things
   // aren't files, and admin clean-ups run as another user, whose bin you wouldn't see.
   const canRecycle = (s) => s.action === "delete" && !s.admin && s.id !== "docker";
-  const recycling = (s) => canRecycle(s) && state.recycle;
+  const discarding = (s) => s.id === "forgotten-apps" && state.forgottenMode !== "move";
+  const recycling = (s) => s.id === "forgotten-apps" ? state.forgottenMode === "recycle" : canRecycle(s) && state.recycle;
+  const spotNow = (s) => s && discarding(s) ? { ...s, action: "delete" } : s;
+  const exactChoices = (s, p) => (s.items || []).filter((i) => tickable(i) && !i.kept && isTicked(p.pk, i)).map((i) => i.path).sort();
+  const cleanSelection = (s, p) => discarding(s) ? JSON.stringify([state.forgottenMode, exactChoices(s, p)]) : null;
 
   const ACTION_WORD = {
     delete: "Deleted for good",
@@ -2174,8 +2233,10 @@ in ${x.cwd}`)}">
       const on = list.filter((i) => isTicked(pk, i));
       return base ? [Math.max(0, n - off.length), Math.max(0, b - sum(off))] : [on.length, sum(on)];
     };
-    const [goN, goB] = share(goes, pk.goes, s.reclaimableItems || goes.length, s.reclaimableBytes || 0);
-    const [newN, newB] = share(fresh, pk.new, s.newItems || fresh.length, s.newBytes || 0);
+    // Direct disposal of app data is limited to the displayed folders the user can review.
+    const exact = discarding(s);
+    const [goN, goB] = share(goes, pk.goes, exact ? goes.length : s.reclaimableItems || goes.length, exact ? sum(goes) : s.reclaimableBytes || 0);
+    const [newN, newB] = share(fresh, pk.new, exact ? fresh.length : s.newItems || fresh.length, exact ? sum(fresh) : s.newBytes || 0);
     return {
       pk,
       goes,
@@ -2193,13 +2254,22 @@ in ${x.cwd}`)}">
 
   /** The spot's own explanation, adjusted for what the user ticked and unticked. */
   function effectNow(s, p) {
+    if (discarding(s)) {
+      if (!p.count) return "Nothing is ticked, so the button does nothing.";
+      const what = itemsSize(p.count, p.bytesChosen);
+      return recycling(s)
+        ? `Moves the ${what} you ticked to the Recycle Bin, including their saved settings and history. You can restore them from there. Folders too big for the bin stay put.`
+        : `Permanently deletes the ${what} you ticked, including their saved settings and history. No archive copy is made. This cannot be undone.`;
+    }
     if (!p.partial) return s.effect;
     if (p.count === 0) return "Nothing is ticked, so the button does nothing.";
     const what = itemsSize(p.count, p.bytesChosen);
     if (p.goN === 0) {
       // Only things from Stays: the spot's own text doesn't cover them, so say it plainly.
       const one = p.count === 1;
-      return s.action === "recycle"
+      return s.action === "move"
+        ? `Moves the ${what} you ticked to your archive drive and leaves links behind. You can bring them back.`
+        : s.action === "recycle"
         ? `Moves the ${what} you ticked to the Recycle Bin. Changed your mind? Restore ${one ? "it" : "them"} from there.`
         : `Deletes the ${what} you ticked, permanently (${one ? "it doesn't" : "they don't"} go to the Recycle Bin).`;
     }
@@ -2240,13 +2310,16 @@ in ${x.cwd}`)}">
 
   function itemRow(s, i, picking, label) {
     // One that stays says why first: that's the question, and the end of a long line is cut off.
-    const why = i.reason || (i.ageSecs ? `changed ${ageLong(i.ageSecs)} ago` : "");
+    const age = itemAge(i);
+    const why = i.reason || (age === null ? "Age unknown" : `changed ${ageLong(age)} ago`);
     const sub = (i.goes ? [i.sub, why] : [why, i.sub]).filter(Boolean).join(" · ");
     const id = `it-${hash(i.path || i.name)}`;
     const shown = label || i.name;
     const main = `<span class="item-main"><span class="item-name"${shown !== i.name ? ` title="${esc(i.name)}"` : ""}>${esc(shown)}</span>${sub ? `<span class="item-sub" title="${esc(sub)}">${esc(sub)}</span>` : ""}</span>`;
     // Docker's things aren't files: no folder button for them.
-    const reveal = i.path && s.action !== "tool" && !i.path.startsWith("docker:") ? `<button class="mini-btn" data-act="reveal-path" data-path="${esc(i.path)}" title="Show in File Explorer" aria-label="Show ${esc(i.name)} in File Explorer">${ICON.folder}</button>` : "";
+    const reveal = s.action === "empty-bin"
+      ? `<button class="mini-btn" data-act="open-recycle-bin" title="Open Recycle Bin" aria-label="Open Recycle Bin to find ${esc(i.name)}">${ICON.folder}</button>`
+      : i.path && s.action !== "tool" && !i.path.startsWith("docker:") ? `<button class="mini-btn" data-act="reveal-path" data-path="${esc(i.path)}" title="Show in File Explorer" aria-label="Show ${esc(i.name)} in File Explorer">${ICON.folder}</button>` : "";
     const size = `<span class="item-size num">${bytes(i.bytes)}</span>`;
     const gone = state.gone.has(i.path) ? " gone" : "";
     const keep = canKeep(s, i)
@@ -2302,14 +2375,15 @@ in ${x.cwd}`)}">
   }
   const ORDER = {
     size: (a, b) => b.bytes - a.bytes,
-    age: (a, b) => (b.age || 0) - (a.age || 0),
+    age: (a, b) => (b.age ?? -1) - (a.age ?? -1),
     name: (a, b) => a.name.localeCompare(b.name),
   };
   const matches = (i, q) => !q || `${i.name} ${i.sub || ""} ${i.reason || ""}`.toLowerCase().includes(q);
   const listQuery = () => state.listView.q.trim().toLowerCase();
 
-  /** A group's (or an item's) place in the list: its size, oldest age and name. */
-  const weigh = (name, items) => ({ name, bytes: items.reduce((a, i) => a + i.bytes, 0), age: Math.max(0, ...items.map((i) => i.ageSecs || 0)) });
+  const itemAge = (i) => i.ageKnown === true && Number.isFinite(i.ageSecs) && i.ageSecs >= 0 ? i.ageSecs : null;
+  /** Unknown ages never make an item or group look old; they sort after known ages. */
+  const weigh = (name, items) => ({ name, bytes: items.reduce((a, i) => a + i.bytes, 0), age: Math.max(-1, ...items.map(itemAge).filter((age) => age !== null)) });
 
   function listTools() {
     const v = state.listView;
@@ -2406,7 +2480,10 @@ in ${x.cwd}`)}">
     else if (recycling(s)) card(ICON.shield, "Safe", "anything too big for the Recycle Bin stays put");
     else card(ICON.shield, "Safe", s.action === "move" ? "nothing is deleted" : s.action === "recycle" ? "it all waits in the Recycle Bin" : "nothing you'd miss, or it comes back");
     if (s.admin) card(ICON.key, "Windows asks first", "only an administrator can");
-    const choice = canRecycle(s)
+    const choice = s.id === "forgotten-apps"
+      ? `<div class="seg does-choice" role="group" aria-label="What to do with app data">${[["move", "Archive"], ["recycle", "Recycle Bin"], ["delete", "Delete for good"]].map(([mode, label]) =>
+          `<button class="seg-btn" data-act="forgotten-mode" data-mode="${mode}" aria-pressed="${state.forgottenMode === mode}" ${state.cleaning ? "disabled" : ""}>${label}</button>`).join("")}</div>`
+      : canRecycle(s)
       ? `<div class="seg does-choice" role="group" aria-label="Where it goes">
           <button class="seg-btn" data-act="bin-mode" data-recycle="0" aria-pressed="${!state.recycle}" ${state.cleaning ? "disabled" : ""}>Delete for good</button>
           <button class="seg-btn" data-act="bin-mode" data-recycle="1" aria-pressed="${state.recycle}" ${state.cleaning ? "disabled" : ""}>Recycle Bin</button></div>`
@@ -2466,7 +2543,7 @@ in ${x.cwd}`)}">
   }
 
   function renderSpot(id) {
-    const s = state.trash.spots.find((x) => x.id === id);
+    const s = spotNow(state.trash.spots.find((x) => x.id === id));
     if (!s) return `<div class="sheet-head"><h2 id="sheet-title">Gone</h2><button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button></div><p class="empty">That one isn't there any more.</p>`;
     const p = picked(s);
     const pk = p.pk;
@@ -2484,7 +2561,7 @@ in ${x.cwd}`)}">
     const go = s.reclaimableBytes || 0;
     const kept = s.keptBytes ?? Math.max(0, s.totalBytes - go);
     const cleaning = state.cleaning === s.id;
-    const confirming = !cleaning && state.cleanConfirm === s.id;
+    const confirming = !cleaning && state.cleanConfirm === s.id && (!discarding(s) || state.cleanConfirmSelection === cleanSelection(s, p));
     // Empty folders are 0 bytes but still worth clearing, so this goes by count, not size.
     const disabled = cleaning || (s.action !== "tool" && p.count === 0);
     const danger = (s.action === "delete" && !recycling(s)) || s.action === "empty-bin";
@@ -2520,7 +2597,7 @@ in ${x.cwd}`)}">
         <div class="items">${listBody(s, p.goes, picking, "goes")}${
           unlisted
             ? `<p class="more"><span>…and ${plural(unlisted, lastGoes.bytes ? "smaller item" : "more", lastGoes.bytes ? "smaller items" : "more")}${
-                picking ? (pk.goes ? ", ticked too" : ", not ticked") : ""
+                discarding(s) ? ", not included; show them to select them" : picking ? (pk.goes ? ", ticked too" : ", not ticked") : ""
               }.</span>${moreButton(s, unlisted, p.goes.length)}</p>`
             : ""
         }</div>`
@@ -2533,7 +2610,7 @@ in ${x.cwd}`)}">
         <div class="items">${listBody(s, stays, picking, "stays")}${
           keptUnlisted
             ? `<p class="more"><span>…and ${plural(keptUnlisted, "more", "more")}${
-                picking && newUnlisted
+                discarding(s) && newUnlisted ? ", not included; show them to select them" : picking && newUnlisted
                   ? `, ${newUnlisted === keptUnlisted ? "all" : `${newUnlisted.toLocaleString("en-US")} of them`} new (${pk.new ? "ticked too" : "Tick all takes them too"})`
                   : ""
               }.</span>${moreButton(s, keptUnlisted, stays.length)}</p>`
@@ -2548,7 +2625,9 @@ in ${x.cwd}`)}">
             : `${
                 confirming
                   ? `<button class="link-btn" data-act="cancel-clean">Cancel</button>`
-                  : s.path
+                  : s.action === "empty-bin"
+                    ? `<button class="link-btn" data-act="open-recycle-bin" title="Open Recycle Bin">${ICON.folder}Open Recycle Bin</button>`
+                  : s.path && !discarding(s)
                     ? `<button class="link-btn" data-act="reveal-path" data-path="${esc(s.path)}" title="Show in File Explorer">${ICON.folder}Show folder</button>`
                     : "<span></span>"
               }
@@ -3235,7 +3314,7 @@ in ${x.cwd}`)}">
           row(
             "keep",
             "How long things stay",
-            `What agents leave behind (scratch, logs, snapshots, worktrees) stays ${num("agentScratchDays", c.trash.agentScratchDays, 1, 365)} days before mom suggests clearing it, other temp files ${num("tempMinAgeDays", c.trash.tempMinAgeDays, 1, 90)} days. Conversations nobody has opened in ${num("conversationsAfterDays", c.trash.conversationsAfterDays, 1, 3650)} days can move to another drive.`
+            `What agents leave behind (scratch, logs, snapshots, worktrees) stays ${num("agentScratchDays", c.trash.agentScratchDays, 1, 365)} days before mom suggests clearing it, other temp files ${num("tempMinAgeDays", c.trash.tempMinAgeDays, 1, 90)} days. Conversations with no recorded changes in ${num("conversationsAfterDays", c.trash.conversationsAfterDays, 1, 3650)} days can move to another drive.`
           ) +
           (kept.length ? "" : row("kept", "Always kept", "Nothing yet. The lock on any row in a clean-up keeps it out of every clean-up."))
       )}
@@ -3495,13 +3574,18 @@ in ${x.cwd}`)}">
   let filesTimer = null;
 
   async function cleanSpot(id) {
-    const s = state.trash.spots.find((x) => x.id === id);
+    const s = spotNow(state.trash.spots.find((x) => x.id === id));
     if (!s) return;
     if (state.cleaning) return;
+    const p = picked(s);
+    if (s.action !== "tool" && p.count === 0) return;
+    const discard = discarding(s);
+    const selection = cleanSelection(s, p);
     clearTimeout(cleanTimer);
-    if (state.cleanConfirm !== id) {
+    if (state.cleanConfirm !== id || (discard && state.cleanConfirmSelection !== selection)) {
       // First press: the button asks "Sure?" for a few seconds; a second press does it.
       state.cleanConfirm = id;
+      state.cleanConfirmSelection = selection;
       renderSheet();
       if (moving()) G.fromTo("#clean-btn", { scale: 0.94 }, { scale: 1, duration: 0.5, ease: "back.out(3)", clearProps: "transform" });
       cleanTimer = setTimeout(() => {
@@ -3510,8 +3594,8 @@ in ${x.cwd}`)}">
       }, 6000);
       return;
     }
-    const p = picked(s);
     state.cleanConfirm = null;
+    state.cleanConfirmSelection = null;
     state.cleaning = id;
     state.live = null;
     state.gone = new Set();
@@ -3522,11 +3606,21 @@ in ${x.cwd}`)}">
     // What this list shows as kept is named too: what you see staying stays, even if mom's own
     // note of it and this list have drifted apart.
     const keep = (s.items || []).filter((i) => i.kept).map((i) => i.path);
-    const pick = p.partial || toBin || keep.length ? { goes: pk.goes, new: pk.new, ticked: [...pk.ticked], unticked: [...pk.unticked], recycle: toBin, keep } : null;
+    const pick = discard
+      ? { goes: false, new: false, ticked: exactChoices(s, p), unticked: [], discard: true, recycle: toBin, keep }
+      : p.partial || toBin || keep.length ? { goes: pk.goes, new: pk.new, ticked: [...pk.ticked], unticked: [...pk.unticked], recycle: toBin, keep } : null;
     const r = await act(invoke("clean_trash", { id, pick }));
+    // A finished, failed or stopped cleanup consumes its selection. Survivors and anything
+    // newly discovered must need a fresh tick, even before the background scan catches up.
+    state.picks[id] = { goes: false, new: false, ticked: new Set(), unticked: new Set() };
+    if (discard) {
+      // Keep controls locked through this read; a failed refresh stays unticked too.
+      try {
+        state.trash = await invoke("get_trash");
+      } catch {}
+    }
     state.cleaning = null;
     state.live = null;
-    delete state.picks[id];
     if (s.action === "move") loadArchive();
     if (r && r.deleted > 0) {
       react("cool");
@@ -3573,6 +3667,13 @@ in ${x.cwd}`)}">
         saveRecycle();
         renderSheet();
         break;
+      case "forgotten-mode":
+        if (state.cleaning || state.sheet?.id !== "forgotten-apps" || !["move", "recycle", "delete"].includes(el.dataset.mode)) break;
+        state.forgottenMode = el.dataset.mode;
+        state.cleanConfirm = null;
+        state.cleanConfirmSelection = null;
+        renderSheet();
+        break;
       case "tip-coin":
         state.tipCoin = el.dataset.coin;
         renderSheet();
@@ -3609,6 +3710,10 @@ in ${x.cwd}`)}">
       case "reveal-path":
         e.preventDefault();
         act(invoke("reveal", { path: el.dataset.path }), () => null);
+        break;
+      case "open-recycle-bin":
+        e.preventDefault();
+        act(invoke("open_recycle_bin"), () => null);
         break;
       case "keep":
         if (!g) return;
@@ -3768,6 +3873,7 @@ in ${x.cwd}`)}">
         break;
       }
       case "files-place": {
+        if (filesLocked()) break;
         const x = state.filesPlaces && state.filesPlaces.find((y) => y.path === el.dataset.path);
         if (!x) break;
         try {
@@ -3779,6 +3885,7 @@ in ${x.cwd}`)}">
         break;
       }
       case "files-add-place":
+        if (filesLocked()) break;
         try {
           const pl = await invoke("add_files_place");
           if (pl) state.filesPlaces = pl;
@@ -3936,6 +4043,7 @@ in ${x.cwd}`)}">
       }
       case "pick-group": {
         e.preventDefault();
+        if (state.cleaning) break;
         const id = state.sheet && state.sheet.id;
         const s = state.trash.spots.find((x) => x.id === id);
         if (!s) return;
@@ -4022,68 +4130,96 @@ in ${x.cwd}`)}">
         await loadWinsettings(true);
         break;
       }
-      case "files-scan":
+      case "files-scan": {
+        if (filesLocked()) break;
+        ++state.filesVersion;
+        cancelFilesConfirm();
         state.files = { ...(state.files || {}), busy: true };
         state.filesProgress = null;
-        state.filesConfirm = false;
-        invoke("scan_files");
         render();
+        if ((await act(invoke("scan_files"), () => null)) === null) {
+          state.files.busy = false;
+          render();
+        }
         break;
+      }
       case "files-stop":
         invoke("stop_files_scan");
         break;
-      case "files-keep":
+      case "files-keep": {
         e.preventDefault();
+        if (filesLocked()) break;
+        const group = state.files?.report?.groups.find((g) => g.hash === el.dataset.hash);
+        if (!group || !group.files.some((f) => f.path === el.dataset.path)) break;
         state.filesKeep[el.dataset.hash] = el.dataset.path;
-        state.filesUntick.delete(el.dataset.path);
-        state.filesConfirm = false;
+        state.filesTicked.delete(el.dataset.path);
+        cancelFilesConfirm();
         render();
         break;
-      case "files-pick":
-        el.checked ? state.filesUntick.delete(el.dataset.path) : state.filesUntick.add(el.dataset.path);
-        state.filesConfirm = false;
+      }
+      case "files-pick": {
+        if (filesLocked()) break;
+        const report = state.files?.report;
+        const group = report && visibleCopyGroups(report).find((g) => extrasOf(g).some((f) => f.path === el.dataset.path));
+        if (!group) break;
+        el.checked ? state.filesTicked.set(el.dataset.path, group.hash) : state.filesTicked.delete(el.dataset.path);
+        cancelFilesConfirm();
         render();
         break;
+      }
       case "big-pick":
+        if (filesLocked()) break;
         el.checked ? state.bigTicked.add(el.dataset.path) : state.bigTicked.delete(el.dataset.path);
-        state.filesConfirm = false;
+        cancelFilesConfirm();
         render();
         break;
       case "toggle-copies":
+        if (filesLocked()) break;
         state.showAllCopies = !state.showAllCopies;
+        cancelFilesConfirm();
         render();
         break;
       case "files-recycle": {
         const r = state.files && state.files.report;
-        if (!r || state.filesWorking) return;
+        if (!r || filesLocked()) return;
         const c = filesChosen(r);
         if (!c.paths.length) return;
+        const selection = JSON.stringify([...c.paths].sort());
         clearTimeout(filesTimer);
-        if (!state.filesConfirm) {
-          state.filesConfirm = true;
+        if (state.filesConfirm !== selection) {
+          state.filesConfirm = selection;
           render();
           filesTimer = setTimeout(() => {
-            state.filesConfirm = false;
+            state.filesConfirm = null;
             render();
           }, 6000);
           return;
         }
-        state.filesConfirm = false;
+        cancelFilesConfirm();
+        ++state.filesVersion;
         state.filesWorking = true;
         render();
-        const done = await act(invoke("recycle_files", { paths: c.paths }));
-        state.filesWorking = false;
-        if (done && done.freed > 0) react("cool");
-        state.filesUntick = new Set();
-        state.bigTicked = new Set();
-        state.filesKeep = {};
-        await loadFiles();
+        try {
+          const done = await act(invoke("recycle_files", { paths: c.paths }));
+          if (done) {
+            filesRecycled(done);
+            if (done.freed > 0) react("cool");
+          }
+          render();
+          await loadFiles();
+        } finally {
+          // The old list must never accept another submission while its refresh is pending.
+          cancelFilesConfirm();
+          state.filesWorking = false;
+          render();
+        }
         break;
       }
       case "close-sheet":
         closeSheet();
         break;
       case "pick": {
+        if (state.cleaning) break;
         const id = state.sheet && state.sheet.id;
         const s = state.trash.spots.find((x) => x.id === id);
         const i = s && s.items.find((x) => x.path === el.dataset.path);
@@ -4097,6 +4233,7 @@ in ${x.cwd}`)}">
         break;
       }
       case "pick-all": {
+        if (state.cleaning) break;
         const id = state.sheet && state.sheet.id;
         const s = state.trash.spots.find((x) => x.id === id);
         if (!s) return;
@@ -4115,7 +4252,7 @@ in ${x.cwd}`)}">
         break;
       }
       case "clean-spot":
-        cleanSpot(el.dataset.spot);
+        await cleanSpot(el.dataset.spot);
         break;
       case "choose-archive": {
         const info = await act(invoke("choose_archive_dir"), () => null);
@@ -4213,19 +4350,21 @@ in ${x.cwd}`)}">
       }
       case "files-pick-all": {
         const r = state.files && state.files.report;
-        if (!r) return;
-        const extras = r.groups.flatMap((g) => extrasOf(g).map((f) => f.path));
-        state.filesUntick = extras.every((x) => !state.filesUntick.has(x)) ? new Set(extras) : new Set();
-        state.filesConfirm = false;
+        if (!r || filesLocked()) return;
+        const extras = visibleCopyGroups(r).flatMap((g) => extrasOf(g).map((f) => ({ g, f })));
+        const untick = extras.every(({ g, f }) => copyIsTicked(g, f));
+        for (const { g, f } of extras) untick ? state.filesTicked.delete(f.path) : state.filesTicked.set(f.path, g.hash);
+        cancelFilesConfirm();
         render();
         break;
       }
       case "big-pick-all": {
         const r = state.files && state.files.report;
-        if (!r) return;
+        if (!r || filesLocked()) return;
         const free = r.big.filter((b) => !b.kept);
-        state.bigTicked = free.every((b) => state.bigTicked.has(b.path)) ? new Set() : new Set(free.map((b) => b.path));
-        state.filesConfirm = false;
+        const untick = free.every((b) => state.bigTicked.has(b.path));
+        for (const b of free) untick ? state.bigTicked.delete(b.path) : state.bigTicked.add(b.path);
+        cancelFilesConfirm();
         render();
         break;
       }
@@ -4541,12 +4680,16 @@ in ${x.cwd}`)}">
       render();
     });
     bridge.listen("files-progress", (e) => {
+      if (state.filesWorking) return;
+      ++state.filesVersion;
+      cancelFilesConfirm();
+      state.files = { ...(state.files || {}), busy: true };
       state.filesProgress = e.payload;
       if (state.tab === "upkeep" && state.upkeepTab === "files") render();
     });
     bridge.listen("files", (e) => {
-      state.files = e.payload;
-      state.filesProgress = null;
+      if (state.filesWorking) return;
+      applyFiles(e.payload);
       if (state.tab === "upkeep") render();
     });
     bridge.listen("trash", (e) => {

@@ -89,13 +89,104 @@ fn scan(dirs: &[PathBuf], now: u64) -> Found {
         let name = original.file_name().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| rec.original.clone());
         let mut c = Cand::new(r_path.clone(), name, &t, now);
         c.targets = vec![r_path, i_path];
-        c.age = now.saturating_sub(rec.deleted);
+        c.age_known = rec.deleted > 0 && rec.deleted <= now;
+        c.age = if c.age_known { now - rec.deleted } else { 0 };
         let folder = original.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
         c.sub = Some(if is_dir { format!("Folder with {}, from {folder}", plural(t.files, "file")) } else { format!("From {folder}") });
-        let r = format!("Deleted {} ago", ago(c.age));
+        let r = if c.age_known { format!("Deleted {} ago", ago(c.age)) } else { "Deletion date unavailable".into() };
         f.cands.push(c.verdict(true, r));
     }
     f
+}
+
+/// Permanently removes one already-deleted item. Keep its Windows record until all of
+/// the payload is gone, so a failed removal does not strand an invisible Bin item.
+pub(super) fn remove_record(c: &Cand) -> bool {
+    remove_record_with(c, remove_bin_entry)
+}
+
+fn remove_record_with(c: &Cand, mut remove: impl FnMut(&Path) -> bool) -> bool {
+    let Some((data, record)) = record_pair(c) else { return false };
+    if !remove(data) || !matches!(std::fs::symlink_metadata(data), Err(e) if e.kind() == std::io::ErrorKind::NotFound) {
+        return false;
+    }
+    // Recheck the parent and record after removing the payload. This route may bypass
+    // browser-data guards only for the exact pair that Windows already put in the Bin.
+    if record_pair(c).is_none() {
+        return false;
+    }
+    remove(record)
+}
+
+fn record_pair(c: &Cand) -> Option<(&Path, &Path)> {
+    let [data, record] = c.targets.as_slice() else { return None };
+    if c.path != *data || !data.is_absolute() || !record.is_absolute() || data.parent() != record.parent() {
+        return None;
+    }
+    for path in [data, record] {
+        if path.components().any(|part| matches!(part, std::path::Component::ParentDir | std::path::Component::CurDir)) {
+            return None;
+        }
+    }
+    let id = data.file_name()?.to_str()?.strip_prefix("$R")?;
+    if id.is_empty() || record.file_name()?.to_str()?.strip_prefix("$I")? != id {
+        return None;
+    }
+    let parent = data.parent()?;
+    let sid = parent.file_name()?.to_str()?;
+    if !sid.starts_with("S-1-") || !sid[4..].split('-').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    if !parent.parent()?.file_name()?.to_str()?.eq_ignore_ascii_case("$Recycle.Bin") {
+        return None;
+    }
+    for ancestor in parent.ancestors() {
+        let meta = std::fs::symlink_metadata(ancestor).ok()?;
+        if !meta.is_dir() || is_link(&meta) {
+            return None;
+        }
+    }
+    let meta = std::fs::symlink_metadata(record).ok()?;
+    (meta.is_file() && !is_link(&meta)).then_some((data.as_path(), record.as_path()))
+}
+
+fn is_link(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        meta.file_type().is_symlink() || meta.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        meta.file_type().is_symlink()
+    }
+}
+
+/// Only used after record_pair proves this is an already-deleted Bin payload/record.
+/// Unlike ordinary cleanup, browser contents are allowed here. remove_dir_all removes
+/// links themselves without following their targets; a root directory link is unlinked.
+fn remove_bin_entry(path: &Path) -> bool {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) => return e.kind() == std::io::ErrorKind::NotFound,
+    };
+    let result = if is_link(&meta) {
+        #[cfg(windows)]
+        let directory = {
+            use std::os::windows::fs::MetadataExt;
+            meta.file_attributes() & 0x10 != 0
+        };
+        #[cfg(not(windows))]
+        let directory = false;
+        if directory { std::fs::remove_dir(path) } else { std::fs::remove_file(path) }
+    } else if meta.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else if meta.is_file() {
+        std::fs::remove_file(path)
+    } else {
+        return false;
+    };
+    result.is_ok() || result.is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// The current user's bin folder on every fixed drive that has one.
@@ -327,6 +418,92 @@ mod tests {
         assert_eq!(cat.targets, vec![dir.join("$RXYZ.png"), dir.join("$IXYZ.png")]);
         let folder = f.cands.iter().find(|c| c.name == "old-project").unwrap();
         assert_eq!(folder.sub.as_deref(), Some(r"Folder with 1 file, from C:\Work"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn invalid_bin_dates_do_not_claim_an_age() {
+        let root = fixture("bin-unknown-age");
+        let now = 1_790_086_400;
+        for (id, deleted) in [("ZERO", 0), ("FUTURE", now + 86_400)] {
+            std::fs::write(root.join(format!("$R{id}")), b"discarded").unwrap();
+            std::fs::write(root.join(format!("$I{id}")), v2(r"C:\Work\old-file", 9, deleted)).unwrap();
+        }
+        let found = scan(std::slice::from_ref(&root), now);
+        assert_eq!(found.cands.len(), 2);
+        for c in found.cands {
+            assert!(!c.age_known);
+            assert_eq!(c.age, 0);
+            assert_eq!(c.reason, "Deletion date unavailable");
+            assert!(c.goes, "emptying already discarded data does not depend on age");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn deletion_fixture(name: &str) -> (PathBuf, Cand) {
+        let root = fixture(name);
+        let dir = root.join("$Recycle.Bin").join("S-1-5-21-1-2-3-1001");
+        let data = dir.join("$RABC123");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("a.txt"), b"hello").unwrap();
+        std::fs::write(dir.join("$IABC123"), v2(r"C:\Work\old-project", 5, 1_790_000_000)).unwrap();
+        let c = scan(&[dir], 1_790_086_400).cands.pop().unwrap();
+        (root, c)
+    }
+
+    #[test]
+    fn failed_payload_removal_preserves_its_bin_record() {
+        let (root, c) = deletion_fixture("bin-failed-removal");
+        let mut attempted = Vec::new();
+        assert!(!remove_record_with(&c, |path| {
+            attempted.push(path.to_path_buf());
+            false
+        }));
+        assert_eq!(attempted, vec![c.targets[0].clone()]);
+        assert!(c.targets[0].join("a.txt").is_file());
+        assert!(c.targets[1].is_file(), "Windows must still be able to list and restore the item");
+        // A deletion reporting success without removing the payload must also retain $I.
+        assert!(!remove_record_with(&c, |_| true));
+        assert!(c.targets[1].is_file());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn browser_data_already_in_the_bin_can_be_removed() {
+        let (root, c) = deletion_fixture("bin-browser-data");
+        std::fs::write(c.path.join("Cookies"), b"already deleted cookies").unwrap();
+        std::fs::create_dir_all(c.path.join("Local Storage")).unwrap();
+        std::fs::write(c.path.join("Local Storage").join("data"), b"already deleted storage").unwrap();
+        assert!(!crate::browser_data::tree_is_safe(&c.path), "ordinary cleanup protects this content");
+        assert!(remove_record(&c));
+        assert!(!c.targets[0].exists());
+        assert!(!c.targets[1].exists());
+        assert!(c.path.parent().unwrap().is_dir(), "remove only the selected pair");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn bin_removal_rejects_mismatched_and_foreign_targets() {
+        let (root, mut c) = deletion_fixture("bin-invalid-pair");
+        let record = c.targets[1].clone();
+        let reject = |c: &Cand| assert!(!remove_record_with(c, |_| panic!("invalid pair must never reach deletion")));
+        c.targets[1] = record.with_file_name("$IOTHER");
+        reject(&c);
+        c.targets[1] = root.join("$IABC123");
+        reject(&c);
+        c.targets[1] = record.clone();
+        c.targets.push(root.join("foreign.txt"));
+        reject(&c);
+        c.targets.pop();
+        c.path = root.join("other");
+        reject(&c);
+        let foreign = root.join("ordinary-folder");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("$IABC123"), b"not a Bin item").unwrap();
+        c.path = foreign.join("$RABC123");
+        c.targets = vec![c.path.clone(), foreign.join("$IABC123")];
+        reject(&c);
+        assert!(record.is_file());
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -531,6 +531,14 @@ pub fn running_now() -> Option<HashSet<(u32, u64)>> {
     }
 }
 
+/// A fresh process-name snapshot for cleanup guards. Failure means unknown, never "closed".
+pub(crate) fn running_names_now() -> Option<HashSet<String>> {
+    #[cfg(windows)]
+    { nt::processes().map(|list| list.into_iter().map(|r| r.name.to_ascii_lowercase()).collect()) }
+    #[cfg(not(windows))]
+    { None }
+}
+
 /// The command lines of a few processes, read now. The table only reads them for processes
 /// worth a look (opening every process is slow with some antivirus), so this is for the odd
 /// one more: a browser's newest tabs, say. A PID now running something else is left out.

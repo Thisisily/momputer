@@ -221,6 +221,14 @@ pub(crate) trait Machine {
     fn size(&self, _path: &Path) -> Option<u64> {
         None
     }
+    /// A readable executable's major file version; a bare file or inert app alias has none.
+    fn executable_major(&self, _path: &Path) -> Option<u32> {
+        None
+    }
+    /// PowerShell MSIX folders registered for this user, without launching a shell.
+    fn powershell_packages(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }
 
 /// Changing values, for fixes. Separate from reading so checks can never write.
@@ -397,7 +405,7 @@ fn terminal(m: &dyn Machine, out: &mut Vec<Finding>) {
     }
 
     let program_files = m.env("ProgramFiles").unwrap_or_else(|| r"C:\Program Files".into());
-    let pwsh = m.exists(&Path::new(&program_files).join(r"PowerShell\7\pwsh.exe"));
+    let pwsh = powershell_7(m, &program_files, &local);
     let profile = m.env("USERPROFILE").unwrap_or_default();
     let readline = [Path::new(&program_files).join(r"WindowsPowerShell\Modules\PSReadLine"), Path::new(&profile).join(r"Documents\WindowsPowerShell\Modules\PSReadLine")]
         .iter()
@@ -412,13 +420,13 @@ fn terminal(m: &dyn Machine, out: &mut Vec<Finding>) {
                 "powershell-7",
                 "Terminal",
                 Level::Check,
-                "PowerShell 7 isn't installed".into(),
+                "PowerShell 7 wasn't found".into(),
                 match &readline {
                     Some(v) => format!("Windows PowerShell 5.1, line editor {}", shown(v)),
                     None => "Windows PowerShell 5.1".into(),
                 },
                 "PowerShell 7 alongside it",
-                "Windows PowerShell 5.1 is from 2016, and its line editor has known bugs: lines that wrap are drawn wrong and long sessions slow down. PowerShell 7 fixes them, speaks UTF-8, and installs alongside 5.1.",
+                "PowerShell 7 includes a newer line editor and uses UTF-8 by default for text output. It installs alongside Windows PowerShell 5.1; existing windows keep using their current shell.",
             )
             .command("winget install --id Microsoft.PowerShell --exact --source winget"),
         );
@@ -497,6 +505,24 @@ fn terminal(m: &dyn Machine, out: &mut Vec<Finding>) {
             .fix("Stop running it", false, None),
         );
     }
+}
+
+/// Installed MSI/MSIX copies and accessible portable copies, without starting PowerShell.
+fn powershell_7(m: &dyn Machine, program_files: &str, local: &str) -> bool {
+    let mut candidates = vec![Path::new(program_files).join(r"PowerShell\7\pwsh.exe")];
+    if !local.is_empty() {
+        candidates.push(Path::new(local).join(r"Microsoft\WindowsApps\pwsh.exe"));
+    }
+    candidates.extend(m.powershell_packages().into_iter().map(|p| p.join("pwsh.exe")));
+    // A portable installation is usable too. Never search the working directory or a share.
+    for folder in m.env("PATH").unwrap_or_default().split(';') {
+        let folder = folder.trim().trim_matches('"');
+        let b = folder.as_bytes();
+        if b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/') && m.exists(Path::new(&format!("{}:\\", b[0] as char))) {
+            candidates.push(Path::new(folder).join("pwsh.exe"));
+        }
+    }
+    candidates.into_iter().any(|p| m.executable_major(&p).is_some_and(|major| major >= 7))
 }
 
 /// HKCU\Console and the per-program keys under it (a shortcut's own settings), not the default
@@ -1572,6 +1598,12 @@ impl Machine for Real {
     fn size(&self, path: &Path) -> Option<u64> {
         std::fs::metadata(path).ok().map(|m| m.len())
     }
+    fn executable_major(&self, path: &Path) -> Option<u32> {
+        os::executable_major(path)
+    }
+    fn powershell_packages(&self) -> Vec<PathBuf> {
+        os::powershell_packages()
+    }
 }
 
 impl Writer for Real {
@@ -1592,6 +1624,62 @@ mod os {
         RegCloseKey, RegDeleteValueW, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
         HKEY_LOCAL_MACHINE, KEY_READ, KEY_SET_VALUE, KEY_WOW64_64KEY,
     };
+
+    pub fn executable_major(path: &std::path::Path) -> Option<u32> {
+        use windows_sys::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, VS_FIXEDFILEINFO};
+        let name = wide(&path.to_string_lossy());
+        // SAFETY: Windows fills owned buffers. The returned version pointer lives in `data`;
+        // read_unaligned does not assume the byte buffer has the structure's alignment.
+        unsafe {
+            let size = GetFileVersionInfoSizeW(name.as_ptr(), std::ptr::null_mut());
+            if size == 0 || size > 1024 * 1024 {
+                return None;
+            }
+            let mut data = vec![0u8; size as usize];
+            if GetFileVersionInfoW(name.as_ptr(), 0, size, data.as_mut_ptr().cast()) == 0 {
+                return None;
+            }
+            let mut ptr = std::ptr::null_mut();
+            let mut len = 0;
+            if VerQueryValueW(data.as_ptr().cast(), wide("\\").as_ptr(), &mut ptr, &mut len) == 0 || ptr.is_null() || len < std::mem::size_of::<VS_FIXEDFILEINFO>() as u32 {
+                return None;
+            }
+            let info = std::ptr::read_unaligned(ptr.cast::<VS_FIXEDFILEINFO>());
+            (info.dwSignature == 0xfeef04bd).then_some(info.dwFileVersionMS >> 16)
+        }
+    }
+
+    pub fn powershell_packages() -> Vec<std::path::PathBuf> {
+        use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+        use windows_sys::Win32::Storage::Packaging::Appx::{GetPackagePathByFullName, GetPackagesByPackageFamily};
+        let family = wide("Microsoft.PowerShell_8wekyb3d8bbwe");
+        let mut out = Vec::new();
+        // SAFETY: the package API fills owned arrays, with all sizes expressed in UTF-16
+        // characters. Package-name pointers refer to `buffer`, which stays alive throughout.
+        unsafe {
+            let (mut count, mut len) = (0, 0);
+            if GetPackagesByPackageFamily(family.as_ptr(), &mut count, std::ptr::null_mut(), &mut len, std::ptr::null_mut()) != ERROR_INSUFFICIENT_BUFFER || count > 256 || len > 65536 {
+                return out;
+            }
+            let mut names = vec![std::ptr::null_mut(); count as usize];
+            let mut buffer = vec![0u16; len as usize];
+            if GetPackagesByPackageFamily(family.as_ptr(), &mut count, names.as_mut_ptr(), &mut len, buffer.as_mut_ptr()) != 0 {
+                return out;
+            }
+            for name in names.into_iter().take(count as usize).filter(|p| !p.is_null()) {
+                let mut len = 0;
+                if GetPackagePathByFullName(name, &mut len, std::ptr::null_mut()) != ERROR_INSUFFICIENT_BUFFER || len > 32768 {
+                    continue;
+                }
+                let mut path = vec![0u16; len as usize];
+                if GetPackagePathByFullName(name, &mut len, path.as_mut_ptr()) == 0 {
+                    let end = path.iter().position(|c| *c == 0).unwrap_or(path.len());
+                    out.push(std::path::PathBuf::from(String::from_utf16_lossy(&path[..end])));
+                }
+            }
+        }
+        out
+    }
 
     /// An open registry key, closed when dropped.
     struct Key(HKEY);
@@ -1810,6 +1898,12 @@ mod os {
 #[cfg(not(windows))]
 mod os {
     use super::{Display, Hive, Raw};
+    pub fn executable_major(_: &std::path::Path) -> Option<u32> {
+        None
+    }
+    pub fn powershell_packages() -> Vec<std::path::PathBuf> {
+        vec![]
+    }
     pub fn raw(_: Hive, _: &str, _: &str) -> Option<Raw> {
         None
     }
@@ -1901,6 +1995,8 @@ mod tests {
     struct Fake {
         reg: RefCell<Keys>,
         files: HashSet<String>,
+        executable_versions: HashMap<String, u32>,
+        powershell_packages: Vec<PathBuf>,
         env: HashMap<String, String>,
         displays: Vec<Display>,
         hosts: Option<String>,
@@ -1958,6 +2054,12 @@ mod tests {
         fn system_drive(&self) -> String {
             r"C:\".into()
         }
+        fn executable_major(&self, path: &Path) -> Option<u32> {
+            self.executable_versions.get(&path.to_string_lossy().to_ascii_lowercase()).copied()
+        }
+        fn powershell_packages(&self) -> Vec<PathBuf> {
+            self.powershell_packages.clone()
+        }
     }
 
     #[test]
@@ -2001,8 +2103,53 @@ mod tests {
         assert_eq!(terminal(&m), vec!["powershell-7".to_string()]);
         // PowerShell 7 there, Windows PowerShell's line editor old.
         m.env.insert("ProgramFiles".into(), r"C:\Program Files".into());
-        m.files.insert(r"c:\program files\powershell\7\pwsh.exe".into());
+        m.executable_versions.insert(r"c:\program files\powershell\7\pwsh.exe".into(), 7);
         assert!(terminal(&m).is_empty(), "the Fake lists no PSReadLine folders");
+    }
+
+    #[test]
+    fn powershell_7_is_found_for_msi_msix_aliases_and_portable_installs() {
+        let pf = r"C:\Program Files";
+        let local = r"C:\Users\me\AppData\Local";
+        let package = r"C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe";
+        let cases = [
+            (r"C:\Program Files\PowerShell\7\pwsh.exe".to_string(), false, ""),
+            (format!(r"{package}\pwsh.exe"), true, ""),
+            (format!(r"{local}\Microsoft\WindowsApps\pwsh.exe"), false, ""),
+            (r"C:\Tools\PowerShell\pwsh.exe".to_string(), false, r#".;"C:\Tools\PowerShell""#),
+        ];
+        for (exe, registered, path) in cases {
+            let mut m = Fake::new();
+            m.executable_versions.insert(exe.to_ascii_lowercase(), 7);
+            m.env.insert("PATH".into(), path.into());
+            if registered {
+                m.powershell_packages.push(package.into());
+            }
+            assert!(powershell_7(&m, pf, local), "{exe}");
+            m.executable_versions.clear();
+            m.files.insert(exe.to_ascii_lowercase());
+            assert!(!powershell_7(&m, pf, local), "an inert file or stale registration isn't an installation: {exe}");
+            m.executable_versions.insert(exe.to_ascii_lowercase(), 6);
+            assert!(!powershell_7(&m, pf, local), "PowerShell 6 isn't PowerShell 7: {exe}");
+        }
+        let mut m = Fake::new();
+        m.env.insert("PATH".into(), r".;tools;C:relative;\rooted;\\server\share".into());
+        for dir in [".", "tools", "C:relative", r"\rooted", r"\\server\share"] {
+            m.executable_versions.insert(Path::new(dir).join("pwsh.exe").to_string_lossy().to_ascii_lowercase(), 7);
+        }
+        assert!(!powershell_7(&m, pf, local), "never search relative paths or network shares");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn executable_version_rejects_an_inert_pwsh_file() {
+        let root = std::env::temp_dir().join(format!("mom-pwsh-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("pwsh.exe");
+        std::fs::write(&path, b"not an executable").unwrap();
+        assert_eq!(os::executable_major(&path), None);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&root).unwrap();
     }
 
     impl Writer for Fake {

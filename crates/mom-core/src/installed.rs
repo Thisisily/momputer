@@ -174,6 +174,14 @@ impl Installed {
 
 // ------------------------------------------------------------------ programs you don't use
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LastUsedSource {
+    Played,
+    Updated,
+    Activity,
+}
+
 /// A program in Windows' uninstall list.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -187,9 +195,11 @@ pub struct App {
     /// Bytes: as the program (or Steam) says, or measured from its folder when it doesn't say.
     /// 0 only when there's no telling.
     pub size: u64,
-    /// When you last opened it, as far as Windows and its data folders tell (unix seconds). For a
-    /// Steam game: when Steam says you last played it.
+    /// Latest recorded evidence, in unix seconds. The source distinguishes play from an
+    /// update or filesystem/launch activity; none proves that no later use occurred.
     pub last_used: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used_source: Option<LastUsedSource>,
     /// Where it's installed, when that's known: its own folder, never one it shares.
     pub dir: Option<String>,
     /// The launcher it belongs to, when it has one ("Steam"): that's who removes it.
@@ -241,6 +251,7 @@ struct SteamGame {
     size: u64,
     /// When it was last played; never played, when it was installed or last updated.
     last: u64,
+    source: LastUsedSource,
 }
 
 /// One of Steam's own records of an installed game (steamapps\appmanifest_<id>.acf), read as
@@ -259,6 +270,7 @@ fn steam_game(library: &Path, manifest: &str) -> Option<SteamGame> {
         dir: library.join("steamapps").join("common").join(folder),
         size: number("SizeOnDisk"),
         last: if played > 0 { played } else { number("LastUpdated") },
+        source: if played > 0 { LastUsedSource::Played } else { LastUsedSource::Updated },
     })
 }
 
@@ -387,6 +399,7 @@ pub fn programs() -> Vec<App> {
                     version: get("DisplayVersion"),
                     size: dword_value(hive, &path, "EstimatedSize").map(|kb| kb as u64 * 1024).unwrap_or(0),
                     last_used: None,
+                    last_used_source: None,
                     dir: None,
                     from: steam.as_ref().map(|_| "Steam".to_string()),
                     install_dir: dir,
@@ -447,14 +460,32 @@ fn launches() -> Vec<(String, u64)> {
     out
 }
 
-/// Newest change among a folder and what's directly in it: cheap, and an app that runs
-/// writes something near the top (settings, logs).
-fn touched(dir: &Path) -> u64 {
-    let own = std::fs::metadata(dir).map(|m| crate::util::mtime_secs(&m)).unwrap_or(0);
-    std::fs::read_dir(dir)
-        .map(|rd| rd.filter_map(Result::ok).filter_map(|e| e.metadata().ok()).map(|m| crate::util::mtime_secs(&m)).max().unwrap_or(0))
-        .unwrap_or(0)
-        .max(own)
+/// Observable activity near the top of an app's data folder. It is supporting evidence,
+/// not a complete record of app use. Failed reads must not turn into ancient activity.
+fn touched(dir: &Path) -> Option<u64> {
+    fn recorded(path: &Path) -> Option<u64> {
+        let meta = std::fs::symlink_metadata(path).ok()?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if meta.file_attributes() & 0x400 != 0 {
+                return None;
+            }
+        }
+        if meta.file_type().is_symlink() {
+            return None;
+        }
+        crate::trash::cleanup_recency(&meta)
+    }
+    let mut newest = recorded(dir)?;
+    for (i, entry) in std::fs::read_dir(dir).ok()?.enumerate() {
+        if i >= 4096 {
+            return None;
+        }
+        let at = recorded(&entry.ok()?.path())?;
+        newest = newest.max(at);
+    }
+    Some(newest)
 }
 
 /// When each program was last used: now if it's running, else the latest of when Windows saw
@@ -482,7 +513,12 @@ fn last_used(apps: &mut [App], paths: &Paths, table: &ProcTable, now: u64) {
         let dir_name = app.install_dir.as_deref().map(|d| squash(&name_of(d))).filter(|n| n.len() >= 5 && !ANYBODYS.contains(&n.as_str())).unwrap_or_default();
         let dir_lower = app.install_dir.as_deref().map(|d| d.to_string_lossy().to_ascii_lowercase());
         let mut best: Option<u64> = None;
-        let mut saw = |t: u64| best = Some(best.map_or(t, |b: u64| b.max(t)));
+        let mut saw = |t: u64| {
+            if t > 0 {
+                best = Some(best.map_or(t, |b: u64| b.max(t)));
+            }
+        };
+        let mut unavailable = false;
         if let Some(dir) = &dir_lower {
             if table.procs.values().any(|p| p.exe.as_deref().is_some_and(|e| e.to_ascii_lowercase().starts_with(dir.as_str()))) {
                 saw(now);
@@ -501,15 +537,19 @@ fn last_used(apps: &mut [App], paths: &Paths, table: &ProcTable, now: u64) {
         }
         for (n, d) in &data_dirs {
             if *n == me || (me.len() >= 5 && n.starts_with(&me)) || (!dir_name.is_empty() && *n == dir_name) {
-                saw(touched(d));
+                match touched(d) {
+                    Some(t) => saw(t),
+                    None => unavailable = true,
+                }
             }
         }
-        app.last_used = best;
+        app.last_used = if unavailable { None } else { best };
+        app.last_used_source = app.last_used.map(|_| LastUsedSource::Activity);
     }
 }
 
-/// Programs nobody has opened in a year, biggest first. Runtimes, drivers, system parts, command
-/// line tools (on PATH) and anything with no sign either way are left out.
+/// Programs whose newest available activity evidence is at least a year old, biggest first.
+/// Runtimes, drivers, command line tools and programs without evidence are left out.
 static CACHE: std::sync::Mutex<Option<(u64, Vec<App>)>> = std::sync::Mutex::new(None);
 
 /// A WinGet "portable" package: a command line tool, reached through a link folder that's on
@@ -565,6 +605,7 @@ pub fn unused(paths: &Paths, table: &ProcTable, now: u64) -> Vec<App> {
             a.install_dir = Some(g.dir.clone());
             a.size = g.size;
             a.last_used = Some(if running { now } else { g.last }).filter(|t| *t > 0);
+            a.last_used_source = a.last_used.map(|_| if running { LastUsedSource::Activity } else { g.source });
             true
         });
     }
@@ -650,6 +691,19 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_app_activity_is_unknown_instead_of_the_epoch() {
+        let root = std::env::temp_dir().join(format!("mom-app-activity-{}", std::process::id()));
+        assert!(!root.exists());
+        assert_eq!(touched(&root), None);
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(touched(&root).is_some_and(|t| t > 0));
+        let file = root.join("settings.json");
+        std::fs::write(&file, "{}").unwrap();
+        assert_eq!(touched(&file), None, "a folder that became a file cannot prove old activity");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn runtimes_and_drivers_are_never_unused() {
         assert!(is_plumbing("Microsoft Visual C++ 2015-2022 Redistributable (x64)", "Microsoft Corporation"));
         assert!(is_plumbing("NVIDIA Graphics Driver 566.03", "NVIDIA Corporation"));
@@ -683,11 +737,13 @@ mod tests {
         let lib = Path::new(r"E:\SteamLibrary");
         assert_eq!(
             steam_game(lib, record),
-            Some(SteamGame { dir: lib.join("steamapps").join("common").join("Retro Racer"), size: 534_902_844, last: 1_790_809_334 })
+            Some(SteamGame { dir: lib.join("steamapps").join("common").join("Retro Racer"), size: 534_902_844, last: 1_790_809_334, source: LastUsedSource::Played })
         );
         // Never played: when it was installed or last updated, so a game from last week isn't "unused".
         let never = record.replace("1790809334", "0");
         assert_eq!(steam_game(lib, &never).unwrap().last, 1_791_823_126);
+        assert_eq!(steam_game(lib, &never).unwrap().source, LastUsedSource::Updated);
+        assert_eq!(serde_json::to_value(LastUsedSource::Updated).unwrap(), "updated");
         // A record that names a path instead of a folder is not followed anywhere.
         for odd in [r"..\\..\\Windows", "C:/Windows", ".."] {
             assert_eq!(steam_game(lib, &record.replace("\"installdir\"\t\t\"Retro Racer\"", &format!("\"installdir\"\t\t\"{odd}\""))), None, "{odd}");

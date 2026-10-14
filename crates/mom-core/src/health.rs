@@ -132,10 +132,10 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Health {
                     (0, g) => crate::util::plural(g, "game"),
                     (a, g) => format!("{} and {}", crate::util::plural(a, "app"), crate::util::plural(g, "game")),
                 };
-                format!("{what} you haven't opened in a year")
+                format!("{what} with activity records over a year old")
             },
             detail: format!(
-                "{}{}. Uninstalling the ones you don't need {}; they're listed below.",
+                "{}{}. These records don't prove the apps are unused. Uninstalling the ones you don't need {}; they're listed below.",
                 names.join(", "),
                 if unused_apps.len() > 3 { " and more" } else { "" },
                 if size > 0 { format!("frees about {}", crate::util::human_bytes(size)) } else { "tidies up".to_string() }

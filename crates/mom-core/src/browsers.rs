@@ -74,7 +74,8 @@ pub struct Extension {
     pub can: Vec<String>,
     /// It can read and change every site you visit.
     pub everywhere: bool,
-    /// Unix seconds: when it was added, and when it last saved anything of its own.
+    /// Unix seconds: when it was added, and the newest observed local storage modification.
+    /// Missing storage evidence is not evidence that the extension is unused.
     pub added: Option<u64>,
     pub last_saved: Option<u64>,
     pub size: u64,
@@ -152,8 +153,17 @@ fn chrome_time(v: &Value) -> Option<u64> {
     (n / 1_000_000).checked_sub(11_644_473_600).filter(|t| *t > 0)
 }
 
-/// Folders in a profile that are cache: safe to lose, the browser rebuilds them.
-const CACHE_DIRS: &[&str] = &["cache", "code cache", "gpucache", "service worker", "dawnwebgpucache", "dawngraphitecache", "grshadercache", "shadercache"];
+/// Chromium records profile activity as Unix seconds. Malformed or future values do not
+/// establish activity and must not be silently cast to zero or a huge integer.
+fn profile_activity(v: &Value, now: u64) -> Option<u64> {
+    let seconds = v.as_f64()?;
+    (seconds.is_finite() && seconds >= 1.0 && seconds <= now as f64).then_some(seconds as u64)
+}
+
+/// Site-managed storage (including Service Worker/CacheStorage) is not disposable browser cache.
+fn cache_part(name: &str) -> bool {
+    crate::browser_data::CHROMIUM_CACHE_DIRS.iter().any(|cache| cache.eq_ignore_ascii_case(name))
+}
 
 fn profiles(root: &Path, scheme: &str, now: u64) -> Vec<Profile> {
     let Some(state) = read_json(&root.join("Local State")) else { return vec![] };
@@ -172,7 +182,7 @@ fn profiles(root: &Path, scheme: &str, now: u64) -> Vec<Profile> {
     let mut cache_size = vec![0u64; dirs.len()];
     for ((i, name, _), (bytes, _)) in parts.iter().zip(&part_sizes) {
         size[*i] += bytes;
-        if CACHE_DIRS.contains(&name.as_str()) {
+        if cache_part(name) {
             cache_size[*i] += bytes;
         }
     }
@@ -207,7 +217,7 @@ fn profiles(root: &Path, scheme: &str, now: u64) -> Vec<Profile> {
             if info.get("is_using_default_name").and_then(Value::as_bool) == Some(true) || name == "Your Chrome" {
                 name = format!("{name} ({dir})");
             }
-            let last_used = info.get("active_time").and_then(Value::as_f64).map(|t| t as u64).filter(|t| *t > 0);
+            let last_used = info.get("active_time").and_then(|v| profile_activity(v, now));
             let file_len = |p: PathBuf| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
             let cookies_path = path.join("Network").join("Cookies");
             let (cookies, cookie_sites) = count_cookies(&cookies_path).map_or((None, None), |(c, s)| (Some(c), Some(s)));
@@ -394,15 +404,15 @@ fn notes(ext: &[Extension], last_used: Option<u64>, now: u64) -> Vec<Note> {
     let on: Vec<&Extension> = ext.iter().filter(|e| e.on).collect();
     let year = 365 * 86_400;
     if let Some(t) = last_used.filter(|t| now.saturating_sub(*t) > year) {
-        out.push(Note { level: "tip", text: format!("Not used in {} days. If it's an old profile, removing it frees its space.", now.saturating_sub(t) / 86_400) });
+        out.push(Note { level: "tip", text: format!("The browser last recorded this profile as active {} days ago.", now.saturating_sub(t) / 86_400) });
     }
     let apps: Vec<&str> = on.iter().filter(|e| e.app).map(|e| e.name.as_str()).collect();
     if !apps.is_empty() {
         out.push(Note { level: "tip", text: format!("{} {}: Chrome stopped running Chrome apps on Windows, so {} just {}.", plural(apps.len() as u64, "Chrome app"), names(&apps), if apps.len() == 1 { "it" } else { "they" }, if apps.len() == 1 { "sits there" } else { "sit there" }) });
     }
-    let idle: Vec<&str> = on.iter().filter(|e| !e.app && e.last_saved.is_none() && e.added.is_some_and(|a| now.saturating_sub(a) > 30 * 86_400)).map(|e| e.name.as_str()).collect();
-    if idle.len() >= 2 {
-        out.push(Note { level: "tip", text: format!("{} have never saved anything since you added them: {}. Most likely unused.", plural(idle.len() as u64, "extension"), names(&idle)) });
+    let unknown: Vec<&str> = on.iter().filter(|e| !e.app && e.last_saved.is_none()).map(|e| e.name.as_str()).collect();
+    if unknown.len() >= 2 {
+        out.push(Note { level: "tip", text: format!("No local storage-write date is available for {}: {}. This does not show whether you use them.", plural(unknown.len() as u64, "extension"), names(&unknown)) });
     }
     let blockers: Vec<&str> = on.iter().filter(|e| e.kind == Some("Ad blocker")).map(|e| e.name.as_str()).collect();
     if blockers.len() >= 2 {
@@ -453,6 +463,19 @@ mod tests {
         assert_eq!(kind_of("VPN for Chrome: NordVPN proxy protection", &[]), Some("VPN"));
         assert_eq!(kind_of("Desmos Graphing Calculator", &[]), None);
         assert_eq!(chrome_time(&json!("13291816019293602")), Some(1_647_342_419));
+        assert_eq!(profile_activity(&json!(1_647_342_419.5), 1_800_000_000), Some(1_647_342_419));
+        assert_eq!(profile_activity(&json!(-1), 1_800_000_000), None);
+        assert_eq!(profile_activity(&json!(0), 1_800_000_000), None);
+        assert_eq!(profile_activity(&json!(1_900_000_000), 1_800_000_000), None);
+        assert_eq!(profile_activity(&json!("unknown"), 1_800_000_000), None);
+    }
+
+    #[test]
+    fn site_storage_is_not_counted_as_disposable_cache() {
+        assert!(cache_part("Cache") && cache_part("code cache") && cache_part("GPUCache"));
+        for name in ["Service Worker", "CacheStorage", "Cookies", "Local Storage", "Session Storage", "IndexedDB", "Sessions"] {
+            assert!(!cache_part(name), "{name}");
+        }
     }
 
     #[test]
@@ -483,9 +506,10 @@ mod tests {
         ];
         let n = notes(&list, Some(now - 500 * 86_400), now);
         let all: Vec<&str> = n.iter().map(|x| x.text.as_str()).collect();
-        assert!(all[0].starts_with("Not used in 500 days"), "{all:?}");
+        assert!(all[0].starts_with("The browser last recorded this profile as active 500 days ago"), "{all:?}");
         assert!(all.iter().any(|t| t.starts_with("1 Chrome app Desmos")), "{all:?}");
-        assert!(all.iter().any(|t| t.starts_with("2 extensions have never saved anything since you added them: Psykopaint, Sketchpad")), "{all:?}");
+        assert!(all.iter().any(|t| t.starts_with("No local storage-write date is available for 2 extensions: Psykopaint, Sketchpad")), "{all:?}");
+        assert!(!all.iter().any(|t| t.contains("unused") || t.contains("never saved")), "{all:?}");
         assert!(all.iter().any(|t| t.starts_with("2 ad blockers do the same job twice")), "{all:?}");
     }
 }

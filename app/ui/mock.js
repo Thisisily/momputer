@@ -138,7 +138,7 @@
 
   const GB = 1024 * MB;
   const D2 = 86400;
-  const item = (name, sub, bytes, goes, reason, ageSecs, files = 1) => ({ name, sub, path: `C:\\Users\\me\\AppData\\Local\\Temp\\${name.replace(/\W+/g, "-")}`, bytes, files, ageSecs, goes, optional: false, reason });
+  const item = (name, sub, bytes, goes, reason, ageSecs, files = 1) => ({ name, sub, path: `C:\\Users\\me\\AppData\\Local\\Temp\\${name.replace(/\W+/g, "-")}`, bytes, files, ageSecs, ageKnown: Number.isFinite(ageSecs), goes, optional: false, reason });
   // Kept only for being new: the user can tick it.
   const recent = (i) => ({ ...i, optional: true });
   const spot = (o) => {
@@ -159,26 +159,26 @@
     ["Unreal games", "Atlas Run", "crash 2025-11-02", 76, 340],
     ["Unreal games", "Paper Moons", "Logs", 73, 448],
     ["itch games", "Small Hours", "crash reports", 41, 600],
-  ].map(([who, game, what, mb, days]) => item(`${who} · ${game} · ${what}`, what.includes("crash") ? "Crash report" : "Log, 1 file", mb * MB, true, `Untouched for ${days} days`, days * D2));
+  ].map(([who, game, what, mb, days]) => item(`${who} · ${game} · ${what}`, what.includes("crash") ? "Crash report" : "Log, 1 file", mb * MB, true, `Last changed ${days} days ago`, days * D2));
 
   const spots = [
     spot({
       id: "game-junk", label: "Games' logs and crash reports", group: "personal", action: "delete", safety: "safe",
       what: "Logs and crash reports games write every time they run (never your saves).",
-      effect: "Deletes 12 logs and crash reports (1.7 GB) that games wrote and nobody has touched in 67 days, permanently (they don't go to the Recycle Bin). Games write new ones the next time they run; your saves, settings and the games themselves aren't touched.",
+      effect: "Deletes 12 logs and crash reports (1.7 GB) whose latest recorded change is over 67 days old, permanently (they don't go to the Recycle Bin). Games write new ones the next time they run; your saves, settings and the games themselves aren't touched.",
       totalBytes: games.reduce((a, i) => a + i.bytes, 0), reclaimableBytes: games.reduce((a, i) => a + i.bytes, 0), reclaimableItems: games.length, keptItems: 0,
       items: games,
     }),
     spot({
       id: "claude-temp", label: "Claude Code scratch", group: "agents", action: "delete", safety: "safe", owner: "claude-code",
       what: "Scratchpads, screenshots and task output Claude Code saves while it works. Each session gets its own folder.",
-      effect: "Deletes 4 scratch folders from Claude Code sessions that have ended, permanently (they don't go to the Recycle Bin). Folders of the 2 sessions still running, and anything changed in the last 24 hours, are left alone.",
+      effect: "Deletes 4 Claude Code scratch folders with no recorded change in the last 24 hours, permanently (they don't go to the Recycle Bin). Folders of the 2 sessions still running, recent changes and unknown ages are left alone.",
       path: "C:\\Users\\me\\AppData\\Local\\Temp\\claude", totalBytes: 15.2 * GB, reclaimableBytes: 1.2 * GB, reclaimableItems: 4, keptItems: 2,
       items: [
-        item("storefront · \u201cUpload the garden video and reply to comments\u201d", "212 files, mostly screenshots", 820 * MB, true, "Session ended 3 days ago", 3 * D2, 212),
-        item("atlas · \u201cFix the checkout page on mobile\u201d", "48 files, mostly logs", 260 * MB, true, "Session ended 5 days ago", 5 * D2, 48),
-        item("games · Session 0191f20b", "12 files, mostly videos", 90 * MB, true, "Session ended 9 days ago", 9 * D2, 12),
-        item("storefront · \u201cDraft the newsletter\u201d", "6 files", 41 * MB, true, "Session ended 2 days ago", 2 * D2, 6),
+        item("storefront · \u201cUpload the garden video and reply to comments\u201d", "212 files, mostly screenshots", 820 * MB, true, "Last changed 3 days ago", 3 * D2, 212),
+        item("atlas · \u201cFix the checkout page on mobile\u201d", "48 files, mostly logs", 260 * MB, true, "Last changed 5 days ago", 5 * D2, 48),
+        item("games · Session 0191f20b", "12 files, mostly videos", 90 * MB, true, "Last changed 9 days ago", 9 * D2, 12),
+        item("storefront · \u201cDraft the newsletter\u201d", "6 files", 41 * MB, true, "Last changed 2 days ago", 2 * D2, 6),
         item("momputer · \u201cMake the design nicer\u201d", "1,240 files, mostly screenshots", 13.6 * GB, false, "Session is still running", 600, 1240),
         item("storefront · \u201cSchedule tomorrow's posts\u201d", "30 files", 400 * MB, false, "Session is still running", 120, 30),
       ],
@@ -197,14 +197,14 @@
     }),
     spot({
       id: "old-build-folders", label: "Old build folders", group: "dev", action: "delete", safety: "review",
-      what: "node_modules and Rust target folders in projects nobody has worked on for a month. They're rebuilt from the project files whenever you need them.",
+      what: "node_modules and Rust target folders in projects with no recorded file activity in the last month. They're rebuilt from the project files whenever you need them.",
       effect: "Deletes the ticked folders permanently. Your code isn't touched; run npm install or cargo build in a project to get its folder back.",
       totalBytes: 9.8 * GB, reclaimableBytes: 6.1 * GB, reclaimableItems: 3, keptItems: 2,
       items: [
-        item("garden-v1 · target", "Rust build output", 3.9 * GB, true, "Last worked on 74 days ago", 74 * D2),
-        item("old-landing · node_modules", "41,200 files", 1.4 * GB, true, "Last worked on 45 days ago", 45 * D2),
-        item("nimbus-2024 · node_modules", "28,900 files", 800 * MB, true, "Last worked on 120 days ago", 120 * D2),
-        recent(item("storefront · node_modules", "52,000 files", 2.6 * GB, false, "Worked on 2 hours ago", 7200)),
+        item("garden-v1 · target", "Rust build output", 3.9 * GB, true, "Project activity recorded 74 days ago", 74 * D2),
+        item("old-landing · node_modules", "41,200 files", 1.4 * GB, true, "Project activity recorded 45 days ago", 45 * D2),
+        item("nimbus-2024 · node_modules", "28,900 files", 800 * MB, true, "Project activity recorded 120 days ago", 120 * D2),
+        recent(item("storefront · node_modules", "52,000 files", 2.6 * GB, false, "Project activity recorded 2 hours ago", 7200)),
         item("momputer · target", "Rust build output", 1.1 * GB, false, "In use by a running program", 600),
       ],
     }),
@@ -224,7 +224,7 @@
     spot({
       id: "browser-cache", label: "Browser caches", group: "windows", action: "delete", safety: "safe", note: "Close Edge to clear its cache.",
       what: "Copies of web pages, pictures and scripts your browsers saved so sites open faster.",
-      effect: "Deletes cached web data for the browsers that are closed. Sites load a little slower the first time; logins, history, bookmarks and passwords are untouched.",
+      effect: "Deletes only saved copies of pages, images and scripts from browsers and apps that are closed. Sites may load slower the first time. Cookies, sign-ins, site storage, session recovery data, history, bookmarks and passwords are kept.",
       totalBytes: 2.9 * GB, reclaimableBytes: 1.6 * GB, reclaimableItems: 2, keptItems: 1,
       items: [
         item("Chrome, Default profile", "Cache, Code Cache, GPUCache", 1.2 * GB, true, "Chrome is closed", 3600),
@@ -235,51 +235,51 @@
     spot({
       id: "old-conversations", label: "Old conversations", group: "agents", action: "move", safety: "safe", path: null,
       what: "Your agents' past conversations: Codex's and Claude Code's chats, images Codex made, and other agents' sessions. They add up to gigabytes. Moving the old ones to another drive frees this one, and a link in each one's place means the agents still find them where they were.",
-      effect: "Moves 4 folders (3.1 GB) of Codex and Claude Code conversations nobody has opened in 67 days to a drive you choose, and leaves a link in each one's place, so they still open from where they were. Nothing is deleted, and Bring back puts any of them back here. While that drive is unplugged, those conversations can't be opened.",
+      effect: "Moves 4 folders (3.1 GB) of Codex and Claude Code conversations whose latest recorded change is over 67 days old to a drive you choose, and leaves a link in each one's place, so they still open from where they were. Nothing is deleted, and Bring back puts any of them back here. While that drive is unplugged, those conversations can't be opened.",
       totalBytes: 4.4 * GB, reclaimableBytes: 3.1 * GB, reclaimableItems: 4, keptItems: 2,
       items: [
-        item("Codex · July 2026", "2,140 files, mostly logs", 2.1 * GB, true, "Not opened for 72 days", 72 * D2, 2140),
-        item("Codex · June 2026", "610 files, mostly logs", 700 * MB, true, "Not opened for 103 days", 103 * D2, 610),
-        item("Claude Code · storefront · Fix the checkout page on mobile", "48 files, mostly code", 200 * MB, true, "Not opened for 80 days", 80 * D2, 48),
-        item("Codex · 2 August 2026", "120 files, mostly logs", 100 * MB, true, "Not opened for 70 days", 70 * D2, 120),
-        recent(item("Codex · 20 September 2026", "300 files, mostly logs", 1.1 * GB, false, "Opened 21 days ago (kept here for 67 days)", 21 * D2, 300)),
-        item("Codex · 11 October 2026", "40 files, mostly logs", 200 * MB, false, "Opened 2 hours ago", 7200, 40),
+        item("Codex · July 2026", "2,140 files, mostly logs", 2.1 * GB, true, "Last changed 72 days ago", 72 * D2, 2140),
+        item("Codex · June 2026", "610 files, mostly logs", 700 * MB, true, "Last changed 103 days ago", 103 * D2, 610),
+        item("Claude Code · storefront · Fix the checkout page on mobile", "48 files, mostly code", 200 * MB, true, "Last changed 80 days ago", 80 * D2, 48),
+        item("Codex · 2 August 2026", "120 files, mostly logs", 100 * MB, true, "Last changed 70 days ago", 70 * D2, 120),
+        recent(item("Codex · 20 September 2026", "300 files, mostly logs", 1.1 * GB, false, "Last changed 21 days ago (kept here for 67 days)", 21 * D2, 300)),
+        item("Codex · 11 October 2026", "40 files, mostly logs", 200 * MB, false, "Last changed 2 hours ago", 7200, 40),
       ],
     }),
     spot({
-      id: "windows-junk", label: "Windows leftovers", group: "windows", action: "delete", safety: "safe", admin: true,
-      what: "Windows Update keeps the files it downloaded after installing them, Windows keeps error reports about crashes, and Windows setup leaves folders at the top of whichever drive had room. Cleaning these needs an administrator, so Windows asks you first.",
-      effect: "Deletes 3 items (1.9 GB) that Windows Update, Windows and Installers left behind and nobody has touched in 67 days, permanently (they don't go to the Recycle Bin): downloaded updates that are installed already, error reports and folders installers left at the root of the drive. Windows and your programs keep working; nothing they still need is in here. Anything newer, or in use, stays.",
-      totalBytes: 1.9 * GB, reclaimableBytes: 1.9 * GB, reclaimableItems: 3, keptItems: 0,
+      id: "windows-junk", label: "Windows leftovers", group: "windows", action: "delete", safety: "review", admin: true,
+      what: "Windows keeps update downloads, setup folders and error reports. Update downloads and setup folders stay while an update is pending, running, or waiting for a restart, or when update status cannot be checked. Cleaning other eligible leftovers needs an administrator, so Windows asks you first.",
+      effect: "Deletes 1 old error report (100 MB) permanently. Update downloads and setup folders stay because Windows is waiting for a restart.",
+      totalBytes: 1.2 * GB + 700 * MB, reclaimableBytes: 100 * MB, reclaimableItems: 1, keptItems: 2,
       items: [
-        item("Windows Update · update files 8d2a1c0f9e7b", "Downloaded update, 412 files", 1.2 * GB, true, "Untouched for 88 days", 88 * D2, 412),
-        item("Installers · C:\\Windows10Upgrade", "Installer leftovers, 28 files", 600 * MB, true, "Untouched for 1200 days", 1200 * D2, 28),
-        item("Windows · AppCrash_atlas.exe_1f2e", "Error report", 100 * MB, true, "Untouched for 90 days", 90 * D2, 3),
+        item("Windows Update · update files 8d2a1c0f9e7b", "Downloaded update, 412 files", 1.2 * GB, false, "Windows is waiting for a restart; update files stay", 88 * D2, 412),
+        item("Windows setup · C:\\Windows10Upgrade", "Setup leftovers, 28 files", 600 * MB, false, "Windows is waiting for a restart; setup files stay", 1200 * D2, 28),
+        item("Windows · AppCrash_atlas.exe_1f2e", "Error report", 100 * MB, true, "Last changed 90 days ago", 90 * D2, 3),
       ],
     }),
     spot({
       id: "forgotten-apps", label: "Forgotten app data", group: "personal", action: "move", safety: "review",
-      what: "Big folders apps keep in AppData and your home folder: the data of apps you've since uninstalled, folders of an app's older versions, and things nobody has touched in a long time. Mom guesses which app each belongs to, so nothing here is deleted: it moves to your archive drive with a link left behind. Keys, passwords, wallets and browser profiles are never offered.",
+      what: "Big folders apps keep in AppData and your home folder: data attributed to uninstalled apps, older versions, and folders with no recent recorded changes. Review the folders first. Archive moves them to another drive with a link left behind. You can instead send selected folders to the Recycle Bin or delete them for good.",
       effect: "Moves 4 folders (6.2 GB) to a drive you choose, with a link left in each one's place: data of apps you've uninstalled. Nothing is deleted. Bring back puts any of them back, and once you're sure you don't need one, Delete for good removes it from there. Mom guesses which app a folder belongs to, so look through the list first.",
       totalBytes: 8.9 * GB, reclaimableBytes: 6.2 * GB, reclaimableItems: 4, keptItems: 2,
       items: [
-        item("Nimbus Studio (AppData\\Roaming)", "41,200 files, mostly images", 3.9 * GB, true, "Its app isn't installed any more. Untouched for 412 days", 412 * D2, 41200),
-        item("Google\\AndroidStudio2021.2 (AppData\\Roaming)", "8,100 files", 1.1 * GB, true, "An older version; AndroidStudio2024.2 is the one in use. Untouched for 705 days", 705 * D2, 8100),
-        item("Atlas Engine (AppData\\LocalLow)", "310 files, mostly data files", 800 * MB, true, "Its app isn't installed any more. Untouched for 290 days", 290 * D2, 310),
-        item("SquirrelTemp (AppData\\Local)", "12 files", 400 * MB, true, "Its app isn't installed any more. Untouched for 649 days", 649 * D2, 12),
-        recent(item(".affinity (your home folder)", "2,900 files", 1.9 * GB, false, "Its app is still installed, but nobody has touched this in 416 days", 416 * D2, 2900)),
-        recent(item("Figma (AppData\\Local)", "600 files", 800 * MB, false, "Its app isn't installed any more. Untouched for 101 days", 101 * D2, 600)),
+        item("Nimbus Studio (AppData\\Roaming)", "41,200 files, mostly images", 3.9 * GB, true, "Its app isn't installed any more. Last changed 412 days ago", 412 * D2, 41200),
+        item("Google\\AndroidStudio2021.2 (AppData\\Roaming)", "8,100 files", 1.1 * GB, true, "An older version; AndroidStudio2024.2 is installed. Last changed 705 days ago", 705 * D2, 8100),
+        item("Atlas Engine (AppData\\LocalLow)", "310 files, mostly data files", 800 * MB, true, "Its app isn't installed any more. Last changed 290 days ago", 290 * D2, 310),
+        item("SquirrelTemp (AppData\\Local)", "12 files", 400 * MB, true, "Its app isn't installed any more. Last changed 649 days ago", 649 * D2, 12),
+        recent(item(".affinity (your home folder)", "2,900 files", 1.9 * GB, false, "Its app is still installed. Last changed 416 days ago", 416 * D2, 2900)),
+        recent(item("Figma (AppData\\Local)", "600 files", 800 * MB, false, "Its app isn't installed any more. Last changed 101 days ago", 101 * D2, 600)),
       ],
     }),
     spot({
       id: "old-temp", label: "Old temp files", group: "windows", action: "delete", safety: "safe", path: "C:\\Users\\me\\AppData\\Local\\Temp",
       what: "Files programs and installers left in your Temp folder and never cleaned up.",
-      effect: "Deletes 4,634 items (all empty) from your Temp folder that nobody has touched in 7 days, permanently (they don't go to the Recycle Bin). Anything newer, or in use by a running program, stays. Programs make new temp files when they need them.",
+      effect: "Deletes 4,634 items (all empty) from your Temp folder with no recorded change in the last 7 days, permanently (they don't go to the Recycle Bin). Anything newer, in use by a running program, or with an unknown age stays. Programs make new temp files when they need them.",
       totalBytes: 1.4 * GB, reclaimableBytes: 0, reclaimableItems: 4634, keptItems: 8231, newItems: 8230, newBytes: 1.2 * GB,
       items: [
-        item("tmp3F2A", "Empty folder", 0, true, "Untouched for 41 days", 41 * D2, 0),
-        item("tmp9C11", "Empty folder", 0, true, "Untouched for 33 days", 33 * D2, 0),
-        item("_MEI48212", "Empty folder", 0, true, "Untouched for 12 days", 12 * D2, 0),
+        item("tmp3F2A", "Empty folder", 0, true, "Last changed 41 days ago", 41 * D2, 0),
+        item("tmp9C11", "Empty folder", 0, true, "Last changed 33 days ago", 33 * D2, 0),
+        item("_MEI48212", "Empty folder", 0, true, "Last changed 12 days ago", 12 * D2, 0),
         recent(item("vscode-typescript", "1,204 files, mostly code", 410 * MB, false, "Changed 3 hours ago (kept for 7 days)", 3 * 3600, 1204)),
         item("Nimbus-updater", "88 files", 200 * MB, false, "In use by a running program", 60, 88),
         recent(item("pip-build-x81k", "310 files", 120 * MB, false, "Changed 2 days ago (kept for 7 days)", 2 * D2, 310)),
@@ -289,12 +289,12 @@
       id: "recycle-bin", label: "Recycle Bin", group: "windows", action: "empty-bin", safety: "review",
       what: "Files you deleted. Windows keeps them here in case you change your mind.",
       effect: "Empties the Recycle Bin on every drive. This is permanent: the files can't be brought back.",
-      totalBytes: 1.8 * GB, reclaimableBytes: 1.8 * GB, reclaimableItems: 312, keptItems: 0,
+      totalBytes: 1.8 * GB, reclaimableBytes: 1.8 * GB, reclaimableItems: 312, keptItems: 0, path: "C:\\$Recycle.Bin",
       items: [
         item("render-final-v3.mp4", "from C:\\Workspace\\storefront\\out", 900 * MB, true, "Deleted 12 days ago", 12 * D2),
         item("dataset-old.zip", "from D:\\Downloads", 640 * MB, true, "Deleted 30 days ago", 30 * D2),
         item("screenshots (2).zip", "from C:\\Users\\me\\Desktop", 120 * MB, true, "Deleted 2 days ago", 2 * D2),
-      ],
+      ].map((i, n) => ({ ...i, path: `${n === 1 ? "D" : "C"}:\\$Recycle.Bin\\S-1-5-21-demo\\$RMOCK${n}${n ? ".zip" : ".mp4"}` })),
     }),
     spot({
       id: "crash-dumps", label: "Crash reports", group: "windows", action: "delete", safety: "safe",
@@ -308,14 +308,14 @@
     }),
     spot({
       id: "old-installers", label: "Old installers", group: "personal", action: "recycle", safety: "review", path: "C:\\Users\\me\\Downloads",
-      what: "Setup files in Downloads you ran more than a month ago. The apps they installed don't need them.",
+      what: "Setup files in Downloads whose latest recorded change is over a month old. Their dates do not establish whether you ran them.",
       effect: "Moves the ticked installers to the Recycle Bin, so you can still get them back. Installed apps aren't affected.",
       totalBytes: 1.1 * GB + 210 * MB, reclaimableBytes: 1.1 * GB, reclaimableItems: 3, keptItems: 1,
       items: [
-        item("DockerDesktopInstaller.exe", "Downloads", 620 * MB, true, "Downloaded 64 days ago", 64 * D2),
-        item("Blender-4.2-windows-x64.msi", "Downloads", 380 * MB, true, "Downloaded 90 days ago", 90 * D2),
-        item("OBS-Studio-30.1-Installer.exe", "Downloads", 140 * MB, true, "Downloaded 41 days ago", 41 * D2),
-        recent(item("Figma-Setup.exe", "Downloads", 210 * MB, false, "Downloaded 6 days ago (kept for 30 days)", 6 * D2)),
+        item("DockerDesktopInstaller.exe", "Downloads", 620 * MB, true, "Last changed 64 days ago", 64 * D2),
+        item("Blender-4.2-windows-x64.msi", "Downloads", 380 * MB, true, "Last changed 90 days ago", 90 * D2),
+        item("OBS-Studio-30.1-Installer.exe", "Downloads", 140 * MB, true, "Last changed 41 days ago", 41 * D2),
+        recent(item("Figma-Setup.exe", "Downloads", 210 * MB, false, "Last changed 6 days ago (kept for 30 days)", 6 * D2)),
       ],
     }),
   ];
@@ -335,7 +335,7 @@
         { size: 6.1 * MB, hash: "e5".repeat(32), kind: "photos", files: [f("C:\\Users\\me\\Pictures\\Lake trip\\IMG_2041.jpg", "Pictures", 400, true), f("C:\\Users\\me\\Desktop\\IMG_2041.jpg", "Desktop", 390)] },
       ],
       wasted: 219 * MB + 2 * 90 * MB + 34 * MB + 3 * 4.7 * MB + 6.1 * MB,
-      big: [{ path: "C:\\Users\\me\\Videos\\Raw footage\\atlas-run-capture.mkv", size: 14.2 * GB, accessed: now - 500 * D2, modified: now - 520 * D2, kind: "videos", folder: "Videos" }],
+      big: [{ path: "C:\\Users\\me\\Videos\\Raw footage\\atlas-run-capture.mkv", size: 14.2 * GB, accessed: now - 500 * D2, modified: now - 520 * D2, recency: now - 510 * D2, kind: "videos", folder: "Videos" }],
       scannedFiles: 8309,
       scannedBytes: 29.4 * GB,
       roots: [],
@@ -411,7 +411,7 @@
     uptimeSecs: 9 * D2 + 4 * 3600,
     checks: [
       { id: "restart", level: "tip", title: "Up 9 days", detail: "A restart clears out memory leaks and finishes updates.", action: null },
-      { id: "unused-apps", level: "tip", title: "3 apps you haven't opened in a year", detail: "Nimbus Notes 10.3, Atlas Recorder, Retro Racer. Uninstalling the ones you don't need frees about 1.3 GB; they're listed below.", action: null },
+      { id: "unused-apps", level: "tip", title: "5 apps and games with older activity records", detail: "Their latest known activity dates are over a year old. Dates may reflect app data changes or Steam updates; apps with unknown activity are omitted. Review the records below before deciding what to uninstall.", action: null },
       { id: "storage-sense", level: "tip", title: "Storage Sense is off", detail: "Windows can empty old temp files and the Recycle Bin by itself.", action: { label: "Turn it on", url: "ms-settings:storagepolicies" } },
       { id: "startup", level: "tip", title: "11 apps start with Windows", detail: "Each one slows down logging in.", action: { label: "Startup apps", url: "ms-settings:startupapps" } },
       { id: "drive-C", level: "ok", title: "Drive C: has room", detail: "41 GB free of 476 GB.", action: null },
@@ -427,11 +427,11 @@
       { name: "Notion", command: "Notion.lnk", location: "Startup folder", enabled: true },
     ],
     unusedApps: [
-      { key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\nimbus-notes", name: "Nimbus Notes 10.3", publisher: "Nimbus Labs", version: "10.3", size: 915 * MB, lastUsed: now - 1703 * D2, dir: "C:\\Program Files\\Nimbus Notes", from: null },
-      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{AtlasRecorder}", name: "Atlas Recorder", publisher: "Atlas", version: "2.1", size: 400 * MB, lastUsed: now - 1067 * D2, dir: "C:\\Program Files (x86)\\Atlas Recorder", from: null },
-      { key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\copperline-player", name: "Copperline Player", publisher: "Copperline", version: "3.3", size: 0, lastUsed: now - 2081 * D2, dir: null, from: null },
-      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 900001", name: "Lanternfall Tactics", publisher: "Pixel Forge", version: "", size: 9.2 * GB, lastUsed: now - 1290 * D2, dir: "E:\\SteamLibrary\\steamapps\\common\\Lanternfall Tactics", from: "Steam" },
-      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 900002", name: "Retro Racer", publisher: "Pixel Forge", version: "", size: 4.7 * GB, lastUsed: now - 840 * D2, dir: "D:\\SteamLibrary\\steamapps\\common\\Retro Racer", from: "Steam" },
+      { key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\nimbus-notes", name: "Nimbus Notes 10.3", publisher: "Nimbus Labs", version: "10.3", size: 915 * MB, lastUsed: now - 1703 * D2, lastUsedSource: "activity", dir: "C:\\Program Files\\Nimbus Notes", from: null },
+      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{AtlasRecorder}", name: "Atlas Recorder", publisher: "Atlas", version: "2.1", size: 400 * MB, lastUsed: now - 1067 * D2, lastUsedSource: "activity", dir: "C:\\Program Files (x86)\\Atlas Recorder", from: null },
+      { key: "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\copperline-player", name: "Copperline Player", publisher: "Copperline", version: "3.3", size: 0, lastUsed: now - 2081 * D2, lastUsedSource: "activity", dir: null, from: null },
+      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 900001", name: "Lanternfall Tactics", publisher: "Pixel Forge", version: "", size: 9.2 * GB, lastUsed: now - 1290 * D2, lastUsedSource: "played", dir: "E:\\SteamLibrary\\steamapps\\common\\Lanternfall Tactics", from: "Steam" },
+      { key: "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 900002", name: "Retro Racer", publisher: "Pixel Forge", version: "", size: 4.7 * GB, lastUsed: now - 840 * D2, lastUsedSource: "updated", dir: "D:\\SteamLibrary\\steamapps\\common\\Retro Racer", from: "Steam" },
     ],
     topMemory: [
       { name: "chrome.exe", mem: 5.1 * GB, count: 38 },
@@ -537,7 +537,7 @@
           ] },
         { dir: "Profile 3", path: "C:\\x", name: "Work", lastUsed: now - 3 * 86400, size: 6.9 * GB, cache: 5.5 * GB, history: 96 * MB, cookiesBytes: 1.2 * MB, cookies: null, cookieSites: null, notes: [],
           extensions: [ext("Claude", "AI assistant", true, [everywhere], 0, { mb: 12 })] },
-        { dir: "Profile 7", path: "C:\\x", name: "Your Chrome (Profile 7)", lastUsed: now - 214 * 86400, size: 536 * MB, cache: 493 * MB, history: 320 * 1024, cookiesBytes: 400 * 1024, cookies: null, cookieSites: null, notes: [{ level: "tip", text: "Not used in 214 days. If it's an old profile, removing it frees its space." }], extensions: [] },
+        { dir: "Profile 7", path: "C:\\x", name: "Your Chrome (Profile 7)", lastUsed: now - 214 * 86400, size: 536 * MB, cache: 493 * MB, history: 320 * 1024, cookiesBytes: 400 * 1024, cookies: null, cookieSites: null, notes: [{ level: "tip", text: "The browser last recorded this profile as active 214 days ago." }], extensions: [] },
       ],
     },
     {
@@ -749,7 +749,7 @@
       const made = agentDocs[id] || agentDocs[doc.kind];
       return { id, title: doc.title, kind: doc.kind, path: doc.path, text: made.text, hidden: made.hidden || 0, cut: false };
     },
-    get_trash: () => ({ spots: [], busy: false }),
+    get_trash: () => ({ spots: JSON.parse(JSON.stringify(spots)), busy: false }),
     measure_trash: async () => {
       const list = [];
       for (const s of spots) {
@@ -762,9 +762,11 @@
     clean_trash: async ({ id, pick }) => {
       const s = spots.find((x) => x.id === id);
       const pk = { goes: true, new: false, ticked: [], unticked: [], ...(pick || {}) };
+      if (pk.discard && (id !== "forgotten-apps" || pk.goes || pk.new)) throw "Choose exact app data folders to remove.";
+      const action = pk.discard ? "delete" : s.action;
       // Like mom-core's choose(), for the listed items (the mock has nothing unlisted).
       const chosen = s.items.filter((i) => {
-        if (!i.goes && !i.optional) return false;
+        if ((!i.goes && !i.optional) || i.kept || (pk.keep || []).includes(i.path)) return false;
         return (i.goes ? pk.goes : pk.new) ? !pk.unticked.includes(i.path) : pk.ticked.includes(i.path);
       });
       live = { done: 0, total: chosen.length, freed: 0, files: 0, totalFiles: chosen.reduce((a, i) => a + (i.files || 1), 0), current: "", gone: [], goneCount: 0, stopping: false };
@@ -790,23 +792,24 @@
       s.keptItems = s.items.filter((i) => !i.goes).length;
       s.newItems = s.items.filter((i) => !i.goes && i.optional).length;
       s.newBytes = sum(s.items.filter((i) => !i.goes && i.optional));
+      if (!s.reclaimableItems && s.action !== "tool") s.effect = "Mom has not selected anything here. Items may be recent, in use, kept, or have unknown ages.";
       emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
       const size = `${(freed / 1024 / MB).toFixed(1)} GB`;
-      if (s.action === "move") {
+      if (action === "move") {
         for (const i of goes) archive.moved.push({ from: i.path, to: `${archive.dir}\\${i.name}`, archive: archive.dir, name: i.name, spot: s.id, bytes: i.bytes, files: i.files, movedAt: Date.now() / 1000, linked: true, reachable: true });
       }
       const message =
-        s.action === "recycle"
+        action === "recycle" || (action === "delete" && pk.recycle)
           ? `Moved ${goes.length} files (${size}) to the Recycle Bin. Changed your mind? It's all in there.`
-          : s.action === "move"
+          : action === "move"
             ? `Moved ${goes.length} folders (${size}) to ${archive.dir}. They still open from where they were.`
             : `Took out ${size} of trash.`;
       return { id, freed, deleted: goes.length, skipped: 0, message };
     },
     admin_check: async () => (await wait(60), null),
-    app_version: () => "0.2.0",
+    app_version: () => "0.3.1",
     // "?update" in the address shows what a newer version looks like.
-    get_update: async () => (await wait(300), { current: "0.2.0", latest: location.search.includes("update") ? "0.3.0" : "0.2.0", newer: location.search.includes("update"), checked: now, asked: now, problem: null, getIt: "https://thisisily.github.io/momputer/" }),
+    get_update: async () => (await wait(300), { current: "0.3.1", latest: location.search.includes("update") ? "0.3.2" : "0.3.1", newer: location.search.includes("update"), checked: now, asked: now, problem: null, getIt: "https://thisisily.github.io/momputer/" }),
     measure_spot: async ({ id, more }) => {
       await wait(700);
       const s = spots.find((x) => x.id === id);
@@ -814,11 +817,11 @@
         // "Show all": the smaller ones that weren't listed, each a little smaller than the last.
         const goes = s.items.filter((i) => i.goes);
         const missing = Math.min((s.reclaimableItems || 0) - goes.length, goes.length * 3 || 40, 400);
-        const last = goes[goes.length - 1] || { bytes: 4 * MB, reason: "Changed 30 days ago", ageSecs: 30 * 86400 };
+        const last = goes[goes.length - 1] || { bytes: 4 * MB, reason: "Changed 30 days ago", ageSecs: 30 * 86400, ageKnown: true };
         const extra = [];
         for (let n = 1; n <= missing; n++) {
           const name = `tmp-${(n * 7919).toString(16).padStart(4, "0")}`;
-          extra.push({ name, sub: `${1 + (n % 9)} ${n % 9 ? "files" : "file"}`, path: `${s.path || "C:\\Users\\me\\AppData\\Local\\Temp"}\\${name}`, bytes: Math.max(1024, Math.round(last.bytes / (1 + n / 6))), files: 1 + (n % 9), ageSecs: last.ageSecs, goes: true, optional: false, reason: last.reason });
+          extra.push({ name, sub: `${1 + (n % 9)} ${n % 9 ? "files" : "file"}`, path: `${s.path || "C:\\Users\\me\\AppData\\Local\\Temp"}\\${name}`, bytes: Math.max(1024, Math.round(last.bytes / (1 + n / 6))), files: 1 + (n % 9), ageSecs: last.ageSecs, ageKnown: last.ageKnown, goes: true, optional: false, reason: last.reason });
         }
         s.items = [...goes, ...extra, ...s.items.filter((i) => !i.goes)];
       }
@@ -1038,6 +1041,7 @@
       return null;
     },
     reveal: () => null,
+    open_recycle_bin: () => null,
     hide_window: () => null,
     // In the demo the page around the widget grows the frame; the widget waits to hear it has.
     set_big: ({ on }) =>

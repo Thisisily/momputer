@@ -390,7 +390,7 @@ pub fn check_room(dir: &Path, paths: &Paths) -> Result<PathBuf, String> {
     }
     // Windows' own folders at the top of a drive.
     let top = real.components().nth(2).map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    if ["$recycle.bin", "system volume information", "recovery", "perflogs", "windows.old", "$winreagent", "$windows.~bt", "$windows.~ws", "msocache"].contains(&top.as_str()) {
+    if ["$recycle.bin", "system volume information", "recovery", "perflogs", "windows.old", "$winreagent", "$windows.~bt", "$windows.~ws", "$windows.~tmp", "$getcurrent", "$sysreset", "windows10upgrade", "wudownloadcache", "msocache"].contains(&top.as_str()) {
         return Err(format!("{real_s} belongs to Windows. Mom won't tidy it."));
     }
     Ok(real)
@@ -1005,6 +1005,10 @@ fn within(room: &Path, p: &Path) -> bool {
 }
 
 pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyReport {
+    apply_with(report, ids, journal_dir, &mut |path| trash::delete(path).map_err(|e| e.to_string()))
+}
+
+fn apply_with(report: &RoomReport, ids: &[String], journal_dir: &Path, recycle: &mut dyn FnMut(&Path) -> Result<(), String>) -> ApplyReport {
     let mut r = ApplyReport::default();
     let mut journal = Journal { room: report.path.clone(), at: now_secs(), entries: vec![] };
     let room = Path::new(&report.path);
@@ -1038,8 +1042,8 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
                     r.failed.push(format!("{}: destination outside the room", to.display()));
                     continue;
                 }
-                if let Err(e) = std::fs::create_dir_all(&to) {
-                    r.failed.push(format!("{}: {e}", to.display()));
+                if crate::browser_data::protects_destination(&to, true) {
+                    r.failed.push(format!("{}: browser or session data stays in place", to.display()));
                     continue;
                 }
                 for t in &a.targets {
@@ -1052,7 +1056,19 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
                     if !src.exists() || to.starts_with(&src) {
                         continue;
                     }
+                    if !crate::browser_data::tree_is_safe(&src) {
+                        r.failed.push(format!("{t}: browser or session data, or a path mom could not safely check, stays in place"));
+                        continue;
+                    }
                     let dest = unique_dest(&to, name);
+                    if crate::browser_data::protects_destination(&dest, src.is_dir()) {
+                        r.failed.push(format!("{}: browser or session data stays in place", dest.display()));
+                        continue;
+                    }
+                    if let Err(e) = std::fs::create_dir_all(&to) {
+                        r.failed.push(format!("{}: {e}", to.display()));
+                        continue;
+                    }
                     match crate::util::move_new(&src, &dest) {
                         Ok(()) => {
                             r.moved += 1;
@@ -1066,6 +1082,12 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
                 let (Some(t), Some(to)) = (a.targets.first(), &a.to) else { continue };
                 if !within(room, Path::new(t)) || !within(room, Path::new(to)) {
                     r.failed.push(outside(t));
+                    continue;
+                }
+                if !crate::browser_data::tree_is_safe(Path::new(t))
+                    || crate::browser_data::protects_destination(Path::new(to), Path::new(t).is_dir())
+                {
+                    r.failed.push(format!("{t}: browser or session data, or a path mom could not safely check, stays in place"));
                     continue;
                 }
                 if Path::new(to).exists() {
@@ -1089,7 +1111,11 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
                     if !Path::new(t).exists() {
                         continue;
                     }
-                    match trash::delete(t) {
+                    if !crate::browser_data::tree_is_safe(Path::new(t)) {
+                        r.failed.push(format!("{t}: browser or session data, or a path mom could not safely check, stays in place"));
+                        continue;
+                    }
+                    match recycle(Path::new(t)) {
                         Ok(()) => {
                             r.recycled += 1;
                             journal.entries.push(JournalEntry { op: Op::Recycle, from: t.clone(), to: None });
@@ -1103,6 +1129,10 @@ pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyRe
                     let p = Path::new(t);
                     if !within(room, p) {
                         r.failed.push(outside(t));
+                        continue;
+                    }
+                    if !crate::browser_data::tree_is_safe(p) {
+                        r.failed.push(format!("{t}: browser or session data, or a path mom could not safely check, stays in place"));
                         continue;
                     }
                     if !p.is_dir() || has_files(p) {
@@ -1219,6 +1249,10 @@ enum Back {
 /// where they are. And what couldn't go back this time stays on the record, so undoing again,
 /// once the way is clear, finishes the job without redoing what's done.
 pub fn undo_last(journal_dir: &Path) -> UndoReport {
+    undo_last_with(journal_dir, &|path| std::fs::symlink_metadata(path))
+}
+
+fn undo_last_with(journal_dir: &Path, metadata: &dyn Fn(&Path) -> std::io::Result<std::fs::Metadata>) -> UndoReport {
     let mut r = UndoReport::default();
     let mut files: Vec<((u64, u32), PathBuf)> = std::fs::read_dir(journal_dir)
         .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).filter_map(|f| journal_order(&f).map(|order| (order, f))).collect())
@@ -1262,18 +1296,20 @@ pub fn undo_last(journal_dir: &Path) -> UndoReport {
         went[i] = match e.op {
             Op::Move | Op::Rename => {
                 let Some(to) = &e.to else { continue };
-                if Path::new(to).symlink_metadata().is_err() {
-                    Some(Back::Gone(format!("{} isn't where mom put it any more", named(to))))
-                } else {
-                    if let Some(parent) = Path::new(&e.from).parent() {
-                        let _ = std::fs::create_dir_all(parent);
+                Some(match metadata(Path::new(to)) {
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => Back::Gone(format!("{} isn't where mom put it any more", named(to))),
+                    Err(err) => Back::Waiting(format!("{} couldn't be checked ({})", named(to), one_line(&err.to_string()))),
+                    Ok(_) => {
+                        if let Some(parent) = Path::new(&e.from).parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        match crate::util::move_new(Path::new(to), Path::new(&e.from)) {
+                            Ok(()) => Back::Done,
+                            Err(err) if crate::util::in_the_way(&err) => Back::Waiting(format!("something new is where {} was", named(&e.from))),
+                            Err(err) => Back::Waiting(format!("{} wouldn't move ({})", named(to), one_line(&err.to_string()))),
+                        }
                     }
-                    Some(match crate::util::move_new(Path::new(to), Path::new(&e.from)) {
-                        Ok(()) => Back::Done,
-                        Err(err) if crate::util::in_the_way(&err) => Back::Waiting(format!("something new is where {} was", named(&e.from))),
-                        Err(err) => Back::Waiting(format!("{} wouldn't move ({})", named(to), one_line(&err.to_string()))),
-                    })
-                }
+                })
             }
             Op::RemoveEmpty => Some(match std::fs::create_dir_all(&e.from) {
                 Ok(()) => Back::Done,
@@ -1293,7 +1329,7 @@ pub fn undo_last(journal_dir: &Path) -> UndoReport {
     for e in &journal.entries {
         if let Some(to) = &e.to {
             if let Some(parent) = Path::new(to).parent() {
-                if parent.is_dir() && !has_files(parent) && parent != Path::new(&journal.room) {
+                if parent.is_dir() && crate::browser_data::tree_is_safe(parent) && !has_files(parent) && parent != Path::new(&journal.room) {
                     let _ = std::fs::remove_dir_all(parent);
                 }
             }
@@ -1595,6 +1631,88 @@ mod tests {
     }
 
     #[test]
+    fn browser_state_and_profile_containers_are_never_tidied() {
+        let root = tmp("browser-protection");
+        let room = root.join("room");
+        let home = room.join("archive").join("launcher-profile");
+        let session = home.join("Sessions").join("Session_1");
+        let preferences = home.join("Preferences");
+        write(&home.join("Cookies"), "fixture cookies");
+        write(&session, "fixture session");
+        write(&preferences, "fixture preferences");
+        let empty = room.join("Google/Chrome/User Data/Default/Sessions/empty");
+        mkdir(&empty);
+        let (mut report, _) = plan(&room, &[]);
+        let cases = [
+            (Op::Move, session.clone(), Some(room.join("Documents"))),
+            (Op::Rename, preferences.clone(), Some(room.join("renamed.json"))),
+            (Op::Recycle, room.join("archive"), None),
+            (Op::RemoveEmpty, empty.clone(), None),
+        ];
+        report.actions = cases.into_iter().enumerate().map(|(i, (op, target, to))| Action {
+            id: i.to_string(), op, targets: vec![target.to_string_lossy().into_owned()],
+            to: to.map(|p| p.to_string_lossy().into_owned()), title: String::new(),
+            reason: String::new(), bytes: 0, selected: true,
+        }).collect();
+        let ids: Vec<String> = report.actions.iter().map(|a| a.id.clone()).collect();
+        let mut recycled = Vec::new();
+        let result = apply_with(&report, &ids, &root.join("journal"), &mut |p| { recycled.push(p.to_path_buf()); Ok(()) });
+        assert_eq!((result.moved, result.recycled, result.removed, result.failed.len()), (0, 0, 0, 4), "{result:?}");
+        assert!(recycled.is_empty());
+        assert!(session.exists() && preferences.exists() && empty.exists());
+        assert!(!room.join("Documents").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn tidy_does_not_create_a_destination_inside_a_browser_profile() {
+        let root = tmp("browser-destination");
+        let room = root.join("room");
+        write(&room.join("report.md"), "report");
+        let (mut report, ids) = plan(&room, &["report.md"]);
+        let to = room.join("EpicGamesLauncher/Saved/webcache_4430/Sessions/new");
+        report.actions[0].to = Some(to.to_string_lossy().into_owned());
+        let result = apply(&report, &ids, &root.join("journal"));
+        assert_eq!((result.moved, result.failed.len()), (0, 1), "{result:?}");
+        assert!(room.join("report.md").exists() && !to.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn generic_sessions_and_preferences_do_not_make_a_project_a_browser_profile() {
+        let root = tmp("ordinary-sessions");
+        let room = root.join("room");
+        write(&room.join("ordinary-project/Sessions/history.json"), "coding history");
+        write(&room.join("ordinary-project/Preferences"), "coding preferences");
+        let (report, ids) = plan(&room, &["ordinary-project"]);
+        let result = apply(&report, &ids, &root.join("journal"));
+        assert_eq!((result.moved, result.failed.len()), (1, 0), "{result:?}");
+        assert_eq!(text(&room.join("Documents/ordinary-project/Sessions/history.json")), "coding history");
+        assert_eq!(text(&room.join("Documents/ordinary-project/Preferences")), "coding preferences");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn undo_can_restore_browser_data_without_removing_its_empty_profile_folder() {
+        let root = tmp("browser-undo");
+        let room = root.join("room");
+        let from = room.join("report.md");
+        let to = room.join("Google/Chrome/User Data/Default/Sessions/report.md");
+        write(&to, "restore this");
+        let journal_dir = root.join("journal");
+        let journal = Journal {
+            room: room.to_string_lossy().into_owned(), at: now_secs(),
+            entries: vec![JournalEntry { op: Op::Move, from: from.to_string_lossy().into_owned(), to: Some(to.to_string_lossy().into_owned()) }],
+        };
+        start_journal(&journal_dir, &journal).unwrap();
+        let result = undo_last(&journal_dir);
+        assert_eq!(result.restored, 1, "{result:?}");
+        assert_eq!(text(&from), "restore this");
+        assert!(to.parent().unwrap().is_dir(), "an empty browser session folder is preserved");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn undo_never_replaces_what_has_turned_up_in_a_things_old_place() {
         let root = tmp("undo-new");
         let room = root.join("room");
@@ -1624,6 +1742,38 @@ mod tests {
         assert_eq!(text(&room.join("report.md")), "the first report");
         assert!(!room.join("Documents").exists(), "the folder mom made is gone again");
         assert_eq!(undo_last(&journal).message, "Nothing to undo.");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_moved_file_stays_in_the_undo_journal_for_retry() {
+        use std::io::{Error, ErrorKind};
+        let root = tmp("undo-metadata-errors");
+        for (i, kind) in [ErrorKind::PermissionDenied, ErrorKind::NotADirectory, ErrorKind::Other].into_iter().enumerate() {
+            let room = root.join(format!("room-{i}"));
+            write(&room.join("report.md"), "report");
+            write(&room.join("notes.md"), "notes");
+            let journal_dir = root.join(format!("journal-{i}"));
+            let (report, ids) = plan(&room, &["report.md", "notes.md"]);
+            let applied = apply(&report, &ids, &journal_dir);
+            assert_eq!(applied.moved, 2, "{applied:?}");
+            let moved = room.join("Documents").join("report.md");
+            // Inject a lookup failure; no permissions, ACLs, or real user files are changed.
+            let undone = undo_last_with(&journal_dir, &|path| {
+                if path == moved { Err(Error::from(kind)) } else { std::fs::symlink_metadata(path) }
+            });
+            assert_eq!((undone.restored, undone.pending, undone.failed.len()), (1, 1, 1), "{kind:?}: {undone:?}");
+            assert!(undone.message.contains("couldn't be checked"), "{}", undone.message);
+            assert!(moved.is_file() && !room.join("report.md").exists() && room.join("notes.md").is_file());
+            let saved: Journal = serde_json::from_slice(&std::fs::read(applied.journal.unwrap()).unwrap()).unwrap();
+            assert_eq!(saved.entries.len(), 1, "only the failed restoration remains active");
+            assert_eq!(saved.entries[0].to.as_deref(), Some(moved.to_str().unwrap()));
+
+            let retry = undo_last(&journal_dir);
+            assert_eq!((retry.restored, retry.pending, retry.failed.len()), (1, 0, 0), "{kind:?}: {retry:?}");
+            assert_eq!(text(&room.join("report.md")), "report");
+            assert_eq!(undo_last(&journal_dir).message, "Nothing to undo.");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 

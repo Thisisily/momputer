@@ -7,7 +7,7 @@
 //! "C--Workspace-storefront".
 
 use super::{ago, cands, entries, judge, name_of, tally_many, too_fresh, Cand, Found, TrashCtx, ENTRY_CAP, IN_USE};
-use crate::util::{ellipsize, human_age_long, mtime_secs};
+use crate::util::ellipsize;
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ pub(super) fn find(ctx: &TrashCtx, min_age: u64) -> Found {
         return Found::none();
     }
     let mut f = Found::at(root.clone());
-    let transcripts = transcripts(&ctx.paths.claude_dir().join("projects"));
+    let (transcripts, transcripts_complete) = transcripts(&ctx.paths.claude_dir().join("projects"));
     // Loose files straight in claude\, and every session folder with its project's name.
     let mut loose = Vec::new();
     let mut sessions: Vec<(PathBuf, String)> = Vec::new();
@@ -40,22 +40,19 @@ pub(super) fn find(ctx: &TrashCtx, min_age: u64) -> Found {
             None => (None, 0),
         };
         let short: String = id.chars().take(8).collect();
-        let mut c = Cand::new(session.clone(), format!("{project} · Session {short}"), &t, ctx.now);
-        c.age = ctx.now.saturating_sub(t.newest.max(talked));
+        let mut c = Cand::new(session.clone(), format!("{project} · Session {short}"), &t, ctx.now).age_sensitive();
+        c.age_known &= transcripts_complete && (transcript.is_none() || talked > 0);
+        c.age = if c.age_known { ctx.now.saturating_sub(t.recency.max(talked)) } else { 0 };
         c.title_from = transcript.map(|p| (p, project.clone()));
         let c = if ctx.session_live(&id) {
             c.verdict(false, "Session is still running")
         } else if ctx.in_use(&session) {
             c.verdict(false, IN_USE)
         } else if c.age < min_age {
-            let r = if talked > t.newest {
-                format!("Session active {} ago (kept for {})", ago(c.age), human_age_long(min_age))
-            } else {
-                too_fresh(c.age, min_age)
-            };
+            let r = too_fresh(c.age, min_age);
             c.kept_but_tickable(r)
         } else {
-            let r = format!("Session ended {} ago", ago(c.age));
+            let r = format!("Last changed {} ago", ago(c.age));
             c.verdict(true, r)
         };
         f.cands.push(c);
@@ -65,20 +62,34 @@ pub(super) fn find(ctx: &TrashCtx, min_age: u64) -> Found {
 
 /// Every transcript by session id, with when it was last written. A session's scratch folder
 /// and transcript usually share a slug, but not when the session moved folders.
-fn transcripts(projects: &Path) -> HashMap<String, (PathBuf, u64)> {
+fn transcripts(projects: &Path) -> (HashMap<String, (PathBuf, u64)>, bool) {
     let mut out = HashMap::new();
-    for dir in entries(projects) {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-        for e in rd.flatten() {
+    let mut complete = true;
+    let dirs = match std::fs::read_dir(projects) {
+        Ok(dirs) => dirs,
+        Err(e) => return (out, e.kind() == std::io::ErrorKind::NotFound),
+    };
+    for dir in dirs {
+        let Ok(dir) = dir else { complete = false; continue };
+        match dir.file_type() {
+            Ok(t) if t.is_dir() => {}
+            Ok(t) if !t.is_symlink() => continue,
+            _ => { complete = false; continue; }
+        }
+        let Ok(rd) = std::fs::read_dir(dir.path()) else { complete = false; continue };
+        for entry in rd {
+            let Ok(e) = entry else { complete = false; continue };
             let n = e.file_name().to_string_lossy().to_string();
             if let Some(id) = n.strip_suffix(".jsonl") {
-                // On Windows the listing already carries the time; no need to open each file.
-                let at = e.metadata().map(|m| mtime_secs(&m)).unwrap_or(0);
-                out.insert(id.to_lowercase(), (e.path(), at));
+                let at = std::fs::symlink_metadata(e.path()).ok().filter(|m| m.is_file() && !m.is_symlink()).and_then(|m| super::cleanup_recency(&m)).unwrap_or(0);
+                if at == 0 { complete = false; }
+                // A copied session can occur in more than one project; keep its newest evidence.
+                let entry = out.entry(id.to_lowercase()).or_insert_with(|| (e.path(), at));
+                if at > entry.1 { *entry = (e.path(), at); }
             }
         }
     }
-    out
+    (out, complete)
 }
 
 fn slugify(name: &str) -> String {
@@ -347,6 +358,33 @@ mod tests {
         let found = resolve(&slug).unwrap();
         assert_eq!(found[found.len() - 2..], parts(&["my-app.v2", "web"]));
         assert_eq!(project_name(&slug), "web");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn transcript_evidence_uses_the_newest_copy_and_invalid_times_block_cleanup() {
+        use crate::trash::tests::{ctx, write};
+        let root = fixture("transcript-recency");
+        let paths = crate::paths::Paths::under(&root);
+        let id = "11111111-2222-3333-4444-555555555555";
+        let scratch = paths.temp.join("claude").join("C--Workspace-demo").join(id).join("old.bin");
+        let projects = paths.claude_dir().join("projects");
+        let old = projects.join("old-project").join(format!("{id}.jsonl"));
+        let new = projects.join("new-project").join(format!("{id}.jsonl"));
+        write(&scratch, 1, 100);
+        write(&old, 1, 100);
+        write(&new, 1, 1);
+        let (found, complete) = transcripts(&projects);
+        assert!(complete && found[id].0 == new);
+        let cfg = crate::config::TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let fresh = find(&ctx, 67 * 86_400);
+        assert_eq!(fresh.cands.len(), 1);
+        assert!(fresh.cands[0].age_known && !fresh.cands[0].goes && fresh.cands[0].age < 2 * 86_400);
+        std::fs::File::options().write(true).open(&new).unwrap().set_modified(std::time::UNIX_EPOCH).unwrap();
+        let unknown = find(&ctx, 67 * 86_400);
+        assert!(!unknown.cands[0].age_known && !unknown.cands[0].goes && !unknown.cands[0].optional);
+        assert_eq!(unknown.cands[0].reason, super::super::UNKNOWN_AGE);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

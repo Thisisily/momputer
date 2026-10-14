@@ -8,7 +8,7 @@
 //! Apps built on Electron (Cursor, VS Code, the Claude and Codex apps, Slack, Discord...) are
 //! browsers inside, with the same caches, plus one set per built-in browser tab (Partitions).
 //! The same rules apply: cache folders only, never Cookies, Local Storage or IndexedDB, and only
-//! while the app is closed.
+//! while the app is closed. An app whose processes cannot be identified stays locked.
 
 use super::{entries, name_of, tally_many, Cand, Found, Tally, TrashCtx, ENTRY_CAP};
 use std::path::{Path, PathBuf};
@@ -24,18 +24,24 @@ const CHROMIUM: &[(&str, &str, &[&str])] = &[
 const CACHE_DIRS: &[&str] = &["Cache", "Code Cache", "GPUCache"];
 
 /// The caches of an Electron app: the browser ones, and the graphics ones it rebuilds on start.
-const APP_CACHE_DIRS: &[&str] =
-    &["Cache", "Code Cache", "GPUCache", "DawnCache", "DawnWebGPUCache", "DawnGraphiteCache", "GrShaderCache", "ShaderCache"];
+const APP_CACHE_DIRS: &[&str] = crate::browser_data::CHROMIUM_CACHE_DIRS;
 
-/// Electron apps whose process isn't called after their folder: (folder, processes).
+/// Known Electron app process identities. A matching cache layout alone cannot establish
+/// whether an unknown app is closed, so it is displayed but never selected for cleanup.
 const APP_EXES: &[(&str, &[&str])] = &[
     ("Code", &["code.exe"]),
     ("Code - Insiders", &["code - insiders.exe"]),
+    ("Cursor", &["cursor.exe"]),
+    ("Slack", &["slack.exe"]),
     ("Claude", &["claude.exe"]),
     ("Codex", &["codex.exe", "chatgpt.exe"]),
     ("discord", &["discord.exe"]),
     ("Microsoft Teams", &["teams.exe", "ms-teams.exe"]),
     ("ai.opencode.desktop", &["opencode.exe", "opencode-desktop.exe"]),
+];
+
+const EPIC_EXES: &[&str] = &[
+    "epicgameslauncher.exe", "epicwebhelper.exe", "eosoverlayrenderer-win64-shipping.exe", "eosoverlayrenderer-win32-shipping.exe",
 ];
 
 /// Folders in %APPDATA% that aren't apps' own (or are handled elsewhere).
@@ -70,23 +76,39 @@ pub(super) fn find(ctx: &TrashCtx) -> Found {
     let mut f = Found::none(); // spread over several browsers' folders, so no single root
     f.available = true;
     let mut open: Vec<String> = Vec::new();
-    let all: Vec<PathBuf> = profiles.iter().flat_map(|p| p.targets.iter().cloned()).collect();
+    // Never traverse a cache through a link or an unverified parent, even just to measure it.
+    let safe: Vec<bool> = profiles.iter().map(|p| {
+        real_directory(&p.home) && p.targets.iter().all(|t| real_directory(t) && !crate::browser_data::protects_path(t))
+    }).collect();
+    let all: Vec<PathBuf> = profiles.iter().zip(&safe).filter(|(_, safe)| **safe).flat_map(|(p, _)| p.targets.iter().cloned()).collect();
     let mut measured = tally_many(&all, ENTRY_CAP, u64::MAX).into_iter();
-    for p in profiles {
+    for (p, safe) in profiles.into_iter().zip(safe) {
         let mut t = Tally::default();
-        for _ in &p.targets {
-            t.add(&measured.next().unwrap_or_default());
+        if safe {
+            for _ in &p.targets {
+                t.add(&measured.next().unwrap_or_default());
+            }
+        } else {
+            t.complete = false;
         }
-        if t.files == 0 {
+        if t.files == 0 && t.links == 0 && t.complete {
             continue;
         }
         let mut c = Cand::new(p.home.clone(), format!("{}, {}", p.browser, p.label), &t, ctx.now);
         c.targets = p.targets;
-        let c = if p.exes.iter().any(|e| ctx.running(e)) {
+        let c = if !safe {
+            c.verdict(false, "Cache path is linked, protected, or could not be checked")
+        } else if !t.complete || t.links > 0 {
+            c.verdict(false, "Cache contents could not be fully checked or contain links")
+        } else if p.exes.is_empty() {
+            c.verdict(false, "App process identity is unknown; clear its cache in the app")
+        } else if p.exes.iter().any(|e| ctx.running(e)) {
             if !open.contains(&p.browser) {
                 open.push(p.browser.clone());
             }
             c.verdict(false, format!("{} is open", p.browser))
+        } else if ctx.in_use(&p.home) || c.targets.iter().any(|t| ctx.in_use(t)) {
+            c.verdict(false, super::IN_USE)
         } else {
             c.verdict(true, "Rebuilt as you browse")
         };
@@ -117,8 +139,42 @@ pub(super) fn open_names(stays: &[Cand]) -> Vec<&str> {
     out
 }
 
+/// A size scan can take long enough for the app to start. Recheck immediately before each
+/// browser cleanup item, rather than relying only on the process snapshot that began it.
+pub(super) fn still_closed(home: &Path, ctx: &TrashCtx) -> bool {
+    let Some(profile) = profiles(&ctx.paths.local_appdata, &ctx.paths.appdata).into_iter().find(|p| p.home == home) else { return false };
+    if profile.exes.is_empty() || ctx.in_use(home) { return false; }
+    #[cfg(not(test))]
+    let running = crate::procs::running_names_now();
+    // Tests use their isolated fake process table, never the person's real browsers.
+    #[cfg(test)]
+    let running = Some(ctx.running_exes.clone());
+    running.is_some_and(|names| profile.exes.iter().all(|exe| !names.contains(exe)))
+}
+
 fn existing(dirs: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
-    dirs.into_iter().filter(|d| d.is_dir()).collect()
+    dirs.into_iter().filter(|d| match std::fs::symlink_metadata(d) {
+        Ok(m) => m.is_dir() || linked(&m),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }).collect()
+}
+
+fn linked(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if meta.file_attributes() & 0x400 != 0 { return true; }
+    }
+    meta.file_type().is_symlink()
+}
+
+/// Checking the leaf alone misses a cache reached through a linked profile or app folder.
+fn real_directory(path: &Path) -> bool {
+    path.is_absolute() && path.ancestors().all(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir() && !linked(&m)))
+}
+
+fn real_entries(dir: &Path) -> Vec<PathBuf> {
+    if real_directory(dir) { entries(dir) } else { Vec::new() }
 }
 
 fn is_profile_dir(name: &str) -> bool {
@@ -131,9 +187,9 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
     for (browser, exe, rel) in CHROMIUM {
         let data = rel.iter().fold(local.to_path_buf(), |p, r| p.join(r));
         let names = profile_names(&data);
-        for dir in entries(&data) {
+        for dir in real_entries(&data) {
             let n = name_of(&dir);
-            if !dir.is_dir() || !is_profile_dir(&n) {
+            if !real_directory(&dir) || !is_profile_dir(&n) {
                 continue;
             }
             let targets = existing(CACHE_DIRS.iter().map(|c| dir.join(c)));
@@ -151,9 +207,9 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
     // kept the default profile straight in the edition's folder (that counts as Default).
     let mut editions: Vec<String> = Vec::new();
     for base in [local, roaming] {
-        for e in entries(&base.join("Opera Software")) {
+        for e in real_entries(&base.join("Opera Software")) {
             let n = name_of(&e);
-            if e.is_dir() && !editions.contains(&n) {
+            if real_directory(&e) && !editions.contains(&n) {
                 editions.push(n);
             }
         }
@@ -168,6 +224,7 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
         for base in [local, roaming] {
             let ed = base.join("Opera Software").join(&edition);
             let mut add = |profile: String, dir: &Path| {
+                if !real_directory(dir) { return; }
                 let targets = existing(CACHE_DIRS.iter().map(|c| dir.join(c)));
                 if targets.is_empty() {
                     return;
@@ -178,9 +235,9 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
                 }
             };
             add("Default".into(), &ed);
-            for dir in entries(&ed) {
+            for dir in real_entries(&ed) {
                 let n = name_of(&dir);
-                if dir.is_dir() && is_profile_dir(&n) {
+                if real_directory(&dir) && is_profile_dir(&n) {
                     add(n, &dir);
                 }
             }
@@ -191,9 +248,10 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
         }
     }
     let ff = local.join("Mozilla").join("Firefox").join("Profiles");
-    for dir in entries(&ff) {
+    for dir in real_entries(&ff) {
+        if !real_directory(&dir) { continue; }
         let cache = dir.join("cache2");
-        if !cache.is_dir() {
+        if existing([cache.clone()]).is_empty() {
             continue;
         }
         let n = name_of(&dir);
@@ -207,19 +265,20 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
         });
     }
     out.extend(apps(local, roaming));
+    out.extend(epic(local));
     out
 }
 
 /// Electron apps: any folder in %APPDATA% (or a Store app's copy of it) with a browser cache in
 /// it. One item per app, its built-in browser tabs' caches included.
 fn apps(local: &Path, roaming: &Path) -> Vec<Profile> {
-    let mut homes: Vec<PathBuf> = entries(roaming).into_iter().filter(|d| !NOT_APPS.contains(&name_of(d).as_str())).collect();
-    for pkg in entries(&local.join("Packages")) {
-        homes.extend(entries(&pkg.join("LocalCache").join("Roaming")));
+    let mut homes: Vec<PathBuf> = real_entries(roaming).into_iter().filter(|d| !NOT_APPS.contains(&name_of(d).as_str())).collect();
+    for pkg in real_entries(&local.join("Packages")) {
+        homes.extend(real_entries(&pkg.join("LocalCache").join("Roaming")));
     }
     let mut out = Vec::new();
     for home in homes {
-        if !std::fs::symlink_metadata(&home).map(|m| m.is_dir()).unwrap_or(false) {
+        if !real_directory(&home) {
             continue;
         }
         let name = name_of(&home);
@@ -231,18 +290,44 @@ fn apps(local: &Path, roaming: &Path) -> Vec<Profile> {
             continue;
         }
         let mut targets = existing(APP_CACHE_DIRS.iter().map(|c| home.join(c)));
-        for part in entries(&home.join("Partitions")) {
-            targets.extend(existing(APP_CACHE_DIRS.iter().map(|c| part.join(c))));
+        for part in real_entries(&home.join("Partitions")) {
+            if real_directory(&part) {
+                targets.extend(existing(APP_CACHE_DIRS.iter().map(|c| part.join(c))));
+            }
         }
         if targets.is_empty() {
             continue;
         }
         let exes = match APP_EXES.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)) {
             Some((_, e)) => e.iter().map(|x| x.to_string()).collect(),
-            None => vec![format!("{}.exe", name.to_ascii_lowercase())],
+            None => Vec::new(),
         };
         let label = if home.join("Partitions").is_dir() { "app and built-in browser" } else { "app" };
         out.push(Profile { browser: name, exes, label: label.into(), home, targets });
+    }
+    out
+}
+
+/// Epic's `webcache` and `BrowserCache` are complete embedded-browser profiles, despite
+/// their names. Only their direct disposable cache children belong in this collector.
+fn epic(local: &Path) -> Vec<Profile> {
+    let mut out = Vec::new();
+    let saved = local.join("EpicGamesLauncher").join("Saved");
+    for home in real_entries(&saved) {
+        let name = name_of(&home);
+        let is_webcache = name == "webcache" || name.strip_prefix("webcache_").is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()));
+        if !is_webcache || !real_directory(&home) { continue; }
+        let targets = existing(APP_CACHE_DIRS.iter().map(|c| home.join(c)));
+        if !targets.is_empty() {
+            out.push(Profile { browser: "Epic Games launcher".into(), exes: EPIC_EXES.iter().map(|s| s.to_string()).collect(), label: name, home, targets });
+        }
+    }
+    let home = local.join("Epic Games").join("EOSOverlay").join("BrowserCache");
+    if real_directory(&home) {
+        let targets = existing(APP_CACHE_DIRS.iter().map(|c| home.join(c)));
+        if !targets.is_empty() {
+            out.push(Profile { browser: "Epic Games overlay".into(), exes: EPIC_EXES.iter().map(|s| s.to_string()).collect(), label: "browser cache".into(), home, targets });
+        }
     }
     out
 }
@@ -257,6 +342,9 @@ fn default_label(dir_name: &str) -> String {
 
 /// Profile folder -> the name people see in the browser ("Work", "Ilya"), from Local State.
 fn profile_names(user_data: &Path) -> Vec<(String, String)> {
+    if !real_directory(user_data) || !std::fs::symlink_metadata(user_data.join("Local State")).is_ok_and(|m| m.is_file() && !linked(&m) && m.len() <= 8 * 1024 * 1024) {
+        return vec![];
+    }
     let Ok(text) = std::fs::read_to_string(user_data.join("Local State")) else { return vec![] };
     let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return vec![] };
     v.get("profile")
@@ -272,10 +360,20 @@ fn profile_names(user_data: &Path) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use super::{Path, PathBuf, EPIC_EXES, profiles};
     use crate::config::TrashConfig;
     use crate::paths::Paths;
-    use crate::trash::tests::{ctx, fixture, write};
-    use crate::trash::{clean, measure};
+    use crate::trash::tests::{ctx, fixture, link, unlink, write};
+    use crate::trash::{clean, measure, Pick};
+
+    fn session_files(home: &Path) -> Vec<PathBuf> {
+        ["Network/Cookies", "Local Storage/leveldb/session", "Session Storage/session", "IndexedDB/session", "Service Worker/CacheStorage/session", "Sessions/session", "Login Data", "Preferences"]
+            .iter().map(|name| {
+                let path = home.join(name);
+                write(&path, 100, 400);
+                path
+            }).collect()
+    }
 
     #[test]
     fn caches_of_closed_browsers_go_open_ones_stay() {
@@ -339,6 +437,129 @@ mod tests {
         assert!(edge.join("Default").join("Cache").exists(), "Edge is open");
         assert!(edge.join("Default").join("Cookies").exists());
         assert!(ff.is_dir() && !ff.join("cache2").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn epic_profiles_offer_only_disposable_children_in_browser_caches() {
+        let root = fixture("epic-browser-leaves");
+        let paths = Paths::under(&root);
+        let saved = paths.local_appdata.join("EpicGamesLauncher").join("Saved");
+        let overlay = paths.local_appdata.join("Epic Games").join("EOSOverlay").join("BrowserCache");
+        let homes = [saved.join("webcache"), saved.join("webcache_4430"), saved.join("webcache_9999"), overlay];
+        let mut protected = Vec::new();
+        for home in &homes {
+            protected.extend(session_files(home));
+            write(&home.join("Cache").join("data"), 200, 400);
+            write(&home.join("Code Cache").join("js").join("data"), 300, 400);
+            write(&home.join("GPUCache").join("data"), 100, 400);
+        }
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("browser-cache", &ctx).unwrap();
+        assert_eq!((spot.reclaimable_items, spot.reclaimable_bytes), (4, 2400));
+        assert!(spot.items.iter().all(|i| i.name.starts_with("Epic Games launcher,") || i.name.starts_with("Epic Games overlay,")));
+        let old_apps = measure("app-leftovers", &ctx).unwrap();
+        assert!(!old_apps.items.iter().any(|i| i.path.contains("EpicGamesLauncher") || i.path.contains("EOSOverlay")));
+        let report = clean("browser-cache", &ctx, None);
+        assert_eq!((report.deleted, report.freed), (4, 2400));
+        assert!(homes.iter().all(|home| home.is_dir()), "a webcache name is a profile, never a deletion target");
+        assert!(protected.iter().all(|path| std::fs::metadata(path).is_ok_and(|m| m.len() == 100)), "all synthetic login/session markers survive");
+        assert!(homes.iter().all(|home| !home.join("Cache").exists() && !home.join("Code Cache").exists() && !home.join("GPUCache").exists()));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn every_epic_process_and_in_use_path_blocks_a_stale_explicit_pick() {
+        let root = fixture("epic-browser-open");
+        let paths = Paths::under(&root);
+        let home = paths.local_appdata.join("EpicGamesLauncher").join("Saved").join("webcache_4430");
+        let cache = home.join("Cache").join("data");
+        write(&cache, 200, 400);
+        let cfg = TrashConfig::default();
+        let mut ctx = ctx(&paths, &cfg);
+        assert_eq!(measure("browser-cache", &ctx).unwrap().reclaimable_items, 1);
+        let pick = Pick { goes: false, ticked: vec![home.to_string_lossy().into()], ..Default::default() };
+        for exe in EPIC_EXES {
+            ctx.running_exes.clear();
+            ctx.running_exes.insert((*exe).into());
+            let spot = measure("browser-cache", &ctx).unwrap();
+            assert!(spot.items.iter().all(|i| !i.goes && !i.optional), "{exe}");
+            assert_eq!(clean("browser-cache", &ctx, Some(&pick)).deleted, 0, "{exe}");
+            assert!(cache.exists());
+        }
+        ctx.running_exes.clear();
+        ctx.in_use = crate::util::norm_path(&cache.to_string_lossy());
+        assert_eq!(clean("browser-cache", &ctx, Some(&pick)).deleted, 0);
+        assert!(cache.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn unknown_electron_process_identity_cannot_be_overridden_by_tick_all() {
+        let root = fixture("browser-unknown-app");
+        let paths = Paths::under(&root);
+        let home = paths.appdata.join("An Unknown App");
+        let cache = home.join("Code Cache").join("js").join("data");
+        write(&cache, 200, 400);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("browser-cache", &ctx).unwrap();
+        assert_eq!(spot.items.len(), 1);
+        assert!(!spot.items[0].goes && !spot.items[0].optional);
+        assert!(spot.items[0].reason.contains("process identity is unknown"));
+        assert_eq!(clean("browser-cache", &ctx, Some(&Pick { new: true, ticked: vec![home.to_string_lossy().into()], ..Default::default() })).deleted, 0);
+        assert!(cache.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn cache_links_and_linked_profile_ancestors_never_reach_their_target() {
+        let root = fixture("browser-linked-cache");
+        let paths = Paths::under(&root);
+        let home = paths.local_appdata.join("EpicGamesLauncher").join("Saved").join("webcache_4430");
+        let elsewhere = root.join("elsewhere");
+        write(&elsewhere.join("session"), 200, 400);
+        std::fs::create_dir_all(&home).unwrap();
+        let cache_link = home.join("Cache");
+        link(&cache_link, &elsewhere);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        assert_eq!(clean("browser-cache", &ctx, Some(&Pick { new: true, ..Default::default() })).deleted, 0);
+        assert!(elsewhere.join("session").exists());
+        unlink(&cache_link);
+        write(&cache_link.join("data"), 100, 400);
+        let nested_link = cache_link.join("linked");
+        link(&nested_link, &elsewhere);
+        let spot = measure("browser-cache", &ctx).unwrap();
+        assert!(spot.items.iter().all(|i| !i.goes && !i.optional));
+        assert_eq!(clean("browser-cache", &ctx, Some(&Pick { new: true, ..Default::default() })).deleted, 0);
+        assert!(cache_link.join("data").exists() && elsewhere.join("session").exists());
+        unlink(&nested_link);
+        std::fs::remove_dir_all(&cache_link).unwrap();
+        std::fs::remove_dir(&home).unwrap();
+        link(&home, &elsewhere);
+        assert!(profiles(&paths.local_appdata, &paths.appdata).is_empty());
+        assert!(elsewhere.join("session").exists());
+        unlink(&home);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn an_auth_marker_inside_a_cache_locks_the_entire_candidate() {
+        let root = fixture("browser-cache-profile-marker");
+        let paths = Paths::under(&root);
+        let home = paths.local_appdata.join("EpicGamesLauncher").join("Saved").join("webcache");
+        let protected = home.join("Cache").join("nested").join("Network").join("Cookies");
+        write(&protected, 100, 400);
+        write(&home.join("Code Cache").join("data"), 200, 400);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("browser-cache", &ctx).unwrap();
+        assert!(spot.items.iter().all(|i| !i.goes && !i.optional));
+        assert_eq!(clean("browser-cache", &ctx, Some(&Pick { new: true, ..Default::default() })).deleted, 0);
+        assert!(protected.exists());
+        assert!(home.join("Code Cache").join("data").exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
