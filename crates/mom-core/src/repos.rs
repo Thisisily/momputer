@@ -297,7 +297,7 @@ fn plain(config: &str) -> bool {
             }
             // "[remote \"origin\"]" or "[remote.origin]": the section is the first word.
             let name = head[..end].trim();
-            section = name.split(|c: char| c == ' ' || c == '.' || c == '"').next().unwrap_or("").to_ascii_lowercase();
+            section = name.split([' ', '.', '"']).next().unwrap_or("").to_ascii_lowercase();
             if !PLAIN.iter().any(|(s, _)| *s == section) {
                 return false;
             }
