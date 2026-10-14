@@ -945,17 +945,20 @@
 
   function profileRow(b, p) {
     const key = `${b.id}|${p.dir}`;
+    const id = `pr-${hash(key)}`;
     const open = state.browserOpen === key;
     const on = p.extensions.filter((e) => e.on).length;
     const meta = [p.lastUsed ? `browser recorded activity ${agoText(p.lastUsed)}` : "profile activity unknown", p.extensions.length ? `${on} of ${plural(p.extensions.length, "extension")} on` : "no extensions"].filter(Boolean);
     const idle = p.lastUsed && Date.now() / 1000 - p.lastUsed > 180 * 86400;
-    return `<div class="row prof${open ? " is-open" : ""}" id="pr-${hash(key)}" data-led="${p.notes.length ? "red" : !p.lastUsed || idle ? "off" : "green"}">
-      <button class="row-name" data-act="profile-open" data-key="${esc(key)}" aria-expanded="${open}">${esc(p.name)}</button>
-      <div class="row-meta"><span class="why">${esc(meta.join(" · "))}${p.notes.length ? ` · <span class="hot">${plural(p.notes.length, "note")}</span>` : ""}</span></div>
-      <div class="row-nums num">${bytes(p.size)}</div>
-      <div class="row-nums2 num">${bytes(p.cache)} cache</div>
-      <div class="row-act"><span class="row-chev">${ICON.chevron}</span></div>
-      <div class="row-detail">${open ? profileDetail(b, p) : ""}</div>
+    return `<div class="row prof${open ? " is-open" : ""}" id="${id}" data-led="${p.notes.length ? "red" : !p.lastUsed || idle ? "off" : "green"}">
+      <button type="button" class="profile-toggle" data-act="profile-open" data-key="${esc(key)}" aria-expanded="${open}" aria-controls="${id}-details" aria-labelledby="${id}-name">
+        <span class="row-name" id="${id}-name">${esc(p.name)}</span>
+        <span class="row-meta"><span class="why">${esc(meta.join(" · "))}${p.notes.length ? ` · <span class="hot">${plural(p.notes.length, "note")}</span>` : ""}</span></span>
+        <span class="row-nums num">${bytes(p.size)}</span>
+        <span class="row-nums2 num">${bytes(p.cache)} cache</span>
+        <span class="row-act" aria-hidden="true"><span class="row-chev">${ICON.chevron}</span></span>
+      </button>
+      <div class="row-detail" id="${id}-details" role="region" aria-labelledby="${id}-name">${open ? profileDetail(b, p) : ""}</div>
     </div>`;
   }
 
