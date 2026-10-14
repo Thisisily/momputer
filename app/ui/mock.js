@@ -807,9 +807,9 @@
       return { id, freed, deleted: goes.length, skipped: 0, message };
     },
     admin_check: async () => (await wait(60), null),
-    app_version: () => "0.3.1",
+    app_version: () => "0.4.0",
     // "?update" in the address shows what a newer version looks like.
-    get_update: async () => (await wait(300), { current: "0.3.1", latest: location.search.includes("update") ? "0.3.2" : "0.3.1", newer: location.search.includes("update"), checked: now, asked: now, problem: null, getIt: "https://thisisily.github.io/momputer/" }),
+    get_update: async () => (await wait(300), { current: "0.4.0", latest: location.search.includes("update") ? "0.4.1" : "0.4.0", newer: location.search.includes("update"), checked: now, asked: now, problem: null, getIt: "https://thisisily.github.io/momputer/" }),
     measure_spot: async ({ id, more }) => {
       await wait(700);
       const s = spots.find((x) => x.id === id);
