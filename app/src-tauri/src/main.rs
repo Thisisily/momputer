@@ -428,6 +428,7 @@ fn look_once(app: &AppHandle, s: &S, cfg: &Config, codex: &mut mom_core::codex::
             };
             mom_core::attach_codex(&mut snap, codex.clone());
             alerts(app, s, cfg, &snap);
+            waiting_tick(app, s, cfg);
             update_tray(app, s, &snap);
             let _ = app.emit("snapshot", &snap);
             *s.snapshot.lk() = Some(snap);
@@ -1539,6 +1540,44 @@ fn teach_rules(agent: String, on: bool, s: State<'_, S>) -> Res<String> {
     msg.map_err(err)
 }
 
+// 0.5.0 A1: the Homework check, and agents waiting for you.
+
+/// What each agent session did this week, from its own log. Kept a minute unless `fresh`.
+#[tauri::command(async)]
+fn get_homework(fresh: Option<bool>, s: State<'_, S>) -> Vec<mom_core::homework::Receipt> {
+    mom_core::homework::recent(&s.paths, fresh.unwrap_or(false))
+}
+
+/// Agents waiting for you right now (when that switch is on).
+#[tauri::command(async)]
+fn get_waiting(s: State<'_, S>) -> Vec<mom_core::waiting::Waiting> {
+    mom_core::waiting::current(&s.paths)
+}
+
+/// Says when an agent has been waiting for you half a minute. Looks at most every ten seconds,
+/// and only at mom's own small folder of records, which is empty unless the switch is on.
+fn waiting_tick(app: &AppHandle, s: &Shared, cfg: &Config) {
+    use std::sync::atomic::AtomicU64;
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = now_secs();
+    if now.saturating_sub(LAST.load(Ordering::Relaxed)) < 10 {
+        return;
+    }
+    LAST.store(now, Ordering::Relaxed);
+    let due = mom_core::waiting::due(&s.paths);
+    if due.is_empty() {
+        return;
+    }
+    for w in &due {
+        let (title, body) = mom_core::waiting::sentence(w);
+        s.note(format!("{title} · {body}"));
+        if cfg.ui.notifications {
+            toast(app, &title, &body);
+        }
+    }
+    let _ = app.emit("waiting", due.len());
+}
+
 fn bundled_cli() -> PathBuf {
     let exe = std::env::current_exe().unwrap_or_default();
     exe.with_file_name(if cfg!(windows) { "mom.exe" } else { "mom" })
@@ -1970,6 +2009,9 @@ fn main() {
             get_history,
             undo_history,
             letter_read,
+            // 0.5.0 A1
+            get_homework,
+            get_waiting,
         ])
         .setup(move |app| {
             #[cfg(windows)]

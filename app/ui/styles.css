@@ -4478,3 +4478,15 @@ button.row-name:hover {
 .letter p + p {
   margin-top: 6px;
 }
+
+/* Running, Homework and Agents: an agent waiting for you. */
+.badge.waiting {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  margin-left: 6px;
+}
+
+.hw-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+}

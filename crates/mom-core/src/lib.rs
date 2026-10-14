@@ -18,6 +18,7 @@ pub mod disks;
 pub mod files;
 pub mod health;
 pub mod history;
+pub mod homework;
 pub mod hooks;
 pub mod icons;
 pub mod installed;
@@ -42,6 +43,7 @@ pub mod updates;
 pub mod trash;
 pub mod util;
 pub mod voice;
+pub mod waiting;
 pub mod winsettings;
 // 0.5.0 B: screens, devices, the network, starting and sleeping, stability, backups.
 mod backups;

@@ -175,6 +175,20 @@ enum Cmd {
     /// Hook entry point for agents (reads the event JSON on stdin).
     #[command(hide = true)]
     Hook { agent: String, event: String },
+    /// What each agent session did this week, from its own log: files changed, deletions,
+    /// installs, pushes, and how its last test or build went, beside what it said. Only looks.
+    Homework {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Agents tell mom they're waiting for you: Claude Code's hook passes the event on stdin,
+    /// Codex's notify program as the last argument.
+    #[command(hide = true)]
+    Notify {
+        #[arg(long)]
+        agent: String,
+        payload: Option<String>,
+    },
     /// Where mom keeps her settings.
     Config,
     /// What mom did: clean-ups, moves, tidy-ups, fixes and programs she stopped, newest first.
@@ -447,6 +461,39 @@ fn confirm(question: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
+/// Each session's receipt, a few lines each, the ones worth a look marked.
+fn print_homework(st: &Style, list: &[mom_core::homework::Receipt]) {
+    if list.is_empty() {
+        println!("No agent sessions in the last {} days.", mom_core::homework::DAYS);
+        return;
+    }
+    let now = mom_core::util::now_secs();
+    for r in list {
+        let name = format!("{} · {} · {}", r.agent, r.project.as_deref().unwrap_or("?"), if r.title.is_empty() { "Untitled" } else { &r.title });
+        println!("{}", if r.flags.is_empty() { st.bold(&name) } else { st.red(&name) });
+        let mut facts = vec![format!("{} ago", human_age(now.saturating_sub(r.ended))), plural(r.commands as u64, "command")];
+        if r.changed_count > 0 {
+            facts.push(format!("{} changed", plural(r.changed_count as u64, "file")));
+        }
+        if r.deleted_count > 0 {
+            facts.push(format!("{} deleted", r.deleted_count));
+        }
+        if !r.installs.is_empty() {
+            facts.push(plural(r.installs.len() as u64, "install"));
+        }
+        if !r.pushes.is_empty() {
+            facts.push(if r.pushes.len() == 1 { "1 push".into() } else { format!("{} pushes", r.pushes.len()) });
+        }
+        if let Some(c) = &r.last_check {
+            facts.push(format!("last test {}", if c.passed { "passed" } else { "failed" }));
+        }
+        println!("  {}", st.dim(&facts.join(" · ")));
+        for f in &r.flags {
+            println!("  {}", st.red(&format!("! {f}")));
+        }
+    }
+}
+
 fn print_json<T: serde::Serialize>(v: &T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(v)?);
     Ok(())
@@ -496,6 +543,7 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         | Some(Cmd::Pc { .. })
         | Some(Cmd::Browsers { .. })
         | Some(Cmd::Files { .. })
+        | Some(Cmd::Homework { .. })
         | Some(Cmd::Integrations { .. })
         | Some(Cmd::Config)
         | Some(Cmd::History { .. })
@@ -506,13 +554,13 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
         Some(Cmd::Stop { dry_run, .. }) => *dry_run,
         Some(Cmd::Tidy { apply, .. }) => !*apply,
         Some(Cmd::Rules { action }) => matches!(action, None | Some(RulesCmd::Show)),
-        Some(Cmd::Undo) | Some(Cmd::Install { .. }) | Some(Cmd::Uninstall { .. }) | Some(Cmd::Hook { .. }) => false,
+        Some(Cmd::Undo) | Some(Cmd::Install { .. }) | Some(Cmd::Uninstall { .. }) | Some(Cmd::Hook { .. }) | Some(Cmd::Notify { .. }) => false,
     }
 }
 
 fn run(cli: Cli) -> Result<i32> {
     if mom_core::elevate::is_elevated() && !allowed_elevated(&cli.cmd) {
-        if matches!(cli.cmd, Some(Cmd::Hook { .. })) {
+        if matches!(cli.cmd, Some(Cmd::Hook { .. } | Cmd::Notify { .. })) {
             return Ok(0); // an agent running as administrator: stay out of the way
         }
         bail!("mom only looks when run as administrator (and cleans what needs one). Run this from an ordinary terminal.");
@@ -1184,6 +1232,29 @@ fn run(cli: Cli) -> Result<i32> {
                 println!("{}", out.stdout);
             }
             return Ok(out.exit_code);
+        }
+        Some(Cmd::Homework { json }) => {
+            let list = mom_core::homework::recent(&paths, true);
+            if json {
+                print_json(&list)?;
+            } else {
+                print_homework(&st, &list);
+            }
+        }
+        Some(Cmd::Notify { agent, payload }) => {
+            // Never in an agent's way: whatever happens, it's told all is well.
+            let agent = agent.to_ascii_lowercase();
+            let input = match payload {
+                Some(p) => p,
+                None if agent == "claude" && !std::io::stdin().is_terminal() => {
+                    let mut s = String::new();
+                    let _ = std::io::stdin().take(512 * 1024).read_to_string(&mut s);
+                    s
+                }
+                None => String::new(),
+            };
+            let _ = mom_core::waiting::record(&paths, &agent, &input);
+            return Ok(0);
         }
         Some(Cmd::Config) => {
             println!("{}", paths.config_file().display());

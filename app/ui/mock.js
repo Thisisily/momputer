@@ -757,6 +757,7 @@
       { id: "codex-hooks", label: "Codex check-ins", detail: "Same hooks for Codex. Codex asks you to trust them once (/hooks in the CLI).", available: true, installed: false, path: "" },
       { id: "claude-skill", label: "mom skill for Claude", detail: "Teaches Claude how to clean up after itself and use the mom command.", available: true, installed: false, path: "" },
       { id: "codex-skill", label: "mom skill for Codex", detail: "The same skill, in ~/.agents/skills where Codex looks.", available: true, installed: false, path: "" },
+      { id: "agent-waiting", label: "Tell me when an agent is waiting", detail: "A note when Claude or Codex stops or needs you. Mom adds a small hook to them.", available: true, installed: false, path: "" },
     ],
   };
 
@@ -777,6 +778,36 @@
     setTimeout(() => emit("snapshot", JSON.parse(JSON.stringify(snapshot))), 600);
     return { stopped: [], alreadyGone: [], failed: [], freedMem: freed, groups: gone.length, message: gone.length === 1 ? "Turned it off. That's memory back for you." : `Turned off ${gone.length} things. That's memory back for you.` };
   }
+
+  // Homework: what each agent session did this week (made-up projects).
+  const homework = [
+    {
+      agent: "Codex", id: "0199c2f4-1a2b-7c3d-8e4f-5a6b7c8d9e0f", cwd: "C:\\Workspace\\storefront", project: "storefront", title: "Ship the launch video",
+      started: now - 3 * H, ended: now - 40, commands: 64,
+      changed: ["C:\\Workspace\\storefront\\src\\hero.tsx", "C:\\Workspace\\storefront\\src\\video\\cuts.ts", "C:\\Workspace\\storefront\\README.md"], changedCount: 12,
+      deleted: [{ path: "C:\\Workspace\\storefront\\renders\\draft-3.mp4", outside: false }], deletedCount: 1,
+      installs: ["npm i -D vitest"], pushes: [{ command: "git push origin main", force: false }],
+      lastCheck: { command: "npm test", passed: false, at: now - 120 }, flags: ["Said tests pass; the last test run failed"], partial: false,
+      link: "codex://threads/0199c2f4-1a2b-7c3d-8e4f-5a6b7c8d9e0f",
+    },
+    {
+      agent: "Claude Code", id: "0191f20b", cwd: "C:\\Workspace\\atlas", project: "atlas", title: "Tidy the Atlas map tiles",
+      started: now - 26 * H, ended: now - 22 * H, commands: 31,
+      changed: ["C:\\Workspace\\atlas\\tiles\\index.json", "C:\\Workspace\\atlas\\scripts\\cut.py"], changedCount: 6,
+      deleted: [{ path: "C:\\Users\\me\\Documents\\atlas-old", outside: true }, { path: "tiles\\cache", outside: false }], deletedCount: 2,
+      installs: [], pushes: [{ command: "git push --force origin tiles", force: true }],
+      lastCheck: { command: "cargo test", passed: true, at: now - 22 * H }, flags: ["Deleted something outside its project", "Force-pushed"], partial: false, link: null,
+    },
+    {
+      agent: "Claude Code", id: "5f2a91c0", cwd: "C:\\Workspace\\nimbus", project: "nimbus", title: "Nimbus onboarding copy",
+      started: now - 74 * H, ended: now - 72 * H, commands: 9,
+      changed: ["C:\\Workspace\\nimbus\\copy\\welcome.md", "C:\\Workspace\\nimbus\\copy\\steps.md", "C:\\Workspace\\nimbus\\copy\\done.md"], changedCount: 3,
+      deleted: [], deletedCount: 0, installs: [], pushes: [],
+      lastCheck: { command: "pnpm build", passed: true, at: now - 72 * H }, flags: [], partial: false, link: null,
+    },
+  ];
+  // "?waiting" shows an agent waiting for you (off by default so the pictures don't change).
+  const waiting = [{ agent: "claude", session: "0191f20b", cwd: "C:\\Workspace\\storefront", project: "storefront", kind: "needs-you", at: now - 12 * 60, transcript: null, told: true }];
 
   const handlers = {
     get_snapshot: () => JSON.parse(JSON.stringify(snapshot)),
@@ -1077,6 +1108,8 @@
     undo_tidy: async () => ({ restored: 18, failed: [], message: "Put back 18 things, exactly as they were." }),
     chore_prompt: () => "Mom here. Your room got an F...",
     // "?late" in the address shows skills that are behind; otherwise every copy is the newest.
+    get_homework: async () => (await wait(400), JSON.parse(JSON.stringify(homework))),
+    get_waiting: () => (location.search.includes("waiting") ? waiting : []),
     get_rules: () => {
       if (location.search.includes("late")) return rules;
       const fresh = JSON.parse(JSON.stringify(rules));
