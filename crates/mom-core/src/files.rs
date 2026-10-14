@@ -632,6 +632,13 @@ fn full_hash(path: &Path, cancel: &AtomicBool, read: &mut dyn FnMut(u64)) -> Has
 /// file only if it's unchanged. Nothing you said to keep (`keep`: `TrashConfig.keep`) goes,
 /// whatever is ticked. Never deletes anything for good. The saved scan is updated.
 pub fn recycle(paths: &Paths, files: &[PathBuf], keep: &[String]) -> RecycleReport {
+    if !crate::FILE_CLEANUP_AVAILABLE {
+        return RecycleReport {
+            skipped: files.iter().map(|path| Skipped { path: path.clone(), why: crate::FILE_CLEANUP_UNAVAILABLE.into() }).collect(),
+            message: crate::FILE_CLEANUP_UNAVAILABLE.into(),
+            ..Default::default()
+        };
+    }
     let mut room = crate::trash::bin::Room::default();
     recycle_with(paths, files, keep, &mut |p, size| room.fits(p, size), &mut |p| ::trash::delete(p).is_ok())
 }
@@ -810,6 +817,26 @@ pub fn load_saved(paths: &Paths) -> Option<FilesReport> {
 mod tests {
     use super::*;
     use std::fs::FileTimes;
+
+    #[test]
+    fn partial_release_refuses_recycling_without_reading_or_rewriting_the_saved_scan() {
+        let root = fixture("partial-release-refusal");
+        let paths = Paths::under(&root);
+        let source = root.join("important.pdf");
+        put(&source, b"important file");
+        let saved = saved_file(&paths);
+        put(&saved, b"saved state must remain byte-identical even if unreadable as a scan");
+        let before = std::fs::read(&saved).unwrap();
+        let result = recycle(&paths, std::slice::from_ref(&source), &[]);
+        assert_eq!(result.message, crate::FILE_CLEANUP_UNAVAILABLE);
+        assert!(result.recycled.is_empty());
+        assert_eq!(result.freed, 0);
+        assert_eq!(result.skipped.len(), 1);
+        assert_eq!(result.skipped[0].path, source);
+        assert_eq!(std::fs::read(&source).unwrap(), b"important file");
+        assert_eq!(std::fs::read(&saved).unwrap(), before);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     fn fixture(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("mom-files-{name}-{}", std::process::id()));

@@ -1216,6 +1216,37 @@ button.row-name:hover {
   font-size: 13px;
 }
 
+.row.prof {
+  display: block;
+  padding: 0;
+}
+
+.row.prof::before {
+  z-index: 1;
+  pointer-events: none;
+}
+
+.profile-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-areas: "name nums act" "meta nums2 act";
+  column-gap: 10px;
+  width: 100%;
+  padding: 12px 0 12px 17px;
+  border-radius: 10px;
+  text-align: left;
+  transition: background 160ms ease;
+}
+
+.profile-toggle:hover,
+.profile-toggle:focus-visible {
+  background: var(--card-hover);
+}
+
+.row.prof > .row-detail {
+  margin: 0 0 12px 17px;
+}
+
 .row.prof .row-chev .ico {
   transition: transform 200ms ease;
 }

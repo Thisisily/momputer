@@ -214,6 +214,11 @@ const MARGIN: u64 = 1 << 30;
 
 /// Moves a folder into the archive at `root` and leaves a link in its place.
 pub fn move_out(paths: &Paths, from: &Path, root: &Path, name: &str, spot: &str) -> Result<Moved, String> {
+    if !crate::FILE_CLEANUP_AVAILABLE { return Err(crate::FILE_CLEANUP_UNAVAILABLE.into()); }
+    move_out_enabled(paths, from, root, name, spot)
+}
+
+fn move_out_enabled(paths: &Paths, from: &Path, root: &Path, name: &str, spot: &str) -> Result<Moved, String> {
     let meta = std::fs::symlink_metadata(from).map_err(|_| format!("{name} isn't there any more."))?;
     if meta.is_symlink() {
         return Err(format!("{name} has already been moved."));
@@ -293,6 +298,11 @@ pub fn move_out(paths: &Paths, from: &Path, root: &Path, name: &str, spot: &str)
 
 /// Puts a moved folder back where it was and removes it from the archive.
 pub fn bring_back(paths: &Paths, from: &Path) -> Result<Moved, String> {
+    if !crate::FILE_CLEANUP_AVAILABLE { return Err(crate::FILE_CLEANUP_UNAVAILABLE.into()); }
+    bring_back_enabled(paths, from)
+}
+
+fn bring_back_enabled(paths: &Paths, from: &Path) -> Result<Moved, String> {
     let mut all = list(paths);
     let Some(m) = all.iter().find(|m| m.from == from).cloned() else {
         return Err("Mom didn't move that one.".into());
@@ -351,6 +361,11 @@ pub fn bring_back(paths: &Paths, from: &Path) -> Result<Moved, String> {
 /// Deletes a moved folder from the archive for good, and its link. For things nobody needs
 /// back (the data of an app that's gone, say).
 pub fn delete_moved(paths: &Paths, from: &Path) -> Result<Moved, String> {
+    if !crate::FILE_CLEANUP_AVAILABLE { return Err(crate::FILE_CLEANUP_UNAVAILABLE.into()); }
+    delete_moved_enabled(paths, from)
+}
+
+fn delete_moved_enabled(paths: &Paths, from: &Path) -> Result<Moved, String> {
     let mut all = list(paths);
     let Some(m) = all.iter().find(|m| m.from == from).cloned() else {
         return Err("Mom didn't move that one.".into());
@@ -374,8 +389,45 @@ pub fn delete_moved(paths: &Paths, from: &Path) -> Result<Moved, String> {
 }
 
 #[cfg(test)]
+pub(crate) fn move_out_fixture(paths: &Paths, from: &Path, root: &Path, name: &str, spot: &str) -> Result<Moved, String> {
+    move_out_enabled(paths, from, root, name, spot)
+}
+
+#[cfg(test)]
+pub(crate) fn bring_back_fixture(paths: &Paths, from: &Path) -> Result<Moved, String> {
+    bring_back_enabled(paths, from)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use super::{bring_back_enabled as bring_back, delete_moved_enabled as delete_moved, move_out_enabled as move_out};
+
+    #[test]
+    fn partial_release_keeps_archived_data_and_records_unchanged() {
+        let (root, paths) = fixture("partial-release-refusal");
+        let from = paths.home.join("original");
+        let original = from.join("original.txt");
+        write(&original, 16, 10);
+        let archive = root.join("archive");
+        let to = archive.join("saved");
+        let file = to.join("important.txt");
+        write(&file, 32, 10);
+        let moved = Moved { from: from.clone(), to, archive: archive.clone(), name: "Saved data".into(), spot: "forgotten-apps".into(), bytes: 32, files: 1, moved_at: 1 };
+        save(&paths, &[moved]);
+        let record = std::fs::read(record_file(&paths)).unwrap();
+        let manifest = std::fs::read(archive.join(MANIFEST)).unwrap();
+        let new_archive = root.join("new-archive");
+        assert_eq!(super::move_out(&paths, &from, &new_archive, "Original", "forgotten-apps").unwrap_err(), crate::FILE_CLEANUP_UNAVAILABLE);
+        assert_eq!(super::bring_back(&paths, &from).unwrap_err(), crate::FILE_CLEANUP_UNAVAILABLE);
+        assert_eq!(super::delete_moved(&paths, &from).unwrap_err(), crate::FILE_CLEANUP_UNAVAILABLE);
+        assert_eq!(std::fs::read(&file).unwrap(), vec![b'x'; 32]);
+        assert_eq!(std::fs::read(&original).unwrap(), vec![b'x'; 16]);
+        assert!(!new_archive.exists());
+        assert_eq!(std::fs::read(record_file(&paths)).unwrap(), record);
+        assert_eq!(std::fs::read(archive.join(MANIFEST)).unwrap(), manifest);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     fn fixture(name: &str) -> (PathBuf, Paths) {
         let root = std::env::temp_dir().join(format!("mom-archive-{name}-{}", std::process::id()));

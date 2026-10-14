@@ -15,6 +15,12 @@ mod harness;
 mod walk;
 
 use crate::agents::AgentKind;
+#[cfg(not(test))]
+use crate::archive::move_out as archive_move_out;
+// Legacy cleanup fixtures exercise the archive implementation. Public release refusals
+// have their own tests and remain active even in the test build.
+#[cfg(test)]
+use crate::archive::move_out_fixture as archive_move_out;
 use crate::config::{Config, TrashConfig};
 use crate::paths::Paths;
 use crate::procs::ProcTable;
@@ -1902,6 +1908,15 @@ fn batch_items(total: usize) -> usize {
 /// goes). In-use things never go. Tool spots ignore `pick`. Reports how it's going to
 /// `ctx.live`, and stops between items (or batches of small ones) when asked.
 pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
+    if !crate::FILE_CLEANUP_AVAILABLE {
+        return CleanReport { id: id.to_string(), message: crate::FILE_CLEANUP_UNAVAILABLE.into(), ..Default::default() };
+    }
+    clean_enabled(id, ctx, pick)
+}
+
+// The legacy implementation remains fixture-tested; it is not reachable through the public
+// cleanup API in this partial release, including tool, archive and elevated requests.
+fn clean_enabled(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     let mut r = CleanReport { id: id.to_string(), ..Default::default() };
     let Some(def) = def(id) else {
         r.message = format!("Mom doesn't know a spot called {id:?}.");
@@ -2260,7 +2275,7 @@ fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport) -> CleanRep
         if let Some(l) = ctx.live {
             l.working_on(c);
         }
-        let (ok, freed) = match crate::archive::move_out(ctx.paths, &c.path, &root, &c.name, &r.id) {
+        let (ok, freed) = match archive_move_out(ctx.paths, &c.path, &root, &c.name, &r.id) {
             Ok(m) => {
                 r.freed += m.bytes;
                 r.deleted += 1;
@@ -2399,7 +2414,30 @@ pub fn age_of(path: &Path, now: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::clean_enabled as clean;
     use crate::config::TrashConfig;
+
+    #[test]
+    fn partial_release_refuses_every_public_cleanup_before_touching_files() {
+        let root = fixture("partial-release-refusal");
+        let paths = Paths::under(&root);
+        let file = paths.temp.join("old-scratch.txt");
+        write(&file, 32, 100);
+        let original = std::fs::read(&file).unwrap();
+        let cfg = TrashConfig::default();
+        let mut ctx = ctx(&paths, &cfg);
+        for elevated in [false, true] {
+            ctx.elevated = elevated;
+            for id in spot_ids() {
+                let result = super::clean(id, &ctx, Some(&Pick::default()));
+                assert_eq!(result.message, crate::FILE_CLEANUP_UNAVAILABLE, "{id}");
+                assert_eq!((result.deleted, result.freed), (0, 0), "{id}");
+            }
+        }
+        assert_eq!(std::fs::read(&file).unwrap(), original);
+        assert!(!paths.mom.exists(), "no cleanup state, archive or undo record may be created");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     pub(super) fn touch_old(path: &Path, days: u64) {
         touch_secs(path, days * 86_400);

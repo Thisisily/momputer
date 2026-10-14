@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -14,6 +18,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Test the core and the CLI
         run: cargo test -p mom-core -p mom-cli
+      - name: Test UI regressions
+        run: node --test tests/*.test.cjs
       - name: Build the app
         shell: pwsh
         run: ./scripts/build.ps1 -NoBundle

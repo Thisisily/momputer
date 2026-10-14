@@ -67,9 +67,16 @@ Want every detail? [momputer, in detail](docs/in-detail.md).
 
 ## Install
 
+**0.3.1 UI fallback:** this release uses the 0.3.0 backend with browser-card interaction,
+selection-state, wording and taskbar fixes. File cleanup, archive moves/restores/deletion,
+duplicate recycling and Room Apply/Undo are temporarily unavailable while their safety
+update is validated. Scans, previews and Room plans remain available. The broader 0.3.1
+backend changes are not included.
+
 **[Download for Windows](https://thisisily.github.io/momputer/)**: one button, three steps.
 
-It isn't code-signed yet, so Windows warns that it's from an unknown publisher. Choose **More info**, then **Run anyway**.
+It isn't code-signed yet, so Windows may show an unknown-publisher warning. A malware detection
+is different: leave any detected file quarantined and do not bypass antivirus protection.
 
 Mom lives by the clock. Click her for the widget. The arrows in its title bar are BIG MODE. When a newer version is out, a red light shows on the "i", with the button to get it.
 
@@ -89,7 +96,8 @@ cargo build --release -p mom-cli -p momputer
 .\target\release\momputer.exe
 ```
 
-Run from a folder of your own like this, it all works except the clean-ups that need an administrator: mom won't ask for one from a folder anything running as you could change.
+Run from a folder of your own like this to try the app. File cleanup remains disabled in
+0.3.1, including in source builds and the CLI.
 
 </details>
 

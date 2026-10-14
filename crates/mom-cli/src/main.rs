@@ -502,6 +502,10 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
 }
 
 fn run(cli: Cli) -> Result<i32> {
+    // Refuse before loading user state, measuring candidates, or entering the elevated path.
+    if cleanup_unavailable(&cli.cmd) {
+        bail!("{}", mom_core::FILE_CLEANUP_UNAVAILABLE);
+    }
     if mom_core::elevate::is_elevated() && !allowed_elevated(&cli.cmd) {
         if matches!(cli.cmd, Some(Cmd::Hook { .. })) {
             return Ok(0); // an agent running as administrator: stay out of the way
@@ -1568,9 +1572,35 @@ fn install(st: &Style, paths: &Paths, what: Vec<String>, on: bool) -> Result<i32
     Ok(0)
 }
 
+fn cleanup_unavailable(cmd: &Option<Cmd>) -> bool {
+    !mom_core::FILE_CLEANUP_AVAILABLE && matches!(cmd,
+        Some(Cmd::Trash { action: Some(TrashCmd::Clean { .. }), .. })
+        | Some(Cmd::Tidy { apply: true, .. })
+        | Some(Cmd::Undo)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_release_cleanup_commands_fail_before_loading_state() {
+        for args in [
+            vec!["trash", "clean", "all", "--yes"],
+            vec!["trash", "clean", "windows-junk", "--yes", "--elevated"],
+            vec!["tidy", "--apply"],
+            vec!["undo"],
+        ] {
+            let cli = Cli::try_parse_from(std::iter::once("mom").chain(args.iter().copied())).unwrap();
+            let error = run(cli).unwrap_err();
+            assert_eq!(error.to_string(), mom_core::FILE_CLEANUP_UNAVAILABLE, "{args:?}");
+        }
+        for args in [vec!["trash", "--json"], vec!["files", "--json"], vec!["tidy", "--json"], vec!["settings"]] {
+            let cli = Cli::try_parse_from(std::iter::once("mom").chain(args.iter().copied())).unwrap();
+            assert!(!cleanup_unavailable(&cli.cmd), "inspection remains available: {args:?}");
+        }
+    }
 
     #[test]
     fn as_administrator_mom_only_looks_and_cleans_what_needs_one() {

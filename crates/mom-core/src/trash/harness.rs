@@ -1099,7 +1099,7 @@ mod tests {
     use crate::config::TrashConfig;
     use crate::paths::Paths;
     use crate::trash::tests::{ctx, fixture, write};
-    use crate::trash::{clean, measure};
+    use crate::trash::{clean_enabled as clean, measure};
 
     #[test]
     fn each_tool_loses_only_its_old_leftovers() {
@@ -1273,7 +1273,7 @@ mod tests {
         assert_eq!(again.reclaimable_items, 0);
         assert_eq!(crate::archive::list(&paths).len(), 3);
         for m in crate::archive::list(&paths) {
-            crate::archive::bring_back(&paths, &m.from).unwrap();
+            crate::archive::bring_back_fixture(&paths, &m.from).unwrap();
         }
         std::fs::remove_dir_all(&root).unwrap();
     }

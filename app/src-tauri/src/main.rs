@@ -820,6 +820,9 @@ fn stop_clean(s: State<'_, S>) {
 
 #[tauri::command]
 async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: State<'_, S>) -> Res<trash::CleanReport> {
+    if !mom_core::FILE_CLEANUP_AVAILABLE {
+        return Err(mom_core::FILE_CLEANUP_UNAVAILABLE.into());
+    }
     let s = s.inner().clone();
     let s2 = s.clone();
     let report = tauri::async_runtime::spawn_blocking(move || {
@@ -849,6 +852,10 @@ async fn clean_trash(id: String, pick: Option<trash::Pick>, app: AppHandle, s: S
 /// notes what would go beforehand and looks at what's gone afterwards.
 fn clean_as_admin(s: &Shared, id: &str, pick: Option<&trash::Pick>) -> trash::CleanReport {
     let mut r = trash::CleanReport { id: id.to_string(), ..Default::default() };
+    if !mom_core::FILE_CLEANUP_AVAILABLE {
+        r.message = mom_core::FILE_CLEANUP_UNAVAILABLE.into();
+        return r;
+    }
     let Some(mom) = std::env::current_exe().ok().map(|e| e.with_file_name("mom.exe")).filter(|m| m.is_file()) else {
         r.message = "mom.exe isn't next to the app, so it can't clean this as an administrator.".into();
         return r;
@@ -940,13 +947,16 @@ fn stop_files_scan(s: State<'_, S>) {
 /// Sends what's ticked to the Recycle Bin, never the last copy of anything and nothing you said
 /// to keep (see files::recycle).
 #[tauri::command(async)]
-fn recycle_files(paths: Vec<String>, s: State<'_, S>) -> mom_core::files::RecycleReport {
+fn recycle_files(paths: Vec<String>, s: State<'_, S>) -> Res<mom_core::files::RecycleReport> {
+    if !mom_core::FILE_CLEANUP_AVAILABLE {
+        return Err(mom_core::FILE_CLEANUP_UNAVAILABLE.into());
+    }
     let files: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let r = mom_core::files::recycle(&s.paths, &files, &s.cfg().trash.keep);
     if r.freed > 0 {
         s.note(format!("Moved {} of copies and old files to the Recycle Bin.", human_bytes(r.freed)));
     }
-    r
+    Ok(r)
 }
 
 // ------------------------------------------------------------ Windows settings
@@ -1107,6 +1117,9 @@ async fn choose_archive_dir(app: AppHandle, s: State<'_, S>) -> Res<Option<Archi
 /// Puts a moved conversation folder back where it was.
 #[tauri::command]
 async fn bring_back(from: String, app: AppHandle, s: State<'_, S>) -> Res<String> {
+    if !mom_core::FILE_CLEANUP_AVAILABLE {
+        return Err(mom_core::FILE_CLEANUP_UNAVAILABLE.into());
+    }
     let s = s.inner().clone();
     let s2 = s.clone();
     let m = tauri::async_runtime::spawn_blocking(move || mom_core::archive::bring_back(&s.paths, std::path::Path::new(&from)))
@@ -1120,6 +1133,9 @@ async fn bring_back(from: String, app: AppHandle, s: State<'_, S>) -> Res<String
 /// Deletes a moved folder from the archive for good (and its link).
 #[tauri::command]
 async fn delete_moved(from: String, app: AppHandle, s: State<'_, S>) -> Res<String> {
+    if !mom_core::FILE_CLEANUP_AVAILABLE {
+        return Err(mom_core::FILE_CLEANUP_UNAVAILABLE.into());
+    }
     let s = s.inner().clone();
     let s2 = s.clone();
     let m = tauri::async_runtime::spawn_blocking(move || mom_core::archive::delete_moved(&s.paths, std::path::Path::new(&from)))
@@ -1334,6 +1350,9 @@ fn remove_room(path: String, s: State<'_, S>) -> Res<()> {
 
 #[tauri::command]
 async fn apply_tidy(path: String, ids: Vec<String>, s: State<'_, S>) -> Res<tidy::ApplyReport> {
+    if !mom_core::FILE_CLEANUP_AVAILABLE {
+        return Err(mom_core::FILE_CLEANUP_UNAVAILABLE.into());
+    }
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let report = s.rooms.lk().get(&path).cloned().ok_or("Look at the room first.")?;
@@ -1351,6 +1370,9 @@ async fn apply_tidy(path: String, ids: Vec<String>, s: State<'_, S>) -> Res<tidy
 
 #[tauri::command]
 async fn undo_tidy(s: State<'_, S>) -> Res<tidy::UndoReport> {
+    if !mom_core::FILE_CLEANUP_AVAILABLE {
+        return Err(mom_core::FILE_CLEANUP_UNAVAILABLE.into());
+    }
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let r = tidy::undo_last(&s.paths.journal_dir());
@@ -1602,8 +1624,8 @@ fn reveal(path: String, app: AppHandle) -> Res<()> {
     app.opener().reveal_item_in_dir(path).map_err(err)
 }
 
-/// BIG MODE: the widget becomes a normal-sized window, in the taskbar and in the middle of the
-/// screen. And back: the small widget by the tray again.
+/// BIG MODE: the widget becomes a normal-sized window in the middle of the screen. And back:
+/// the small widget by the tray again. Both sizes keep the main window in the taskbar.
 /// `smooth`: a stand-in card carries the change (see `make_card`) while the real window moves
 /// unseen. Then this returns true, and the widget calls `big_arrived` once its page is laid out
 /// for the new size. Off for anyone who asked Windows for less motion. `bg`: the page's colour.
@@ -1648,7 +1670,6 @@ fn set_big(on: bool, smooth: Option<bool>, bg: Option<String>, app: AppHandle, s
             let _ = win.set_size(tauri::LogicalSize::new(420.0, 680.0));
             place_window(&win);
         }
-        let _ = win.set_skip_taskbar(true);
         let _ = win.set_always_on_top(s.cfg().ui.always_on_top);
     }
     carried

@@ -342,12 +342,12 @@
             </a>
           </p>
           <p>If you end up on GitHub's releases page, open <b>Assets</b> and pick the file ending in <code>-setup.exe</code>.</p>
-          <p class="small">If your browser says the file isn't commonly downloaded, that's only because it's new: choose <b>Keep</b>.</p>
+          <p class="small">Check that the download came from this repository. Leave any file identified as malware quarantined.</p>
         </li>
         <li class="card step">
           <span class="step-num dot" aria-hidden="true">2</span>
           <h3>Open it</h3>
-          <p>Double-click the file in your Downloads. momputer isn't code-signed yet, so Windows may say <b>"Windows protected your PC"</b>. Click <b>More info</b>, then <b>Run anyway</b>.</p>
+          <p>Double-click the file in your Downloads. momputer isn't code-signed yet, so Windows may show an unknown-publisher warning. A malware detection is different: do not bypass it.</p>
           <div class="mock" aria-hidden="true">
             <p class="mock-title">Windows protected your PC</p>
             <p class="mock-text">Microsoft Defender SmartScreen prevented an unrecognized app from starting.</p>
@@ -469,13 +469,13 @@
         </details>
         <details class="card">
           <summary>Why does Windows say "unknown publisher"?</summary>
-          <p>The builds aren't code-signed yet, so Windows can't show who made them. Choose <b>More info</b>, then <b>Run anyway</b>.</p>
+          <p>The builds aren't code-signed yet, so Windows can't verify the publisher. A malware detection is a separate warning; leave detected files quarantined.</p>
           <p>Releases are built from the repository by GitHub Actions. To be sure your file matches the one in the release, <a href="#verify">check the download</a>.</p>
         </details>
         <details class="card">
           <summary>Does it need administrator rights?</summary>
           <p>Only to install, once. momputer installs for everyone on the PC, in Program Files, so Windows asks.</p>
-          <p>Mom herself never runs as administrator. A few clean-ups need those rights (like Windows Update's leftover downloads); when you press their button, Windows asks you first.</p>
+          <p>Mom herself never runs as administrator. File cleanup is temporarily unavailable in 0.3.1; scans and previews remain available.</p>
         </details>
         <details class="card">
           <summary>Does it send anything anywhere?</summary>

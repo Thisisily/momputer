@@ -275,7 +275,7 @@ mod tests {
     use crate::config::TrashConfig;
     use crate::paths::Paths;
     use crate::trash::tests::{ctx, fixture, write};
-    use crate::trash::{clean, measure};
+    use crate::trash::{clean_enabled as clean, measure};
 
     #[test]
     fn caches_of_closed_browsers_go_open_ones_stay() {

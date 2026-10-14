@@ -5,7 +5,8 @@
   "description": "Pins the browser libraries the widget uses. `npm install && npm run vendor` copies them into app/ui/vendor, which is committed, so building momputer never needs npm.",
   "scripts": {
     "vendor": "node scripts/vendor.js",
-    "icons": "node scripts/icons.js"
+    "icons": "node scripts/icons.js",
+    "test": "node --test tests/*.test.cjs"
   },
   "devDependencies": {
     "@fontsource-variable/doto": "5.3.0",

@@ -1005,6 +1005,13 @@ fn within(room: &Path, p: &Path) -> bool {
 }
 
 pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyReport {
+    if !crate::FILE_CLEANUP_AVAILABLE {
+        return ApplyReport { failed: vec![crate::FILE_CLEANUP_UNAVAILABLE.into()], message: crate::FILE_CLEANUP_UNAVAILABLE.into(), ..Default::default() };
+    }
+    apply_enabled(report, ids, journal_dir)
+}
+
+fn apply_enabled(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyReport {
     let mut r = ApplyReport::default();
     let mut journal = Journal { room: report.path.clone(), at: now_secs(), entries: vec![] };
     let room = Path::new(&report.path);
@@ -1219,6 +1226,13 @@ enum Back {
 /// where they are. And what couldn't go back this time stays on the record, so undoing again,
 /// once the way is clear, finishes the job without redoing what's done.
 pub fn undo_last(journal_dir: &Path) -> UndoReport {
+    if !crate::FILE_CLEANUP_AVAILABLE {
+        return UndoReport { failed: vec![crate::FILE_CLEANUP_UNAVAILABLE.into()], message: crate::FILE_CLEANUP_UNAVAILABLE.into(), ..Default::default() };
+    }
+    undo_last_enabled(journal_dir)
+}
+
+fn undo_last_enabled(journal_dir: &Path) -> UndoReport {
     let mut r = UndoReport::default();
     let mut files: Vec<((u64, u32), PathBuf)> = std::fs::read_dir(journal_dir)
         .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).filter_map(|f| journal_order(&f).map(|order| (order, f))).collect())
@@ -1454,6 +1468,31 @@ pub fn chore_prompt(report: &RoomReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::{apply_enabled as apply, undo_last_enabled as undo_last};
+
+    #[test]
+    fn partial_release_refuses_apply_and_undo_without_creating_or_changing_journals() {
+        let root = std::env::temp_dir().join(format!("mom-tidy-partial-release-{}", std::process::id()));
+        let source = root.join("important.txt");
+        write(&source, "keep this file");
+        let report = inspect(&root, &TidyConfig::default()).unwrap();
+        let journal = root.join("journal");
+        let applied = super::apply(&report, &[], &journal);
+        assert_eq!(applied.message, crate::FILE_CLEANUP_UNAVAILABLE);
+        assert_eq!(applied.failed, [crate::FILE_CLEANUP_UNAVAILABLE]);
+        assert_eq!((applied.moved, applied.recycled, applied.removed), (0, 0, 0));
+        assert!(!journal.exists(), "refusal must precede journal creation");
+        // The ordinary undo path removes stale, empty journals; the release gate must not.
+        let old = journal.join("tidy-1-001.json");
+        write(&old, "");
+        let undone = super::undo_last(&journal);
+        assert_eq!(undone.message, crate::FILE_CLEANUP_UNAVAILABLE);
+        assert_eq!(undone.failed, [crate::FILE_CLEANUP_UNAVAILABLE]);
+        assert_eq!(undone.restored, 0);
+        assert!(old.exists());
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "keep this file");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 
     fn mkdir(p: &Path) {
         std::fs::create_dir_all(p).unwrap();

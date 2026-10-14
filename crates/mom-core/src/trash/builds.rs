@@ -272,7 +272,7 @@ mod tests {
     use super::*;
     use crate::config::TrashConfig;
     use crate::trash::tests::{ctx, fixture, write};
-    use crate::trash::{clean, measure};
+    use crate::trash::{clean_enabled as clean, measure};
 
     #[test]
     fn idle_projects_lose_their_build_folders_active_ones_keep_them() {
