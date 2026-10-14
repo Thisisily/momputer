@@ -706,6 +706,13 @@ fn channel(slot: &str) -> Option<char> {
     after.trim_start_matches(['_', ' ', '-']).chars().next().filter(char::is_ascii_alphabetic)
 }
 
+/// Hardware names as the firmware gives them, made safe to put in a sentence: printable
+/// characters only, and not long.
+fn plain(s: &str) -> String {
+    let kept: String = s.chars().map(|c| if c.is_ascii_graphic() { c } else { ' ' }).collect();
+    kept.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect()
+}
+
 /// What the memory profile is called in this board's BIOS.
 fn profile_name(board_maker: &str, cpu: &str, ddr5: bool) -> &'static str {
     let amd = cpu.to_ascii_uppercase().contains("AMD");
@@ -797,20 +804,34 @@ fn hardware(f: &Value, gpu: Option<&crate::speed::Gpu>, now: u64) -> Vec<Check> 
         let laptop = num(first, "form") == 12;
         if let Some(rated) = rated.filter(|r| running > 0 && *r as f32 > running as f32 * 1.08) {
             let profile = profile_name(&text(&f["board"], "maker"), &text(&f["cpu"], "name"), ddr5);
-            let four = if mem.len() >= 4 { format!(" With {} sticks, a lower speed may be needed. If a change causes errors, return to the last stable setting.", mem.len()) } else { String::new() };
-            let ryzen = if text(&f["cpu"], "name").to_ascii_uppercase().contains("RYZEN") { " On Ryzen, memory and fabric clocks can both affect performance." } else { "" };
-            let (maker, part) = (tidy_maker(&text(first, "maker")), text(first, "part").split('.').next().unwrap_or_default().to_string());
+            let (maker, part) = (plain(&tidy_maker(&text(first, "maker"))), plain(text(first, "part").split('.').next().unwrap_or_default()));
+            let board = plain(&format!("{} {}", tidy_maker(&text(&f["board"], "maker")), text(&f["board"], "product")));
+            let cpu = plain(&text(&f["cpu"], "name"));
+            let detail = if laptop {
+                format!("Many laptops can't change this. If yours has {profile} in its BIOS, switching it on runs the memory at full speed.")
+            } else {
+                let four = if mem.len() >= 4 { " With four sticks, if it isn't stable, try one step lower." } else { "" };
+                format!("Switching on {profile} in the BIOS runs it at full speed. Test it afterwards.{four}")
+            };
+            let step = if laptop {
+                format!("Tell me whether this laptop's BIOS has {profile}, and if it does, how to switch it on, one step at a time.")
+            } else {
+                format!("Tell me, one step at a time, how to switch on {profile} in this board's BIOS so the memory runs at {rated}.")
+            };
+            let prompt = format!(
+                "My PC's memory runs at {running} MT/s, but its sticks ({} x {maker} {part}) are rated for {rated} MT/s. The motherboard is {board} and the processor is {cpu}.\n\
+                 1. {step} Change nothing else.\n\
+                 2. Then help me test it for stability: TestMem5 with the anta777 extreme config, or MemTest86. Any error means it isn't stable.\n\
+                 3. If it isn't, help me try the next speed down until it passes.\n",
+                mem.len()
+            );
             out.push(check(
                 "memory-speed",
                 "Hardware",
                 if laptop { "tip" } else { "warn" },
-                format!("Memory is configured at {running} MT/s; its rated speed is {rated}"),
-                if laptop {
-                    format!("The {maker} {part} model number indicates {rated} MT/s. The profile may be off, or the BIOS may be using a lower setting. Some laptops expose {profile} in the BIOS; many don't. Check the laptop maker's supported speeds before changing settings, and test stability afterward.")
-                } else {
-                    format!("The {maker} {part} model number indicates {rated} MT/s. The profile may be off, or the BIOS may be using a lower setting. Check {profile} in the BIOS. Stable speeds depend on the CPU, motherboard and memory; test stability after a change.{ryzen}{four}")
-                },
-                None,
+                format!("Your memory runs at {running}, but it's made for {rated}"),
+                detail,
+                Some(Fix { label: "Copy for your agent".into(), kind: "copy", value: prompt, hint: Some("Paste it to your agent.".into()) }),
             ));
         }
         let channels: std::collections::HashSet<char> = mem.iter().filter_map(|m| channel(&text(m, "slot"))).collect();
@@ -1305,8 +1326,13 @@ mod tests {
         });
         let checks = hardware(&f, None, crate::speed::parse_time("2026-10-12T00:00:00Z").unwrap());
         let mem = checks.iter().find(|c| c.id == "memory-speed").unwrap();
-        assert_eq!(mem.title, "Memory is configured at 2666 MT/s; its rated speed is 3600");
-        assert!(mem.detail.contains("D.O.C.P.") && mem.detail.contains("Ryzen"), "{}", mem.detail);
+        assert_eq!(mem.title, "Your memory runs at 2666, but it's made for 3600");
+        assert!(mem.detail.starts_with("Switching on D.O.C.P. in the BIOS"), "{}", mem.detail);
+        let fix = mem.fix.as_ref().unwrap();
+        assert_eq!((fix.label.as_str(), fix.kind), ("Copy for your agent", "copy"));
+        assert!(fix.value.starts_with("My PC's memory runs at 2666 MT/s, but its sticks (2 x Crucial BL16G36C16U4BL) are rated for 3600 MT/s."), "{}", fix.value);
+        assert!(fix.value.contains("ASUS TUF B450-PLUS GAMING") && fix.value.contains("switch on D.O.C.P.") && fix.value.contains("TestMem5"));
+        assert_eq!(plain("Bad\nname\u{7}  with\ttabs"), "Bad name with tabs");
         assert!(!checks.iter().any(|c| c.id == "memory-channels"), "A and B: two channels");
         assert!(!checks.iter().any(|c| c.id == "windows-on-hdd" || c.id == "bios-old"));
         let pc = describe(&f, &Reg { build: 26200, version: "25H2".into(), edition: "Professional".into(), ..Reg::default() }, None);
@@ -1324,7 +1350,7 @@ mod tests {
             "board": {"maker": "Gigabyte Technology Co., Ltd.", "product": "B650 AORUS"}, "cpu": {"name": "AMD Ryzen 7 7700X"}});
         let c = hardware(&f, None, now);
         let m = c.iter().find(|c| c.id == "memory-speed").unwrap();
-        assert_eq!((m.level, m.title.as_str()), ("warn", "Memory is configured at 4800 MT/s; its rated speed is 5600"));
+        assert_eq!((m.level, m.title.as_str()), ("warn", "Your memory runs at 4800, but it's made for 5600"));
         assert!(m.detail.contains("EXPO"), "{}", m.detail);
         assert_eq!(describe(&f, &Reg::default(), None)[1].1, "32 GB DDR5: 2 × 16 GB at 4800 MT/s");
         // A laptop stick: said gently, because many laptops have no setting for it.
@@ -1332,7 +1358,8 @@ mod tests {
             "board": {"maker": "LENOVO", "product": "LNVNB161216"}, "cpu": {"name": "Intel(R) Core(TM) i7-11800H"}});
         let m = hardware(&f, None, now).into_iter().find(|c| c.id == "memory-speed").unwrap();
         assert_eq!(m.level, "tip");
-        assert!(m.detail.contains("many don't"), "{}", m.detail);
+        assert!(m.detail.starts_with("Many laptops can't change this"), "{}", m.detail);
+        assert!(m.fix.as_ref().is_some_and(|f| f.value.contains("whether this laptop's BIOS has XMP")));
         // Soldered memory: nothing to say, and no advice to add a stick.
         let f = json!({"mem": [stick("H9JCNNNCP3MLYR-N6E", 4267, 35, 12, "Motherboard")], "board": {"maker": "Dell Inc.", "product": "0X"}, "cpu": {"name": "Intel(R) Core(TM) Ultra 7"}});
         assert!(hardware(&f, None, now).iter().all(|c| !c.id.starts_with("memory")));
