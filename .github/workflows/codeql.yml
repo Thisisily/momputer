@@ -1,0 +1,60 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '27 3 * * 2' # Weekly, Tuesday 03:27 UTC.
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+      # actions: read is required for private repositories; this repository is public.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: actions
+            runner: ubuntu-latest
+          - language: javascript-typescript
+            runner: ubuntu-latest
+          - language: python
+            runner: ubuntu-latest
+          - language: rust
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    env:
+      # The Rust extractor defaults to the host target. Set the shipping target
+      # explicitly so cfg(windows) and Windows-specific dependencies are resolved.
+      CODEQL_EXTRACTOR_RUST_OPTION_CARGO_TARGET: ${{ matrix.target || '' }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+
+      # Rust supports only none. Its extractor still compiles/runs build.rs scripts
+      # and compiles procedural macros. Do not add cargo build/test or execute the app.
+      # pull_request (not pull_request_target) keeps fork analysis unprivileged;
+      # no repository secrets or persistent checkout credentials are provided.
+      - name: Analyze
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          category: /language:${{ matrix.language }}
