@@ -1,0 +1,2 @@
+# Keep Rust literals consistent across Windows and Unix checkouts, including CodeQL extraction.
+*.rs text eol=lf
