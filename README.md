@@ -48,13 +48,16 @@ One button and the widget becomes a full window with your PC on mom's desk, draw
 | | |
 | --- | --- |
 | **Running** | Everything your agents started, who started it, and one button to stop what was left behind. |
+| **Homework** | What each agent session changed, and whether what it told you matches its last test run. |
 | **Speed** | Why the PC feels slow right now. Each reason comes with its fix. |
 | **Programs, Startup, Browsers** | What's open, what starts with Windows, and every browser extension, with a switch for each. |
 | **Storage** | What can be deleted, and exactly what it is, before anything goes. |
-| **Checkup** | Drives, memory, graphics, sound, keyboard and mouse, updates and Windows settings: what's wrong, and the button that fixes it. |
+| **Checkup** | Drives, memory, graphics, screens, devices, network, sleep, sound, updates and Windows settings: what's wrong, and the button that fixes it. |
+| **Backups** | What isn't backed up, drives that keep needing repairs, and work that exists only on this PC. |
 | **Files** | Copies of the same file, and big files nobody opened in a year. |
 | **Rooms** | Point her at a messy folder. She grades it and tidies it, with undo. |
 | **House rules** | One set of rules every agent is given, and checked against. |
+| **Autopilot** | Off until you say: once a week she clears the safe things herself. A Sunday letter says how the week went, and "What I did" keeps it all, with undo. |
 
 <p align="center">
   <img src="docs/screenshot-dark.png" width="24%" alt="The Running tab: programs Claude left behind, each with a red light and a Stop button">
