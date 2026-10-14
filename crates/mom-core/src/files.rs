@@ -436,7 +436,7 @@ pub fn scan(paths: &Paths, opts: &ScanOpts, cancel: &AtomicBool, progress: &dyn 
                     }
                     continue;
                 }
-                if !meta.is_file() || crate::browser_data::sensitive_entry(&e.file_name(), false) {
+                if !meta.is_file() || crate::browser_data::marks_browser_data(&e.path(), false) {
                     continue;
                 }
                 let size = meta.len();
@@ -1331,9 +1331,9 @@ mod tests {
         let data = stuff(150_000, 7);
         let first = docs.join("first.bin");
         let second = docs.join("second.bin");
-        let cookie = docs.join("profile-backup").join("Network").join("Cookies");
-        let session = docs.join("profile-backup").join("Sessions").join("Session_1");
-        for path in [&first, &second, &cookie, &session] {
+        let network = docs.join("profile-backup").join("Network").join("TransportSecurity");
+        let session = docs.join("profile-backup").join("Sessions").join("made-up-session");
+        for path in [&first, &second, &network, &session] {
             put(path, &data);
             age(path, 400);
         }
@@ -1361,12 +1361,12 @@ mod tests {
         save(&paths, &report);
         // The files' own contents, lengths and mtimes are unchanged; the enclosing folder
         // now has browser-profile evidence, which must be checked again at mutation time.
-        put(&app.join("Cookies"), b"fixture cookie marker");
+        put(&app.join("Local State"), b"{}");
         let mut calls = Vec::new();
         let result = recycle_with(&paths, &[duplicate.clone(), big.clone()], &[], &mut |_, _| true, &mut |p| { calls.push(p.to_path_buf()); true });
         assert!(calls.is_empty() && result.recycled.is_empty());
         assert_eq!(result.skipped.len(), 2);
-        assert!(duplicate.exists() && big.exists() && app.join("Cookies").exists());
+        assert!(duplicate.exists() && big.exists() && app.join("Local State").exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 

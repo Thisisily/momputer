@@ -2810,7 +2810,7 @@ mod tests {
         let root = fixture("temp-browser-data");
         let paths = Paths::under(&root);
         let profile = paths.temp.join("portable-tool");
-        write(&profile.join("nested").join("Network").join("Cookies"), 3, 100);
+        write(&profile.join("nested").join("Network").join("TransportSecurity"), 3, 100);
         let disposable = paths.temp.join("ordinary-cache");
         write(&disposable.join("Cache").join("data_1"), 3, 100);
         let cfg = TrashConfig::default();

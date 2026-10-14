@@ -472,7 +472,7 @@ mod tests {
     #[test]
     fn browser_data_already_in_the_bin_can_be_removed() {
         let (root, c) = deletion_fixture("bin-browser-data");
-        std::fs::write(c.path.join("Cookies"), b"already deleted cookies").unwrap();
+        std::fs::write(c.path.join("Local State"), b"already deleted profile").unwrap();
         std::fs::create_dir_all(c.path.join("Local Storage")).unwrap();
         std::fs::write(c.path.join("Local Storage").join("data"), b"already deleted storage").unwrap();
         assert!(!crate::browser_data::tree_is_safe(&c.path), "ordinary cleanup protects this content");

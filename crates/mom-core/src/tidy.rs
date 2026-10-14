@@ -1635,9 +1635,9 @@ mod tests {
         let root = tmp("browser-protection");
         let room = root.join("room");
         let home = room.join("archive").join("launcher-profile");
-        let session = home.join("Sessions").join("Session_1");
+        let session = home.join("Sessions").join("made-up-session");
         let preferences = home.join("Preferences");
-        write(&home.join("Cookies"), "fixture cookies");
+        write(&home.join("Network").join("TransportSecurity"), "fixture network state");
         write(&session, "fixture session");
         write(&preferences, "fixture preferences");
         let empty = room.join("Google/Chrome/User Data/Default/Sessions/empty");

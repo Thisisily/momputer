@@ -104,9 +104,7 @@ impl Tally {
     }
 
     fn add_file(&mut self, name: &Path, meta: &std::fs::Metadata) {
-        if let Some(name) = name.file_name() {
-            self.contains_browser_data |= crate::browser_data::sensitive_entry(name, false);
-        }
+        self.contains_browser_data |= crate::browser_data::marks_browser_data(name, false);
         self.observe(meta);
         let len = meta.len();
         self.bytes += len;
@@ -175,9 +173,7 @@ pub(super) fn tally_many(paths: &[PathBuf], cap: u64, budget: u64) -> Vec<Tally>
             }
             Ok(m) if m.is_file() && dir == paths[i] => return t.add_file(dir, &m),
             Ok(m) if m.is_dir() => {
-                if let Some(name) = dir.file_name() {
-                    t.contains_browser_data |= crate::browser_data::sensitive_entry(name, true);
-                }
+                t.contains_browser_data |= crate::browser_data::marks_browser_data(dir, true);
                 t.observe(&m);
                 if dir == paths[i] { own_mtime[i].store(mtime_secs(&m), Ordering::Relaxed); }
             }
@@ -191,7 +187,7 @@ pub(super) fn tally_many(paths: &[PathBuf], cap: u64, budget: u64) -> Vec<Tally>
                 break;
             }
             let Ok(ft) = e.file_type() else { t.complete = false; continue };
-            t.contains_browser_data |= crate::browser_data::sensitive_entry(&e.file_name(), ft.is_dir());
+            t.contains_browser_data |= crate::browser_data::marks_browser_data(&e.path(), ft.is_dir());
             if ft.is_dir() {
                 more.push((i, e.path())); // links and junctions aren't dirs here, so never followed
             } else if ft.is_file() {

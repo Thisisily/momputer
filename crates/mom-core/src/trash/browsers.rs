@@ -367,7 +367,7 @@ mod tests {
     use crate::trash::{clean, measure, Pick};
 
     fn session_files(home: &Path) -> Vec<PathBuf> {
-        ["Network/Cookies", "Local Storage/leveldb/session", "Session Storage/session", "IndexedDB/session", "Service Worker/CacheStorage/session", "Sessions/session", "Login Data", "Preferences"]
+        ["Network/made-up-store", "Local Storage/leveldb/site", "Site Data/made-up-record", "IndexedDB/site", "Service Worker/CacheStorage/site", "Sessions/made-up-session", "made-up-sign-in.db", "Preferences"]
             .iter().map(|name| {
                 let path = home.join(name);
                 write(&path, 100, 400);
@@ -382,7 +382,7 @@ mod tests {
         let edge = paths.local_appdata.join("Microsoft").join("Edge").join("User Data");
         let chrome = paths.local_appdata.join("Google").join("Chrome").join("User Data");
         write(&edge.join("Default").join("Cache").join("Cache_Data").join("f_0001"), 4000, 1);
-        write(&edge.join("Default").join("Cookies"), 100, 1); // never touched
+        write(&edge.join("Default").join("made-up-sign-in.db"), 100, 1); // never touched
         // A profile may have caches before any cookies. User Data's Local State must not
         // prevent cleaning these disposable children or itself become a cleanup target.
         write(&chrome.join("Profile 2").join("Code Cache").join("js").join("a"), 2000, 1);
@@ -398,7 +398,7 @@ mod tests {
         let cursor = paths.appdata.join("Cursor");
         write(&cursor.join("Code Cache").join("js").join("a"), 800, 1);
         write(&cursor.join("Partitions").join("cursor-browser").join("Cache").join("Cache_Data").join("b"), 1200, 1);
-        write(&cursor.join("Partitions").join("cursor-browser").join("Cookies"), 10, 1);
+        write(&cursor.join("Partitions").join("cursor-browser").join("made-up-sign-in.db"), 10, 1);
         write(&cursor.join("Local Storage").join("leveldb").join("c"), 10, 1);
         // A wallet app's cache is left alone.
         write(&paths.appdata.join("Ledger Live").join("Code Cache").join("e"), 600, 1);
@@ -431,13 +431,13 @@ mod tests {
         let r = clean("browser-cache", &ctx, None);
         assert_eq!((r.deleted, r.freed), (4, 4900));
         assert!(!cursor.join("Code Cache").exists() && !cursor.join("Partitions").join("cursor-browser").join("Cache").exists());
-        assert!(cursor.join("Partitions").join("cursor-browser").join("Cookies").exists());
+        assert!(cursor.join("Partitions").join("cursor-browser").join("made-up-sign-in.db").exists());
         assert!(cursor.join("Local Storage").join("leveldb").join("c").exists());
         assert!(paths.appdata.join("Slack").join("Code Cache").exists(), "Slack is open");
         assert!(!chrome.join("Profile 2").join("Code Cache").exists());
         assert_eq!(std::fs::read_to_string(chrome.join("Local State")).unwrap(), r#"{"profile":{"info_cache":{"Profile 2":{"name":"Work"}}}}"#);
         assert!(edge.join("Default").join("Cache").exists(), "Edge is open");
-        assert!(edge.join("Default").join("Cookies").exists());
+        assert!(edge.join("Default").join("made-up-sign-in.db").exists());
         assert!(ff.is_dir() && !ff.join("cache2").exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -548,11 +548,11 @@ mod tests {
     }
 
     #[test]
-    fn an_auth_marker_inside_a_cache_locks_the_entire_candidate() {
+    fn a_profile_mark_inside_a_cache_locks_the_entire_candidate() {
         let root = fixture("browser-cache-profile-marker");
         let paths = Paths::under(&root);
         let home = paths.local_appdata.join("EpicGamesLauncher").join("Saved").join("webcache");
-        let protected = home.join("Cache").join("nested").join("Network").join("Cookies");
+        let protected = home.join("Cache").join("nested").join("Network").join("TransportSecurity");
         write(&protected, 100, 400);
         write(&home.join("Code Cache").join("data"), 200, 400);
         let cfg = TrashConfig::default();

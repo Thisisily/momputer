@@ -499,7 +499,7 @@ mod tests {
     #[test]
     fn site_storage_is_not_counted_as_disposable_cache() {
         assert!(cache_part("Cache") && cache_part("code cache") && cache_part("GPUCache"));
-        for name in ["Service Worker", "CacheStorage", "Cookies", "Local Storage", "Session Storage", "IndexedDB", "Sessions"] {
+        for name in ["Service Worker", "CacheStorage", "Local Storage", "IndexedDB", "Sessions", "Site Data"] {
             assert!(!cache_part(name), "{name}");
         }
     }
