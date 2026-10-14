@@ -9,8 +9,8 @@
   // Only Room file changes are on hold; other features keep their full safety checks.
   const ROOM_CHANGES_AVAILABLE = false;
   const ROOM_CHANGES_UNAVAILABLE = "Room changes and undo are temporarily unavailable in this release. You can still scan and inspect rooms.";
-  const roomMutationCommands = new Set(["apply_tidy", "undo_tidy", "chore_prompt"]);
-  const roomMutationActions = new Set(["apply-room", "undo-room", "copy-chores", "toggle-action", "room-pick-all"]);
+  const roomMutationCommands = new Set(["apply_tidy", "undo_tidy"]);
+  const roomMutationActions = new Set(["apply-room", "undo-room"]);
   const invoke = (cmd, args) => !ROOM_CHANGES_AVAILABLE && roomMutationCommands.has(cmd)
     ? Promise.reject(new Error(ROOM_CHANGES_UNAVAILABLE)) : bridge.invoke(cmd, args);
   const G = window.gsap;
@@ -2748,15 +2748,15 @@ in ${x.cwd}`)}">
     if (r.actions.length) {
       const checks = r.actions
         .map(
-          (a) => `<label class="check" id="a-${hash(a.id)}"><input type="checkbox" data-act="toggle-action" data-aid="${esc(a.id)}" ${sel.has(a.id) ? "checked" : ""} ${!ROOM_CHANGES_AVAILABLE ? "disabled" : ""}>
+          (a) => `<label class="check" id="a-${hash(a.id)}"><input type="checkbox" data-act="toggle-action" data-aid="${esc(a.id)}" ${sel.has(a.id) ? "checked" : ""}>
             <span class="check-main">${pathy(sizeless(a.title))}<small>${esc(a.reason)}</small></span><span class="num">${a.bytes ? bytes(a.bytes) : ""}</span></label>`
         )
         .join("");
-      html += section("plan", "Mom's plan", tickAllButton("room-pick-all", r.actions.every((a) => sel.has(a.id)), "", !ROOM_CHANGES_AVAILABLE), checks);
+      html += section("plan", "Mom's plan", tickAllButton("room-pick-all", r.actions.every((a) => sel.has(a.id))), checks);
     }
     html += `<div class="button-row">
       <button class="primary" data-act="apply-room" ${!ROOM_CHANGES_AVAILABLE || !sel.size || state.roomBusy ? "disabled" : ""}>Do the checked ones${sel.size ? ` (${sel.size})` : ""}</button>
-      <button class="secondary" data-act="copy-chores" ${!ROOM_CHANGES_AVAILABLE ? "disabled" : ""}>Copy chores for an agent</button>
+      <button class="secondary" data-act="copy-chores">Copy chores for an agent</button>
       <button class="secondary" data-act="undo-room" ${!ROOM_CHANGES_AVAILABLE ? "disabled" : ""}>Undo last tidy-up</button>
     </div>
     <div class="button-row">

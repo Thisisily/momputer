@@ -54,6 +54,7 @@ function harness(initial = spot()) {
   };
   const context = vm.createContext({
     console, messages, renders,
+    navigator: { clipboard: { writeText: async (text) => messages.push({ clipboard: text }) } },
     window: { momMock: {
       invoke: (cmd, args) => { calls.push({ cmd, args: args && copy(args) }); return backend(cmd, args); },
       listen: () => { throw new Error("Startup listeners are excluded from this harness"); },
@@ -372,8 +373,8 @@ test("only Room mutations are disabled; file cleanup and app-data disposal remai
   h.state.roomSel[room] = new Set(["example"]);
   const html = h.renderRoom(room);
   assert.match(html, /Room changes and undo are temporarily unavailable/);
-  for (const act of ["apply-room", "undo-room", "copy-chores", "toggle-action", "room-pick-all"]) assert.ok(allDisabled(html, act), act);
-  for (const act of ["rescan-room", "reveal-room"]) assert.ok(hasAct(html, act) && !allDisabled(html, act), act);
+  for (const act of ["apply-room", "undo-room"]) assert.ok(allDisabled(html, act), act);
+  for (const act of ["rescan-room", "reveal-room", "copy-chores", "toggle-action", "room-pick-all"]) assert.ok(hasAct(html, act) && !allDisabled(html, act), act);
   await mode(h, "delete");
   assert.ok(hasAct(h.html(), "clean-spot") && !allDisabled(h.html(), "clean-spot"));
   assert.doesNotMatch(h.html(), /temporarily unavailable/);
@@ -381,11 +382,30 @@ test("only Room mutations are disabled; file cleanup and app-data disposal remai
 
 test("Room gate rejects forged actions and direct IPC without blocking other cleanup commands", async () => {
   const h = harness();
-  for (const act of ["apply-room", "undo-room", "copy-chores", "toggle-action", "room-pick-all"]) await h.action(act, {});
-  for (const cmd of ["apply_tidy", "undo_tidy", "chore_prompt"]) await assert.rejects(h.invoke(cmd, {}), /Room changes and undo are temporarily unavailable/);
+  for (const act of ["apply-room", "undo-room"]) await h.action(act, {});
+  for (const cmd of ["apply_tidy", "undo_tidy"]) await assert.rejects(h.invoke(cmd, {}), /Room changes and undo are temporarily unavailable/);
   assert.deepEqual(h.calls, []);
   h.backend(async () => "Allowed fake IPC");
-  const allowed = ["clean_trash", "recycle_files", "bring_back", "delete_moved", "choose_archive_dir", "inspect_room"];
+  const allowed = ["clean_trash", "recycle_files", "bring_back", "delete_moved", "choose_archive_dir", "inspect_room", "chore_prompt"];
   for (const cmd of allowed) assert.equal(await h.invoke(cmd, {}), "Allowed fake IPC");
   assert.deepEqual(h.calls.map((x) => x.cmd), allowed);
+});
+
+
+test("Room selection and Copy chores work while Apply and Undo are held", async () => {
+  const h = harness();
+  const room = "C:\\Example";
+  h.state.roomOpen = room;
+  h.state.rooms[room] = { name: "Example", grade: "B", line: "Scan results", findings: [], actions: [{ id: "example", title: "Move example", reason: "Synthetic", bytes: 10 }] };
+  await h.action("toggle-action", { aid: "example" }, true);
+  assert.ok(h.state.roomSel[room].has("example"));
+  await h.action("room-pick-all");
+  assert.equal(h.state.roomSel[room].size, 0);
+  await h.action("room-pick-all");
+  assert.ok(h.state.roomSel[room].has("example"));
+  h.backend(async (cmd) => { assert.equal(cmd, "chore_prompt"); return "Synthetic Room checklist"; });
+  await h.action("copy-chores");
+  assert.deepEqual(h.calls, [{ cmd: "chore_prompt", args: { path: room } }]);
+  assert.ok(h.messages.some((m) => m.clipboard === "Synthetic Room checklist"));
+  for (const act of ["apply-room", "undo-room"]) assert.ok(allDisabled(h.renderRoom(room), act));
 });

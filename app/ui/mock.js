@@ -1075,7 +1075,7 @@
 
   window.momMock = {
     invoke: async (cmd, args) => {
-      if (["apply_tidy", "undo_tidy", "chore_prompt"].includes(cmd)) {
+      if (["apply_tidy", "undo_tidy"].includes(cmd)) {
         throw new Error("Room changes and undo are temporarily unavailable in this release. You can still scan and inspect rooms.");
       }
       const h = handlers[cmd];

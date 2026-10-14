@@ -103,6 +103,7 @@ test("the demo holds Room mutations while its other scan handlers remain availab
   const mockSource = fs.readFileSync(path.join(__dirname, "../app/ui/mock.js"), "utf8");
   const context = vm.createContext({ window: {}, location: { search: "", origin: "http://mock.invalid" }, setTimeout: () => 1, clearTimeout() {} });
   vm.runInContext(mockSource, context);
-  for (const cmd of ["apply_tidy", "undo_tidy", "chore_prompt"]) await assert.rejects(context.window.momMock.invoke(cmd, {}), /Room changes and undo are temporarily unavailable/);
+  for (const cmd of ["apply_tidy", "undo_tidy"]) await assert.rejects(context.window.momMock.invoke(cmd, {}), /Room changes and undo are temporarily unavailable/);
   assert.ok((await context.window.momMock.invoke("get_trash")).spots.length > 0);
+  assert.match(await context.window.momMock.invoke("chore_prompt", { path: "C:\\Example" }), /Mom here/);
 });
