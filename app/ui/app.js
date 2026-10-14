@@ -48,6 +48,8 @@
     regFixed: new Map(), // registry fixes done just now: id -> what they were, for Undo
     regConfirm: null,
     regBusy: null,
+    secretsConfirm: null, // a shell history whose keys "Blank them" is asking "Sure?" about
+    secretsBusy: null,
     progBusy: null, // { id, action } while mom does it
     system: null, // the PC, its protection, updates and registry (get_system)
     systemLoading: false,
@@ -600,6 +602,7 @@
   /** The one thing to do about a finding: copy a page only the browser can open, open Windows
       Settings, or show another part of the widget. */
   function fixButton(f) {
+    if (f.kind === "folder" || f.kind === "secrets") return yourFixButton(f);
     if (f.kind === "copy")
       return `<button class="secondary" data-act="copy-fix" data-text="${esc(f.value)}" data-hint="${esc(f.hint || "Copied.")}">${ICON.copy}${esc(f.label)}</button>`;
     if (f.kind === "open") return `<button class="secondary" data-act="open-uri" data-url="${esc(f.value)}">${esc(f.label)}${ICON.out}</button>`;
@@ -629,6 +632,15 @@
         ${armed && f.hint ? `<span class="fix-warn"><span class="led red"></span>${esc(f.hint)}</span>` : ""}</div>`;
     }
     return "";
+  }
+
+  /** Show a project's folder; take the keys out of a shell history, after a "Sure?". */
+  function yourFixButton(f) {
+    if (f.kind === "folder") return `<button class="secondary" data-act="reveal-path" data-path="${esc(f.value)}">${ICON.folder}${esc(f.label)}</button>`;
+    const armed = state.secretsConfirm === f.value;
+    const busy = state.secretsBusy === f.value;
+    return `<div class="fix-stack"><button class="secondary${armed ? " sure" : ""}" data-act="secrets-blank" data-id="${esc(f.value)}" ${busy ? "disabled" : ""}>${busy ? "Taking them out…" : armed ? "Sure? Blank them" : esc(f.label)}</button>
+        ${armed && f.hint ? `<span class="fix-warn"><span class="led green"></span>${esc(f.hint)}</span>` : ""}</div>`;
   }
 
   /** When it happened, on a line of the last two weeks: a red dot for each crash, a tall tick
@@ -1348,11 +1360,44 @@ in ${x.cwd}`)}">
       <p class="sheet-what">How ${esc(a.name)} is set up on this PC. Tap a row to read the file behind it. Mom blanks what looks like a key.</p>
       ${worth.length ? section("as-worth", "Worth a look", String(worth.length), worth.map((w) => checkRow(w, "asw")).join("")) : ""}
       ${list("settings", "Settings", settings)}
+      ${weightSection(a, row, said)}
       ${list("servers", "MCP servers", servers, serverCount)}
       ${tried}
       ${list("hooks", "Hooks", hooks)}
       ${list("skills", "Skills", skills)}
       ${list("files", "Files", files)}`;
+  }
+
+  /** "under 100", "about 300", "about 2.1k", "about 14k": tokens, counted roughly. */
+  const tokensAbout = (n) => (n < 100 ? "under 100" : n < 1000 ? `about ${Math.round(n / 100) * 100}` : n < 10000 ? `about ${(n / 1000).toFixed(1)}k` : `about ${Math.round(n / 1000)}k`);
+
+  /** What every new chat starts with: one line for the whole, a prompt for any part worth
+      trimming, then the parts, heaviest first. Each part opens its file. */
+  function weightSection(a, row, said) {
+    const w = a.weight;
+    if (!w || !w.parts.length) return "";
+    const lead = `Every chat starts with ${tokensAbout(w.everywhere)} tokens${w.most ? `, ${tokensAbout(w.most)} more in ${w.mostIn}` : ""}${w.servers ? `, plus what ${plural(w.servers, "MCP server")} add` : ""}.`;
+    const how = a.id === "claude" ? "/context in Claude Code shows the exact total." : "Counted roughly: about four characters a token.";
+    const tips = w.tips
+      .map((t) =>
+        checkRow(
+          {
+            id: `${a.id}:weight:${t.title}`,
+            title: t.title,
+            detail: t.detail,
+            level: "tip",
+            fix: t.fix ? { kind: "copy", label: t.fix.label, value: t.fix.text, hint: said(t.fix) } : null,
+            more: t.doc ? [{ kind: "read", label: "Read the file", value: t.doc }] : [],
+          },
+          "asw"
+        )
+      )
+      .join("");
+    const rows = w.parts.map((p, i) => row(`w${i}`, "", p.name, `${tokensAbout(p.tokens)} tokens · ${p.scope}`, p.doc));
+    const k = `${a.id}:weight`;
+    const all = state.showAllAgent.has(k);
+    const more = rows.length > 6 ? `<button class="quiet-toggle" data-act="toggle-agent-list" data-key="${esc(k)}">${all ? "Show fewer" : `Show all ${rows.length}`}</button>` : "";
+    return section("as-weight", "Setup weight", tokensAbout(w.everywhere), `<p class="list-hint">${esc(lead)} ${esc(how)}</p>${tips}${(all ? rows : rows.slice(0, 6)).join("")}${more}`);
   }
 
   // ------------------------------------------------------------ the reader (BIG MODE)
@@ -1683,6 +1728,7 @@ in ${x.cwd}`)}">
     ["Sound", "Sound"],
     ["Performance", "Performance"],
     ["Registry", "Registry leftovers"],
+    ["Backups", "Backups"],
   ];
 
   /** What the PC is, and each area of the checkup with a button where there's something to do. */
@@ -3922,6 +3968,33 @@ in ${x.cwd}`)}">
         } catch (e) {
           toast(String(e), true);
         }
+        await loadSystem(true);
+        break;
+      }
+      case "secrets-blank": {
+        const id = el.dataset.id;
+        if (state.secretsBusy) break;
+        if (state.secretsConfirm !== id) {
+          state.secretsConfirm = id;
+          render();
+          setTimeout(() => {
+            if (state.secretsConfirm === id) {
+              state.secretsConfirm = null;
+              render();
+            }
+          }, 6000);
+          break;
+        }
+        state.secretsConfirm = null;
+        state.secretsBusy = id;
+        render();
+        try {
+          toast(await invoke("blank_secrets", { id }));
+          react("proud");
+        } catch (e) {
+          toast(String(e), true);
+        }
+        state.secretsBusy = null;
         await loadSystem(true);
         break;
       }

@@ -44,6 +44,41 @@ pub struct AgentSetup {
     pub checked: Option<u64>,
     /// Mom can ask this agent to check its own servers (it has a command for that, and it's here).
     pub can_check: bool,
+    /// What every new chat starts with (`weight`).
+    pub weight: Option<Weight>,
+    /// The projects it's been used in lately, to weigh what each adds.
+    #[serde(skip)]
+    projects: Vec<PathBuf>,
+}
+
+/// What every new chat starts with, before anything's typed: the instructions, memories and
+/// list of skills the agent reads first. Counted roughly: about four characters a token.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Weight {
+    /// In every chat, wherever it starts.
+    pub everywhere: u64,
+    /// The most one project adds on top, and which project.
+    pub most: u64,
+    pub most_in: String,
+    /// MCP servers switched on everywhere: their tools come on top, and can't be counted here.
+    pub servers: usize,
+    /// What it's made of, heaviest first.
+    pub parts: Vec<Part>,
+    /// A part big enough to be worth trimming, with a prompt to do it.
+    pub tips: Vec<Fact>,
+}
+
+/// One thing read at the start of a chat.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Part {
+    pub name: String,
+    pub tokens: u64,
+    /// "every chat", or "in storefront".
+    pub scope: String,
+    /// The file, to read.
+    pub doc: Option<String>,
 }
 
 /// One MCP server an agent is set up to use.
@@ -1134,6 +1169,7 @@ fn claude(paths: &Paths) -> Option<AgentSetup> {
             a.docs.extend(doc(&f, &format!("{name} ({what})"), "markdown", None));
         }
     }
+    a.projects = recent_claude_projects(paths, state.as_ref());
     let mut front: Vec<Doc> = [settings_doc, memory, servers_doc.filter(|_| state.as_ref().is_some_and(|s| s.get("mcpServers").is_some()))].into_iter().flatten().collect();
     front.append(&mut a.docs);
     a.docs = front;
@@ -1168,6 +1204,7 @@ fn codex(paths: &Paths) -> Option<AgentSetup> {
                     a.settings.push(fact("Model", tame(model, 60), "ok", Some(d)));
                 }
                 let trusted = v.get("projects").and_then(Value::as_object).map(|p| p.values().filter(|x| x.get("trust_level").and_then(Value::as_str) == Some("trusted")).count()).unwrap_or(0);
+                a.projects = v.get("projects").and_then(Value::as_object).into_iter().flatten().map(|(p, _)| PathBuf::from(p)).filter(|p| p.is_dir()).take(MAX_PROJECTS).collect();
                 if trusted > 0 {
                     a.settings.push(fact("Trusted folders", format!("{trusted}, where it works without asking as much."), "ok", Some(d)));
                 }
@@ -1372,8 +1409,260 @@ pub fn check(paths: &Paths) -> Vec<AgentSetup> {
         a.docs.retain(|d| seen.insert(d.id.clone()));
         a.docs.truncate(MAX_LIST * 3);
         a.problems = a.servers.iter().filter(|s| s.level == "warn").count() + a.hooks.iter().filter(|h| h.level == "warn").count() + a.settings.iter().filter(|f| f.level == "warn").count();
+        if matches!(a.id.as_str(), "claude" | "codex") {
+            a.weight = Some(weight(paths, a));
+        }
     }
     agents
+}
+
+// ------------------------------------------------------------------ what every chat starts with
+
+/// Projects weighed, a memory file's imports followed this deep, and this many in all.
+const MAX_PROJECTS: usize = 10;
+const IMPORT_DEPTH: usize = 4;
+const MAX_IMPORTS: usize = 20;
+/// Claude Code reads this much of a project's memory index at the start.
+const INDEX_LINES: usize = 200;
+/// A part this big is worth trimming.
+const BIG_PART: u64 = 5_000;
+/// A project used within this long counts as one you use.
+const RECENT: u64 = 60 * 86_400;
+
+/// "1 skill", "12 skills".
+fn counted(n: usize, one: &str) -> String {
+    if n == 1 { format!("1 {one}") } else { format!("{n} {one}s") }
+}
+
+/// About four characters a token.
+fn tokens(text: &str) -> u64 {
+    (text.chars().count() as u64).div_ceil(4)
+}
+
+/// "under 100", "about 300", "about 2.1k", "about 14k".
+pub fn about(tokens: u64) -> String {
+    match tokens {
+        0..=99 => "under 100".to_string(),
+        100..=999 => format!("about {}", (tokens + 50) / 100 * 100),
+        1_000..=9_999 => format!("about {:.1}k", tokens as f64 / 1000.0),
+        _ => format!("about {}k", (tokens + 500) / 1000),
+    }
+}
+
+/// What Claude Code calls a project's folder under ~/.claude/projects.
+fn claude_slug(project: &str) -> String {
+    project.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+}
+
+/// The projects Claude Code has been used in lately, newest first: the ones it keeps settings
+/// for whose chats changed in the last two months.
+fn recent_claude_projects(paths: &Paths, state: Option<&Value>) -> Vec<PathBuf> {
+    let now = crate::util::now_secs();
+    let mut found: Vec<(u64, PathBuf)> = Vec::new();
+    for project in state.and_then(|s| s.get("projects")).and_then(Value::as_object).into_iter().flatten().map(|(p, _)| p).take(2_000) {
+        let chats = paths.claude_dir().join("projects").join(claude_slug(project));
+        let newest = std::fs::read_dir(&chats)
+            .map(|rd| rd.flatten().take(5_000).filter_map(|e| e.metadata().ok()?.modified().ok()).filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).max().unwrap_or(0))
+            .unwrap_or(0);
+        let dir = PathBuf::from(project);
+        if newest > 0 && now.saturating_sub(newest) <= RECENT && dir.is_dir() {
+            found.push((newest, dir));
+        }
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.into_iter().map(|(_, p)| p).take(MAX_PROJECTS).collect()
+}
+
+/// Where a memory file's `@path` imports point, outside code: `~/` from home, otherwise from
+/// the file's own folder.
+fn imports(text: &str, from: &Path, home: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        // Inline code is quoted, not imported.
+        let outside: String = line.split('`').step_by(2).collect::<Vec<_>>().join(" ");
+        for word in outside.split_whitespace() {
+            let Some(rel) = word.strip_prefix('@') else { continue };
+            let rel = rel.trim_end_matches([',', '.', ')', ';', ':']);
+            if rel.is_empty() || rel.contains("://") {
+                continue;
+            }
+            let path = match rel.strip_prefix("~/").or_else(|| rel.strip_prefix("~\\")) {
+                Some(under_home) => home.join(under_home),
+                None if Path::new(rel).is_absolute() => PathBuf::from(rel),
+                None => from.parent().unwrap_or(from).join(rel),
+            };
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// A memory file and everything it imports, a few steps deep, each once: (path, text).
+fn memory_with_imports(path: &Path, home: &Path) -> Vec<(PathBuf, String)> {
+    let mut out: Vec<(PathBuf, String)> = Vec::new();
+    let mut todo = vec![(path.to_path_buf(), 0)];
+    while let Some((p, depth)) = todo.pop() {
+        if out.len() > MAX_IMPORTS || out.iter().any(|(q, _)| crate::util::norm_path(&q.to_string_lossy()) == crate::util::norm_path(&p.to_string_lossy())) {
+            continue;
+        }
+        let Some(text) = std::fs::symlink_metadata(&p).ok().filter(|m| m.is_file() && m.len() <= MAX_DOC).and_then(|_| std::fs::read_to_string(&p).ok()) else { continue };
+        if depth < IMPORT_DEPTH {
+            todo.extend(imports(&text, &p, home).into_iter().map(|i| (i, depth + 1)));
+        }
+        out.push((p, text));
+    }
+    out
+}
+
+/// The parts one memory file brings: itself, then each file it imports.
+fn memory_parts(path: &Path, name: &str, scope: &str, home: &Path) -> Vec<(Part, PathBuf)> {
+    memory_with_imports(path, home)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (p, text))| {
+            let label = if i == 0 { name.to_string() } else { format!("{} (imported)", tame(&file_name_of(&p.to_string_lossy()), 60)) };
+            let doc = doc(&p, &label, "markdown", None).map(|d| d.id);
+            (Part { name: label, tokens: tokens(&text), scope: scope.into(), doc }, p)
+        })
+        .collect()
+}
+
+/// A skill or subagent's name and description: what the agent lists at the start of a chat.
+fn listed(text: &str) -> u64 {
+    let mut lines = text.lines();
+    if lines.next().map(str::trim_end) != Some("---") {
+        return 0;
+    }
+    let mut chars = 0;
+    for line in lines.take(80) {
+        if line.trim_end() == "---" {
+            break;
+        }
+        if line.starts_with("name:") || line.starts_with("description:") {
+            chars += line.chars().count();
+        }
+    }
+    (chars as u64).div_ceil(4)
+}
+
+/// What one project adds on top of every chat: its own memory files, the ones in folders above
+/// it, and (Claude Code) the start of its memory index.
+fn project_parts(paths: &Paths, agent: &str, project: &Path) -> Vec<(Part, PathBuf)> {
+    let name = tame(&file_name_of(&project.to_string_lossy()), 40);
+    let scope = format!("in {name}");
+    let mut out = Vec::new();
+    if agent == "claude" {
+        for (rel, label) in [("CLAUDE.md", "CLAUDE.md"), ("CLAUDE.local.md", "CLAUDE.local.md"), (".claude/CLAUDE.md", ".claude/CLAUDE.md")] {
+            out.extend(memory_parts(&project.join(rel), &format!("{name}: {label}"), &scope, &paths.home));
+        }
+        // And the folders above it, short of the drive itself.
+        for up in project.ancestors().skip(1).filter(|p| p.parent().is_some()).take(8) {
+            out.extend(memory_parts(&up.join("CLAUDE.md"), &format!("{}: CLAUDE.md", tame(&file_name_of(&up.to_string_lossy()), 40)), &scope, &paths.home));
+        }
+        let index = paths.claude_dir().join("projects").join(claude_slug(&project.to_string_lossy())).join("memory").join("MEMORY.md");
+        if let Some(text) = small(&index) {
+            let start: String = text.lines().take(INDEX_LINES).collect::<Vec<_>>().join("\n");
+            let doc = doc(&index, &format!("{name}: memory index"), "markdown", None).map(|d| d.id);
+            out.push((Part { name: format!("{name}: memory index"), tokens: tokens(&start), scope: scope.clone(), doc }, index));
+        }
+    } else {
+        let file = if project.join("AGENTS.override.md").is_file() { "AGENTS.override.md" } else { "AGENTS.md" };
+        out.extend(memory_parts(&project.join(file), &format!("{name}: {file}"), &scope, &paths.home));
+    }
+    out
+}
+
+/// A prompt to trim one part, by what it is.
+fn trim_tip(agent: &str, part: &Part, path: &Path) -> Fact {
+    let where_ = if part.scope == "every chat" { "every chat".to_string() } else { format!("every chat {}", part.scope) };
+    let file = tame(&path.to_string_lossy(), 300);
+    let ask = if part.name.ends_with("memory index") {
+        format!("My {agent} memory index `{file}` is read at the start of {where_}, {} tokens. Help me shorten it: one short line per memory, merge the ones that say the same thing, and drop the ones that aren't true any more. Show me the new index before you change anything.", about(part.tokens))
+    } else {
+        format!("My {agent} instructions file `{file}` is read at the start of {where_}, {} tokens. Suggest what could be cut, merged, or moved into a skill that loads only when it's needed, and show me the shorter version before you change anything.", about(part.tokens))
+    };
+    Fact {
+        title: format!("{} is {} tokens", part.name, about(part.tokens)),
+        detail: format!("Read at the start of {where_}."),
+        level: "note".into(),
+        fix: ask_agent(ask),
+        doc: part.doc.clone(),
+    }
+}
+
+fn weight(paths: &Paths, a: &AgentSetup) -> Weight {
+    let agent = a.name.as_str();
+    let mut w = Weight::default();
+    let (dir, memory) = if a.id == "claude" {
+        (paths.claude_dir(), vec![("CLAUDE.md", "Your CLAUDE.md")])
+    } else {
+        let dir = paths.codex_dir();
+        let file = if dir.join("AGENTS.override.md").is_file() { "AGENTS.override.md" } else { "AGENTS.md" };
+        (dir, vec![(file, if file == "AGENTS.md" { "Your AGENTS.md" } else { "Your AGENTS.override.md" })])
+    };
+    let mut parts: Vec<(Part, PathBuf)> = Vec::new();
+    for (file, label) in memory {
+        parts.extend(memory_parts(&dir.join(file), label, "every chat", &paths.home));
+    }
+    // The skills (and Claude Code's subagents) it lists, by name and description.
+    let path_of = |id: &str| a.docs.iter().find(|d| d.id == id).map(|d| PathBuf::from(&d.path));
+    let skills: u64 = a.skills.iter().filter_map(|s| path_of(&s.doc)).filter_map(|p| small(&p)).map(|t| listed(&t)).sum();
+    if skills > 0 {
+        parts.push((Part { name: format!("List of {}", counted(a.skills.len(), "skill")), tokens: skills, scope: "every chat".into(), doc: None }, dir.join("skills")));
+    }
+    let subagents: Vec<&Doc> = a.docs.iter().filter(|d| d.title.ends_with("(subagent)")).collect();
+    let agents_list: u64 = subagents.iter().filter_map(|d| small(Path::new(&d.path))).map(|t| listed(&t)).sum();
+    if agents_list > 0 {
+        parts.push((Part { name: format!("List of {}", counted(subagents.len(), "subagent")), tokens: agents_list, scope: "every chat".into(), doc: None }, dir.join("agents")));
+    }
+    w.everywhere = parts.iter().map(|(p, _)| p.tokens).sum();
+    // The project that adds the most.
+    let mut heaviest: Vec<(Part, PathBuf)> = Vec::new();
+    for project in &a.projects {
+        let mine = project_parts(paths, &a.id, project);
+        let total: u64 = mine.iter().map(|(p, _)| p.tokens).sum();
+        if total > w.most {
+            w.most = total;
+            w.most_in = tame(&file_name_of(&project.to_string_lossy()), 40);
+            heaviest = mine;
+        }
+    }
+    parts.extend(heaviest);
+    w.servers = a.servers.iter().filter(|s| s.level != "off" && !s.from.starts_with("project ")).count();
+    // Worth trimming: a big part, unless it's already said (a long instructions file is a
+    // setting of its own).
+    let flagged: Vec<&String> = a.settings.iter().filter_map(|f| f.doc.as_ref()).collect();
+    for (part, path) in &parts {
+        if part.tokens < BIG_PART || part.doc.as_ref().is_some_and(|d| flagged.contains(&d)) {
+            continue;
+        }
+        if part.name.starts_with("List of") {
+            let what = if part.name.contains("subagent") { "subagents" } else { "skills" };
+            w.tips.push(Fact {
+                title: format!("{} is {} tokens", part.name, about(part.tokens)),
+                detail: "Read at the start of every chat.".into(),
+                level: "note".into(),
+                fix: ask_agent(format!(
+                    "The names and descriptions of my {agent} {what} add {} tokens to the start of every chat. Help me find the ones I don't use, so I can switch off the plugins or remove the folders that bring them. Don't change anything without asking me first.",
+                    about(part.tokens)
+                )),
+                doc: None,
+            });
+        } else {
+            w.tips.push(trim_tip(agent, part, path));
+        }
+    }
+    parts.sort_by(|x, y| y.0.tokens.cmp(&x.0.tokens));
+    w.parts = parts.into_iter().map(|(p, _)| p).filter(|p| p.tokens > 0).take(MAX_LIST).collect();
+    w
 }
 
 // ------------------------------------------------------------------ reading a file
@@ -1575,6 +1864,38 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let paths = Paths::under(&root);
         (root, paths)
+    }
+
+    #[test]
+    fn what_every_chat_starts_with_is_weighed_and_big_parts_get_a_prompt() {
+        let (root, paths) = fixture("weight");
+        let claude = paths.claude_dir();
+        // Your instructions, with one import (and one inside code, which isn't one).
+        put(&claude.join("CLAUDE.md"), "Be kind.\n@rules/style.md\n```\n@not/an/import.md\n```\n");
+        put(&claude.join("rules").join("style.md"), &"x".repeat(400));
+        put(&claude.join("skills").join("lanternfall").join("SKILL.md"), "---\nname: lanternfall\ndescription: Lights the way through a big folder.\n---\nBody that isn't listed.\n");
+        // A project used yesterday, with a long CLAUDE.md and a memory index.
+        let project = root.join("Workspace").join("storefront");
+        put(&project.join("CLAUDE.md"), &"y".repeat(24_000));
+        let slug = claude_slug(&project.to_string_lossy());
+        put(&claude.join("projects").join(&slug).join("chat.jsonl"), "{}\n");
+        put(&claude.join("projects").join(&slug).join("memory").join("MEMORY.md"), &"- [A](a.md) — a line\n".repeat(300));
+        put(&paths.home.join(".claude.json"), &format!("{{\"projects\":{{{}:{{}}}}}}", serde_json::to_string(&project.to_string_lossy()).unwrap()));
+
+        let agents = check(&paths);
+        let w = agents.iter().find(|a| a.id == "claude").and_then(|a| a.weight.clone()).unwrap();
+        let names: Vec<&str> = w.parts.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"Your CLAUDE.md") && names.contains(&"style.md (imported)") && names.contains(&"List of 1 skill"), "{names:?}");
+        assert!(!names.iter().any(|n| n.contains("import.md")), "inside code isn't an import");
+        assert_eq!(w.parts.iter().find(|p| p.name == "style.md (imported)").unwrap().tokens, 100);
+        assert_eq!((w.most_in.as_str(), w.parts[0].name.as_str(), w.parts[0].tokens), ("storefront", "storefront: CLAUDE.md", 6_000));
+        let index = w.parts.iter().find(|p| p.name == "storefront: memory index").unwrap();
+        assert_eq!(index.tokens, tokens(&"- [A](a.md) — a line\n".repeat(200)), "only the start of the index is read");
+        assert_eq!(w.tips.len(), 1);
+        assert_eq!(w.tips[0].title, "storefront: CLAUDE.md is about 6.0k tokens");
+        assert!(w.tips[0].fix.as_ref().is_some_and(|f| f.text.contains("every chat in storefront")));
+        assert_eq!((about(40), about(1_234), about(14_400)), ("under 100".to_string(), "about 1.2k".to_string(), "about 14k".to_string()));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

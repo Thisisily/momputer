@@ -599,11 +599,43 @@
     configPath: "C:\\Users\\me\\.momputer\\config.toml",
   };
 
+  // Keys in a shell history (until "Blank them"), and work that's only on this PC.
+  let secretsBlanked = false;
+  const repoPrompt = (name, asks) => `My project \`${name}\` at \`C:\\Users\\me\\Workspace\\${name}\` has work that exists only on this PC.\n\nPlease ${asks}. Don't delete, reset, rebase or force-push anything, and show me each command before you run it.\n`;
+  const repoCheck = (name, level, title, detail, items, asks) => ({
+    id: `repo:c:\\users\\me\\workspace\\${name}`, area: "Backups", level, title, detail, items,
+    fix: { label: "Copy for your agent", kind: "copy", value: repoPrompt(name, asks), hint: "Paste it to your agent." },
+    more: [{ label: "Open folder", kind: "folder", value: `C:\\Users\\me\\Workspace\\${name}`, hint: null }],
+  });
+  const yourChecks = () => [
+    ...(secretsBlanked
+      ? [{ id: "secrets", area: "Security", level: "ok", title: "No keys in your shell history or the files git keeps", detail: "Mom looks for the shapes services give their keys.", fix: null }]
+      : [{ id: "secrets:psreadline:ConsoleHost_history.txt", area: "Security", level: "warn", title: "Your PowerShell history has 2 lines with keys (OpenAI and GitHub)", detail: "Anything running as you can read that file. Blank them, and swap any key that still works for a new one.",
+          fix: { label: "Blank them", kind: "secrets", value: "psreadline:ConsoleHost_history.txt", hint: "Mom takes each key out and keeps no copy. Close PowerShell windows first." } }]),
+    repoCheck("storefront", "warn", "storefront has 3 commits that aren't pushed", "They're only on this PC until they are. Pushing keeps a copy.", [{ name: "main", note: "3 commits not pushed", led: "red" }, { name: "checkout-redesign", note: "Never pushed", led: "red" }], "push the branches with commits that aren't pushed"),
+    repoCheck("copperline", "warn", "copperline is only on this PC", "It has no remote, so a failing drive would take it with it. A private remote keeps a copy.", [{ name: "No remote", note: "Last commit 2 days ago", led: "red" }], "help me make a private remote for it (GitHub, say) and push every branch to it"),
+    repoCheck("atlas", "tip", "atlas has changes not committed for 12 days", "4 files with work in them, only on this PC.", [{ name: "Changes", note: "4 files not committed, last touched 12 days ago", led: "off" }], "go through the changes that aren't committed with me, and commit the ones worth keeping"),
+  ];
+
   // How the agents are set up: made-up servers, hooks and files, with a few things worth a look.
   const askAgent = (text) => ({ label: "Copy for your agent", text });
   const agentSetups = [
     {
       id: "claude", name: "Claude Code", problems: 3, checked: null, canCheck: true,
+      weight: {
+        everywhere: 6640, most: 5030, mostIn: "storefront", servers: 4,
+        parts: [
+          { name: "List of 4 skills", tokens: 3880, scope: "every chat", doc: null },
+          { name: "storefront: memory index", tokens: 4470, scope: "in storefront", doc: "d-memory" },
+          { name: "Your CLAUDE.md", tokens: 780, scope: "every chat", doc: "d-memory" },
+          { name: "storefront: CLAUDE.md", tokens: 560, scope: "in storefront", doc: null },
+          { name: "style.md (imported)", tokens: 1980, scope: "every chat", doc: null },
+        ].sort((a, b) => b.tokens - a.tokens),
+        tips: [
+          { title: "storefront: memory index is about 4.5k tokens", detail: "Read at the start of every chat in storefront.", level: "note", doc: "d-memory",
+            fix: askAgent("My Claude Code memory index `C:\\Users\\me\\.claude\\projects\\C--Users-me-Workspace-storefront\\memory\\MEMORY.md` is read at the start of every chat in storefront, about 4.5k tokens. Help me shorten it: one short line per memory, merge the ones that say the same thing, and drop the ones that aren't true any more. Show me the new index before you change anything.") },
+        ],
+      },
       settings: [
         { title: "Runs everything without asking", detail: "permissions.defaultMode is bypassPermissions: commands, edits and downloads all go ahead.", level: "warn", fix: null, doc: "d-set" },
         { title: "Model", detail: "claude-opus-5-5", level: "ok", fix: null, doc: "d-set" },
@@ -967,9 +999,11 @@
           { id: "sound-leftover-voicemod", area: "Sound", level: "tip", title: "Voicemod is gone, but its sound device isn't", detail: "Voicemod Virtual Audio Device is still here. In Device Manager, find it under Sound, video and game controllers, right-click it and choose Uninstall device.", fix: { label: "Device Manager", kind: "launch", value: "devmgmt.msc", hint: null } },
           { id: "broken-services", area: "Registry", level: "warn", title: "1 service is set to start with Windows, but its program is gone", detail: "ASUS Com Service. Windows tries to start it at every boot, waits, and gives up, which slows starting up. Left by a program uninstalled the hard way.", fix: null },
           { id: "broken-uninstall", area: "Registry", level: "tip", title: "1 program in Windows' app list can't be uninstalled", detail: "Anaconda3 2020.02. Its uninstaller is gone (it was deleted by hand, most likely), so Settings lists it but can't remove it.", fix: { label: "Installed apps", kind: "open", value: "ms-settings:appsfeatures", hint: null } },
+          ...yourChecks(),
         ],
       }
     ),
+    blank_secrets: async () => (await wait(400), (secretsBlanked = true), "Took 2 keys out of your PowerShell history."),
     files_places: () => JSON.parse(JSON.stringify(places)),
     set_files_place: ({ path, on }) => ((places.find((x) => x.path === path).on = on), JSON.parse(JSON.stringify(places))),
     add_files_place: async () => (await wait(300), places.push({ path: "E:\\Photos", name: "Photos", kind: "added", on: true, total: 0, free: 0 }), JSON.parse(JSON.stringify(places))),

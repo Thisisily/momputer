@@ -28,7 +28,7 @@ pub struct System {
 #[serde(rename_all = "camelCase")]
 pub struct Check {
     pub id: String,
-    /// "Security", "Updates", "Hardware", "Performance" or "Registry".
+    /// "Security", "Updates", "Hardware", "Performance", "Registry" or "Backups".
     pub area: &'static str,
     /// "warn", "tip" or "ok".
     pub level: &'static str,
@@ -121,6 +121,15 @@ $o | ConvertTo-Json -Depth 4 -Compress
 "#;
 
 fn gather() -> System {
+    // Keys in shell histories and work only on this PC are looked for meanwhile.
+    let yours = std::thread::spawn(|| {
+        let paths = crate::paths::Paths::detect();
+        std::thread::scope(|s| {
+            let keys = s.spawn(|| crate::secrets::checks(&paths));
+            let work = crate::repos::checks(&paths);
+            (keys.join().unwrap_or_default(), work)
+        })
+    });
     // Inline commands do not need a script-file policy override. Keep the user's policy
     // for any modules the Windows cmdlets load, and never search PATH for the shell.
     let mut facts: Value = windows_powershell()
@@ -154,6 +163,9 @@ fn gather() -> System {
     let sound = crate::sound::endpoints();
     checks.extend(crate::sound::checks(&sound, &installed));
     checks.extend(registry());
+    let (secrets, repos) = yours.join().unwrap_or_default();
+    checks.extend(secrets);
+    checks.extend(repos);
     let mut pc = describe(&facts, &reg, gpu.as_ref());
     let (keyboards, mice) = input_devices(&facts);
     let before_board = |pc: &Vec<(String, String)>| pc.iter().position(|(k, _)| k == "Board").unwrap_or(pc.len());

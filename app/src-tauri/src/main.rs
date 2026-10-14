@@ -1198,6 +1198,12 @@ fn undo_registry(id: String, s: State<'_, S>) -> Res<String> {
     mom_core::system::undo_registry(&s.paths, &id)
 }
 
+/// Takes the keys out of one shell history mom listed (by its id), keeping no copy.
+#[tauri::command(async)]
+fn blank_secrets(id: String, s: State<'_, S>) -> Res<String> {
+    mom_core::secrets::blank_history(&s.paths, &id)
+}
+
 /// Where the Files scan looks: your usual folders, each drive, and folders you added.
 #[tauri::command(async)]
 fn files_places(s: State<'_, S>) -> Vec<mom_core::files::Place> {
@@ -1846,6 +1852,8 @@ fn main() {
             card_away,
             glide_ready,
             set_paused,
+            // 0.5.0 A2
+            blank_secrets,
         ])
         .setup(move |app| {
             #[cfg(windows)]
