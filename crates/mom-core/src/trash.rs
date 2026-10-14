@@ -1647,6 +1647,11 @@ fn installer_kind(name: &str) -> &'static str {
     }
 }
 
+/// A Claude Code session's title (the one it was given, or its first ask), for the Homework check.
+pub(crate) fn claude_session_title(transcript: &Path) -> Option<String> {
+    claude::session_title(transcript)
+}
+
 // ------------------------------------------------------------------ measuring
 
 pub fn measure(id: &str, ctx: &TrashCtx) -> Option<Spot> {

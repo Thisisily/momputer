@@ -4447,3 +4447,15 @@ button.row-name:hover {
   gap: 6px 16px;
   padding: 10px 2px 0;
 }
+
+/* Running, Homework and Agents: an agent waiting for you. */
+.badge.waiting {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  margin-left: 6px;
+}
+
+.hw-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+}

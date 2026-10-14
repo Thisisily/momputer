@@ -17,6 +17,7 @@ pub mod containers;
 pub mod disks;
 pub mod files;
 pub mod health;
+pub mod homework;
 pub mod hooks;
 pub mod icons;
 pub mod installed;
@@ -39,6 +40,7 @@ pub mod updates;
 pub mod trash;
 pub mod util;
 pub mod voice;
+pub mod waiting;
 pub mod winsettings;
 
 use agents::AgentKind;

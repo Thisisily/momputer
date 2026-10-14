@@ -426,7 +426,7 @@ fn hooks_file(paths: &Paths, agent: HookAgent) -> PathBuf {
     }
 }
 
-fn read_json(file: &Path) -> anyhow::Result<Value> {
+pub(crate) fn read_json(file: &Path) -> anyhow::Result<Value> {
     if !file.exists() {
         return Ok(json!({}));
     }
@@ -466,7 +466,7 @@ fn hooks_installed(paths: &Paths, agent: HookAgent) -> bool {
         .unwrap_or(false)
 }
 
-fn backup(paths: &Paths, file: &Path, tag: &str) {
+pub(crate) fn backup(paths: &Paths, file: &Path, tag: &str) {
     if file.exists() {
         let dir = paths.backups_dir();
         if std::fs::create_dir_all(&dir).is_ok() {
@@ -624,6 +624,7 @@ pub fn integrations(paths: &Paths) -> Vec<Integration> {
             installed: skill_installed(&codex_skill),
             path: codex_skill.to_string_lossy().to_string(),
         },
+        crate::waiting::integration(paths),
     ]
 }
 
@@ -639,6 +640,7 @@ pub fn install(paths: &Paths, id: &str, mom_exe: &Path) -> anyhow::Result<String
         }
         "claude-skill" => install_skill(paths, AgentKind::ClaudeCode),
         "codex-skill" => install_skill(paths, AgentKind::Codex),
+        crate::waiting::ID => crate::waiting::install(paths, mom_exe),
         _ => anyhow::bail!("unknown integration {id}"),
     }
 }
@@ -649,6 +651,7 @@ pub fn uninstall(paths: &Paths, id: &str) -> anyhow::Result<String> {
         "codex-hooks" => uninstall_hooks(paths, HookAgent::Codex),
         "claude-skill" => uninstall_skill(paths, AgentKind::ClaudeCode),
         "codex-skill" => uninstall_skill(paths, AgentKind::Codex),
+        crate::waiting::ID => crate::waiting::uninstall(paths),
         _ => anyhow::bail!("unknown integration {id}"),
     }
 }

@@ -183,6 +183,33 @@ fn threads_from_db(codex_dir: &Path, now: u64, targets: &[String]) -> anyhow::Re
     Ok(threads)
 }
 
+/// The names Codex gave these threads, by id. Nothing for ids it doesn't know, or if its
+/// database can't be read.
+pub fn thread_names(codex_dir: &Path, ids: &[String]) -> std::collections::HashMap<String, String> {
+    use rusqlite::{Connection, OpenFlags};
+    let mut out = std::collections::HashMap::new();
+    let Some(db) = newest_state_db(codex_dir) else { return out };
+    let Ok(con) = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX) else { return out };
+    let _ = con.busy_timeout(std::time::Duration::from_millis(300));
+    let cols: Vec<String> = con
+        .prepare("SELECT name FROM pragma_table_info('threads')")
+        .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.filter_map(Result::ok).collect()))
+        .unwrap_or_default();
+    let name = match (cols.iter().any(|c| c == "name"), cols.iter().any(|c| c == "title")) {
+        (true, true) => "COALESCE(NULLIF(name, ''), NULLIF(title, ''), '')",
+        (true, false) => "COALESCE(name, '')",
+        (false, true) => "COALESCE(title, '')",
+        _ => return out,
+    };
+    let Ok(mut st) = con.prepare(&format!("SELECT {name} FROM threads WHERE id = ?1")) else { return out };
+    for id in ids.iter().take(200) {
+        if let Ok(n) = st.query_row([id], |r| r.get::<_, String>(0)) {
+            out.insert(id.clone(), crate::util::ellipsize(n.trim(), 90));
+        }
+    }
+    out
+}
+
 /// Fallback when the database can't be read: recent rollout logs carry the folder in their first line.
 fn threads_from_rollouts(codex_dir: &Path, now: u64, targets: &[String]) -> Vec<Thread> {
     let mut out = Vec::new();
