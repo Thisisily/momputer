@@ -10,6 +10,7 @@
 //! Teach mom another tool: add it to `agents()`.
 
 use super::{ago, entries, name_of, tally_many, too_fresh, Cand, Found, TrashCtx, ENTRY_CAP, IN_USE};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Which clean-up a tool's leftovers show up in.
@@ -896,7 +897,13 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
     // Metadata is descriptive only. Bound extra I/O even for unexpectedly large caches.
     let mut shader_reads = 0;
     let mut shader_metadata_budget = 64 << 20;
+    // Which programs are on this PC, and which program each NVIDIA app ID is: looked up once,
+    // only for shader caches.
+    let on_this_pc = std::cell::OnceCell::new();
+    let programs = || on_this_pc.get_or_init(|| super::programs::Programs::find(ctx.paths));
+    let mut nvidia_names: HashMap<PathBuf, HashMap<String, String>> = HashMap::new();
     for (mut c, a, s) in found {
+        let mut gone = None;
         if s.empty_only && (c.files > 0 || c.links > 0 || c.bytes > 0) {
             continue; // not empty after all: it isn't a leftover
         }
@@ -938,10 +945,25 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             } else {
                 None
             };
-            let tail = c.name.strip_prefix(&format!("{} · ", a.name)).unwrap_or(&c.name);
-            let (name, detail) = match owner {
-                Some(owner) => (owner.name, owner.detail),
-                None => ("App unknown".into(), "App could not be identified".into()),
+            // Some files don't say their program (older drivers', the biggest ones), but NVIDIA
+            // names every file by its app's ID, and other files with that ID say it.
+            let program = owner.as_ref().map(|o| o.name.clone()).or_else(|| {
+                let id = (a.name == "NVIDIA" && c.links == 0).then(|| super::shader_owner::nvidia_app_id(&c.path)).flatten()?;
+                let dir = c.path.parent()?.to_path_buf();
+                let names = nvidia_names.entry(dir.clone()).or_insert_with(|| super::shader_owner::nvidia_names(&dir, &mut shader_metadata_budget));
+                names.get(&id).cloned()
+            });
+            let tail = c.name.strip_prefix(&format!("{} · ", a.name)).unwrap_or(&c.name).to_string();
+            let (name, detail) = match &program {
+                Some(program) => {
+                    let found = programs().judge(program);
+                    let name = found.title.unwrap_or_else(|| program.clone());
+                    if found.state == super::programs::State::Gone {
+                        gone = Some(name.clone());
+                    }
+                    (name, found.detail.to_string())
+                }
+                None => ("App unknown".into(), "The driver didn't note which app".into()),
             };
             c.name = format!("{} · {name} · {tail}", a.name);
             c.sub = Some(match c.sub.take() {
@@ -974,15 +996,20 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
         if spot == Spot::Shaders && c.goes {
             c.reason = format!("Last changed {} ago", ago(c.age));
         }
-        f.cands.push(c);
+        f.cands.push(uninstalled(c, gone));
     }
     if spot == Spot::Shaders {
         let caches = super::steam_shaders::discover(ctx.paths);
-        let paths = caches.iter().map(|cache| (cache.path.clone(), format!("Steam · {} · Shader cache", cache.name))).collect();
+        let name = |cache: &super::steam_shaders::Cache| match cache.named {
+            false => programs().steam_name(cache.id).unwrap_or(&cache.name).to_string(),
+            true => cache.name.clone(),
+        };
+        let paths = caches.iter().map(|cache| (cache.path.clone(), format!("Steam · {} · Shader cache", name(cache)))).collect();
         for (mut c, cache) in super::cands(paths, ctx.now).into_iter().zip(caches) {
             if c.files == 0 && c.links == 0 && c.complete {
                 continue;
             }
+            let gone = cache.uninstalled.then(|| name(&cache));
             c.sub = Some(match c.sub.take() {
                 Some(sub) => format!("{} · {sub}", cache.detail),
                 None => cache.detail,
@@ -990,13 +1017,13 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             c.kind = Some("shader caches");
             c.tool = Some("Steam");
             c = judge(c, ctx, min_age, false);
-            // Adding an ownership view must not silently expand automatic cleanup. An absent
-            // game is evidence to show, never a reason to tick a cache or bypass safety checks.
-            if c.goes {
+            // An installed game's cache stays: the game would only build it again. One whose
+            // game Steam no longer has installed goes.
+            if c.goes && gone.is_none() {
                 let reason = format!("Last changed {} ago; select to clear", ago(c.age));
                 c = c.kept_but_tickable(reason);
             }
-            f.cands.push(c);
+            f.cands.push(uninstalled(c, gone));
         }
     }
     f.available = f.available || !f.cands.is_empty();
@@ -1044,6 +1071,18 @@ const MANY_APPS: &[&str] = &["Squirrel apps", "Developer tools", "App updaters"]
 
 /// Agent folders hold links to shared skills; one with a link inside is never a leftover.
 const LINKED: &str = "Holds a link to another folder (a shared skill, say)";
+
+/// A cache whose program isn't installed any more goes, however new, unless something still has
+/// it open or links into it.
+fn uninstalled(mut c: Cand, program: Option<String>) -> Cand {
+    match program {
+        Some(program) if c.goes || c.optional => {
+            c.optional = false;
+            c.verdict(true, format!("{program} isn't installed any more"))
+        }
+        _ => c,
+    }
+}
 
 fn judge(c: Cand, ctx: &TrashCtx, min_age: u64, sessions: bool) -> Cand {
     let c = c.age_sensitive();
@@ -1393,7 +1432,7 @@ mod tests {
     }
 
     #[test]
-    fn steam_shader_ownership_does_not_select_new_caches_for_automatic_cleanup() {
+    fn steam_caches_of_installed_games_stay_and_uninstalled_ones_go() {
         let root = fixture("steam-shader-selection");
         // The shared fixture canonicalizes its base, which gives Windows a verbatim
         // prefix. Steam's discovery deliberately accepts ordinary local drive paths
@@ -1411,7 +1450,13 @@ mod tests {
         let installed = apps.join("shadercache").join("123").join("cache.bin");
         let leftover = apps.join("shadercache").join("456").join("cache.bin");
         write(&installed, 300, 400);
-        write(&leftover, 500, 400);
+        // Uninstalled last week: its cache goes however new it is.
+        write(&leftover, 500, 3);
+        std::fs::create_dir_all(steam.join("appcache")).unwrap();
+        std::fs::write(steam.join("appcache").join("appinfo.vdf"), crate::trash::steam_appinfo::tests::file(&[
+            (123, "Example Game", "Example Game", &["Example.exe"]),
+            (456, "Copperline", "Copperline", &["Copperline.exe"]),
+        ])).unwrap();
         std::fs::create_dir_all(apps.join("common").join("Example Game")).unwrap();
         std::fs::write(apps.join("libraryfolders.vdf"), format!(
             "\"libraryfolders\" {{ \"0\" {{ \"path\" \"{}\" }} }}",
@@ -1424,12 +1469,76 @@ mod tests {
         let ctx = ctx(&paths, &cfg);
         let spot = measure("shader-cache", &ctx).unwrap();
         assert_eq!(spot.items.len(), 2);
-        assert!(spot.items.iter().all(|item| !item.goes && item.optional));
-        assert!(spot.items.iter().any(|item| item.name == "Steam · Example Game · Shader cache"));
-        assert!(spot.items.iter().any(|item| item.sub.as_deref().is_some_and(|s| s.contains("Not found in installed Steam games"))));
-        assert_eq!(spot.reclaimable_bytes, 0);
-        assert_eq!(clean("shader-cache", &ctx, None).deleted, 0);
-        assert!(installed.exists() && leftover.exists());
+        let kept = spot.items.iter().find(|item| item.name == "Steam · Example Game · Shader cache").unwrap();
+        assert!(!kept.goes && kept.optional, "an installed game's cache stays, tickable");
+        let gone = spot.items.iter().find(|item| item.name == "Steam · Copperline · Shader cache").unwrap();
+        assert!(gone.goes && !gone.optional);
+        assert_eq!(gone.reason, "Copperline isn't installed any more");
+        assert!(gone.sub.as_deref().is_some_and(|s| s.contains("Not installed in Steam")));
+        assert_eq!(spot.reclaimable_bytes, 500);
+        clean("shader-cache", &ctx, None);
+        assert!(installed.exists() && !leftover.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn nvidia_caches_are_named_by_app_id_and_an_uninstalled_games_go() {
+        use crate::trash::tests::touch_old;
+        let root = fixture("nvidia-owners");
+        let root = {
+            let ordinary = root.to_string_lossy();
+            std::path::PathBuf::from(ordinary.strip_prefix(r"\\?\").unwrap_or(&ordinary))
+        };
+        let paths = Paths::under(&root);
+        let cache = paths.local_appdata.join("NVIDIA").join("DXCache");
+        // Current drivers put the program's name at byte 17; the biggest files keep only a number.
+        let nvph = |file: &str, program: Option<&str>, days: u64| {
+            let mut bytes = vec![0u8; 4096];
+            bytes[..4].copy_from_slice(b"nvph");
+            bytes[8] = 0x40;
+            bytes[16] = 1;
+            match program {
+                Some(p) => bytes[17..17 + p.len()].copy_from_slice(p.as_bytes()),
+                None => bytes[20..24].copy_from_slice(&[0x0a, 0x7b, 0x3e, 0x90]),
+            }
+            let path = cache.join(file);
+            std::fs::create_dir_all(&cache).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            touch_old(&path, days);
+        };
+        nvph("0002a9cbc7c909d5.nvph", Some("Copperline-Win64-Shipping.exe"), 2);
+        nvph("0003a9cbc7c9aaaa.nvph", None, 2);
+        nvph("0002a9cb1111aaaa.nvph", Some("Lanternfall.exe"), 2);
+        nvph("0002a9cb2222aaaa.nvph", None, 2);
+        let steam = paths.program_files_x86.join("Steam");
+        std::fs::create_dir_all(steam.join("steamapps")).unwrap();
+        std::fs::write(steam.join("steamapps").join("libraryfolders.vdf"), format!(
+            "\"libraryfolders\" {{ \"0\" {{ \"path\" \"{}\" }} }}",
+            steam.to_string_lossy().replace('\\', "\\\\")
+        )).unwrap();
+        std::fs::create_dir_all(steam.join("appcache")).unwrap();
+        std::fs::write(steam.join("appcache").join("appinfo.vdf"), crate::trash::steam_appinfo::tests::file(&[
+            (970, "Copperline, Night Shift", "Copperline", &[r"Copperline\Binaries\Win64\Copperline-Win64-Shipping.exe"]),
+        ])).unwrap();
+        write(&paths.system_drive.join("Program Files").join("Lanternfall").join("Lanternfall.exe"), 10, 30);
+
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("shader-cache", &ctx).unwrap();
+        let row = |file: &str| spot.items.iter().find(|i| i.name.ends_with(file)).unwrap_or_else(|| panic!("{file} in {:#?}", spot.items));
+        for file in ["0002a9cbc7c909d5.nvph", "0003a9cbc7c9aaaa.nvph"] {
+            let r = row(file);
+            assert_eq!(r.name, format!("NVIDIA · Copperline, Night Shift · DXCache {file}"));
+            assert!(r.goes, "{file}: uninstalled from Steam, so it goes though it's new");
+            assert_eq!(r.reason, "Copperline, Night Shift isn't installed any more");
+            assert!(r.sub.as_deref().is_some_and(|s| s.starts_with("Uninstalled from Steam")));
+        }
+        let installed = row("0002a9cb1111aaaa.nvph");
+        assert_eq!(installed.name, "NVIDIA · Lanternfall.exe · DXCache 0002a9cb1111aaaa.nvph");
+        assert!(!installed.goes, "installed and new: stays");
+        let unknown = row("0002a9cb2222aaaa.nvph");
+        assert!(unknown.name.contains("App unknown") && !unknown.goes);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

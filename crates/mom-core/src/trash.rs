@@ -14,6 +14,8 @@ mod forgotten;
 mod harness;
 mod shader_owner;
 mod steam_shaders;
+mod steam_appinfo;
+mod programs;
 mod walk;
 mod windows_update;
 
