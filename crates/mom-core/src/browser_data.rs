@@ -3,7 +3,7 @@
 //! cache children of a profile are eligible; a broad parent must never swallow that profile.
 
 use std::ffi::OsStr;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 pub(crate) const CHROMIUM_CACHE_DIRS: &[&str] = &[
     "Cache", "Code Cache", "GPUCache", "DawnCache", "DawnWebGPUCache",
@@ -38,11 +38,12 @@ fn cache_relative(path: &Path) -> bool {
 }
 
 fn protected_boundary(path: &Path) -> bool {
+    known_profile_home(path).is_some_and(|home| !path.strip_prefix(home).is_ok_and(cache_relative))
+}
+
+fn known_profile_home(path: &Path) -> Option<PathBuf> {
     let parts: Vec<String> = path.components().map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase()).collect();
-    known_profile_boundary(&parts).is_some_and(|home| {
-        let rest: std::path::PathBuf = path.components().skip(home + 1).collect();
-        !cache_relative(&rest)
-    })
+    known_profile_boundary(&parts).map(|home| path.components().take(home + 1).collect())
 }
 
 fn plain_metadata(path: &Path) -> Option<std::fs::Metadata> {
@@ -126,7 +127,8 @@ pub(crate) fn protects_path(path: &Path) -> bool {
     if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)) {
         return true;
     }
-    if protected_boundary(path) { return true; }
+    let known_home = known_profile_home(path);
+    if known_home.as_ref().is_some_and(|home| !path.strip_prefix(home).is_ok_and(cache_relative)) { return true; }
     // Validate the entire ancestry before allowing a leaf below the nearest profile.
     let Some(ancestors) = path.ancestors().map(|ancestor| plain_metadata(ancestor).map(|meta| (ancestor, meta))).collect::<Option<Vec<_>>>() else { return true };
     for (ancestor, meta) in &ancestors {
@@ -134,6 +136,11 @@ pub(crate) fn protects_path(path: &Path) -> bool {
     }
     for (ancestor, meta) in ancestors {
         if !meta.is_dir() { continue; }
+        // A recognized profile need not have cookies yet. Its enclosing User Data has
+        // Local State, but that container must not override the cache leaf already checked
+        // against this nearer profile. All ancestor links and sensitive names were checked
+        // above; unexpected profile markers inside the cache are still checked below.
+        if known_home.as_deref() == Some(ancestor) { break; }
         match profile_marker(ancestor) {
             Some(false) => {},
             Some(true) => {
@@ -260,6 +267,34 @@ mod tests {
         assert!(!tree_is_safe(&cache));
         assert!(!tree_is_safe(&root.join("missing")));
         assert!(!tree_is_safe(Path::new("relative/Cache")));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn local_state_above_a_cookie_free_profile_does_not_block_only_its_cache_leaves() {
+        let root = fixture("cookie-free-profile");
+        let data = root.join("Google/Chrome/User Data");
+        let home = data.join("Profile 2");
+        write(&data.join("Local State"), 20, 0);
+        for name in ["Cache", "Code Cache", "GPUCache"] {
+            let cache = home.join(name);
+            write(&cache.join("data"), 10, 0);
+            assert!(!protects_path(&cache));
+            assert!(tree_is_safe(&cache));
+        }
+        assert!(!home.join("Cookies").exists() && !home.join("Network/Cookies").exists());
+        assert!(protects_path(&data.join("Local State")));
+        assert!(protects_path(&data) && protects_path(&home));
+        assert!(!tree_is_safe(&data) && !tree_is_safe(&home));
+        let nested_auth = home.join("Cache/nested/Network/Cookies");
+        write(&nested_auth, 10, 0);
+        assert!(protects_path(&nested_auth));
+        assert!(!tree_is_safe(&home.join("Cache")), "cache names cannot shelter authentication data");
+        // An unrecognized app container with Local State still protects all non-cache data.
+        let generic = root.join("UnknownApp");
+        write(&generic.join("Local State"), 20, 0);
+        write(&generic.join("ArbitraryChild/Cache/data"), 10, 0);
+        assert!(protects_path(&generic.join("ArbitraryChild/Cache")));
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

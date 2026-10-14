@@ -383,6 +383,8 @@ mod tests {
         let chrome = paths.local_appdata.join("Google").join("Chrome").join("User Data");
         write(&edge.join("Default").join("Cache").join("Cache_Data").join("f_0001"), 4000, 1);
         write(&edge.join("Default").join("Cookies"), 100, 1); // never touched
+        // A profile may have caches before any cookies. User Data's Local State must not
+        // prevent cleaning these disposable children or itself become a cleanup target.
         write(&chrome.join("Profile 2").join("Code Cache").join("js").join("a"), 2000, 1);
         write(&chrome.join("Profile 2").join("GPUCache").join("data_1"), 500, 1);
         write(&chrome.join("System Profile").join("Cache").join("x"), 999, 1); // not a person's profile
@@ -433,7 +435,7 @@ mod tests {
         assert!(cursor.join("Local Storage").join("leveldb").join("c").exists());
         assert!(paths.appdata.join("Slack").join("Code Cache").exists(), "Slack is open");
         assert!(!chrome.join("Profile 2").join("Code Cache").exists());
-        assert!(chrome.join("Local State").exists());
+        assert_eq!(std::fs::read_to_string(chrome.join("Local State")).unwrap(), r#"{"profile":{"info_cache":{"Profile 2":{"name":"Work"}}}}"#);
         assert!(edge.join("Default").join("Cache").exists(), "Edge is open");
         assert!(edge.join("Default").join("Cookies").exists());
         assert!(ff.is_dir() && !ff.join("cache2").exists());

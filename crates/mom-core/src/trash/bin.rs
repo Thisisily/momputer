@@ -424,6 +424,7 @@ mod tests {
     #[test]
     fn invalid_bin_dates_do_not_claim_an_age() {
         let root = fixture("bin-unknown-age");
+        std::fs::create_dir_all(&root).unwrap();
         let now = 1_790_086_400;
         for (id, deleted) in [("ZERO", 0), ("FUTURE", now + 86_400)] {
             std::fs::write(root.join(format!("$R{id}")), b"discarded").unwrap();

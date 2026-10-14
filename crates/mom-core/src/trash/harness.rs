@@ -1395,6 +1395,16 @@ mod tests {
     #[test]
     fn steam_shader_ownership_does_not_select_new_caches_for_automatic_cleanup() {
         let root = fixture("steam-shader-selection");
+        // The shared fixture canonicalizes its base, which gives Windows a verbatim
+        // prefix. Steam's discovery deliberately accepts ordinary local drive paths
+        // only, so model the spelling Steam writes without weakening that boundary.
+        #[cfg(windows)]
+        let root = {
+            let ordinary = root.to_string_lossy();
+            assert!(matches!(root.components().next(), Some(std::path::Component::Prefix(p))
+                if matches!(p.kind(), std::path::Prefix::VerbatimDisk(_))));
+            std::path::PathBuf::from(ordinary.strip_prefix(r"\\?\").unwrap())
+        };
         let paths = Paths::under(&root);
         let steam = paths.program_files_x86.join("Steam");
         let apps = steam.join("steamapps");
@@ -1451,7 +1461,21 @@ mod tests {
         assert_eq!(going("shader-cache"), vec!["NVIDIA · App unknown · DXCache old.toc"]);
         assert_eq!(going("game-junk"), vec!["Unity games · Swordship · Player.log", "Unreal games · Atlas · Atlas.log"]);
         assert_eq!(going("dev-leftovers"), vec!["Developer tools · Dart · package cache"]);
-        assert_eq!(going("app-leftovers"), vec!["Chrome · version 151.0.1 snapshot", "Squirrel apps · Slack 4.40.0"]);
+        assert_eq!(going("app-leftovers"), vec!["Squirrel apps · Slack 4.40.0"]);
+        // Chrome's snapshots back up whole profiles, including sign-ins. Even the older
+        // version is protected; an old/stale selection must not turn it into app junk.
+        let app_leftovers = measure("app-leftovers", &ctx).unwrap();
+        let snapshots: Vec<_> = app_leftovers.items.iter().filter(|i| i.name.starts_with("Chrome · ")).collect();
+        assert_eq!(snapshots.len(), 2);
+        assert!(snapshots.iter().all(|i| !i.goes && !i.optional && i.reason == crate::trash::BROWSER_DATA));
+        let stale = crate::trash::Pick {
+            goes: false,
+            ticked: snapshots.iter().map(|i| i.path.clone()).collect(),
+            new: true,
+            ..Default::default()
+        };
+        let refused = clean("app-leftovers", &ctx, Some(&stale));
+        assert_eq!((refused.deleted, refused.skipped, refused.freed), (0, 2, 0));
         for id in ["shader-cache", "game-junk", "dev-leftovers", "app-leftovers"] {
             clean(id, &ctx, None);
         }
@@ -1459,6 +1483,8 @@ mod tests {
         assert!(l.join("Atlas").join("Saved").join("SaveGames").join("slot1.sav").exists());
         assert!(l.join("NVIDIA").join("DXCache").join("new.toc").exists());
         assert!(l.join("Slack").join("app-4.41.0").exists() && !l.join("Slack").join("app-4.40.0").exists());
+        assert_eq!(std::fs::read(snaps.join("151.0.1").join("x")).unwrap(), vec![b'x'; 70]);
+        assert_eq!(std::fs::read(snaps.join("154.0.2").join("x")).unwrap(), vec![b'x'; 70]);
         std::fs::remove_dir_all(&root).unwrap();
     }
 
