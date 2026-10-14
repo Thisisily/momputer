@@ -4668,6 +4668,8 @@ in ${x.cwd}`)}">
       loadHealth(true);
     }
     if (state.tab === "rooms" && state.roomOpen) inspectRoom(state.roomOpen);
+    // An agent's skills may have been updated since House rules was opened.
+    if (state.tab === "rules") loadRules().catch(() => {});
     if (moving()) G.fromTo("#btn-refresh svg", { rotation: 0 }, { rotation: 360, duration: 0.6, ease: "power2.inOut", transformOrigin: "50% 50%" });
   });
   $("#btn-settings").addEventListener("click", () => (state.sheet && state.sheet.kind === "settings" ? closeSheet() : openSheet({ kind: "settings" })));
