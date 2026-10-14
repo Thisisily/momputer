@@ -20,6 +20,8 @@ pub struct Speed {
     /// The busiest programs right now, every process of a program added together.
     pub busy: Vec<Busy>,
     pub gpu: Option<Gpu>,
+    /// The last thirty days of crashes and resets, day by day.
+    pub stability: Option<crate::stability::Stability>,
     /// Unix seconds.
     pub at: u64,
 }
@@ -152,7 +154,7 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
     if let Some(g) = gpu.as_mut().filter(|g| g.busy.is_none()) {
         g.busy = Some(programs.iter().filter_map(|p| p.gpu).sum::<f32>().clamp(0.0, 100.0).round() as u32);
     }
-    Speed { findings, busy: busy(&programs, 6), gpu, at: now }
+    Speed { findings, busy: busy(&programs, 6), gpu, stability: Some(crate::stability::get()), at: now }
 }
 
 // ------------------------------------------------------------------ apps that lost the graphics card
@@ -422,7 +424,7 @@ struct Event {
 /// How far back the event log is read.
 const LOOK_BACK: u64 = 14 * 86_400;
 
-const GPU_DRIVERS: &[&str] = &["nvlddmkm", "amdkmdag", "amdwddmg", "igfx", "igfxn", "igdkmd64"];
+pub(crate) const GPU_DRIVERS: &[&str] = &["nvlddmkm", "amdkmdag", "amdwddmg", "igfx", "igfxn", "igdkmd64"];
 
 fn read_events() -> Vec<Event> {
     let ms = LOOK_BACK * 1000;
@@ -503,7 +505,7 @@ fn stamp(at: u64) -> String {
 
 /// Times closer than `gap` seconds are one moment: the driver logs several events for each
 /// crash, Windows several for each install.
-fn moments(mut times: Vec<u64>, gap: u64) -> Vec<u64> {
+pub(crate) fn moments(mut times: Vec<u64>, gap: u64) -> Vec<u64> {
     times.sort_unstable();
     let mut out: Vec<u64> = Vec::new();
     let mut prev: Option<u64> = None;

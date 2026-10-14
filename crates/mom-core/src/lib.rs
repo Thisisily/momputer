@@ -40,6 +40,14 @@ pub mod trash;
 pub mod util;
 pub mod voice;
 pub mod winsettings;
+// 0.5.0 B: screens, devices, the network, starting and sleeping, stability, backups.
+mod backups;
+mod devices;
+mod display;
+mod eventlog;
+mod network;
+mod power;
+pub mod stability;
 
 use agents::AgentKind;
 use serde::Serialize;
