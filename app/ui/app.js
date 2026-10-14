@@ -6,7 +6,13 @@
 
   const T = window.__TAURI__;
   const bridge = T ? { invoke: T.core.invoke, listen: T.event.listen } : window.momMock;
-  const invoke = (cmd, args) => bridge.invoke(cmd, args);
+  // Only Room file changes are on hold; other features keep their full safety checks.
+  const ROOM_CHANGES_AVAILABLE = false;
+  const ROOM_CHANGES_UNAVAILABLE = "Room changes and undo are temporarily unavailable in this release. You can still scan and inspect rooms.";
+  const roomMutationCommands = new Set(["apply_tidy", "undo_tidy", "chore_prompt"]);
+  const roomMutationActions = new Set(["apply-room", "undo-room", "copy-chores", "toggle-action", "room-pick-all"]);
+  const invoke = (cmd, args) => !ROOM_CHANGES_AVAILABLE && roomMutationCommands.has(cmd)
+    ? Promise.reject(new Error(ROOM_CHANGES_UNAVAILABLE)) : bridge.invoke(cmd, args);
   const G = window.gsap;
   // The widget should cost nothing while you're not looking at it. 60 frames a second is plenty
   // (GSAP would draw at the screen's rate, 240 on some), and once the last tween ends GSAP stops
@@ -2371,8 +2377,11 @@ in ${x.cwd}`)}">
   // Player.log" belongs to Unity games), or by the sort of thing (Docker's images, containers).
   const SEP = " · ";
   const KIND_NAMES = { images: "Images", "stopped containers": "Stopped containers", "build cache": "Build cache", volumes: "Volumes" };
-  function groupOf(i) {
+  function groupOf(i, spotId) {
     const parts = i.name.split(SEP);
+    // Shader collectors name rows vendor · app/game · file. Give each identified owner
+    // its own collapsible group; unknown ownership stays explicitly separate per vendor.
+    if (spotId === "shader-cache" && parts.length >= 3) return [parts.slice(0, 2).join(SEP), parts.slice(2)];
     if (parts.length >= 2) return [parts[0], parts.slice(1)];
     return [i.kind ? KIND_NAMES[i.kind] || cap(i.kind) : "", parts];
   }
@@ -2408,17 +2417,18 @@ in ${x.cwd}`)}">
     if (!v.group) return shown.map(one).sort(cmp).map((e) => e.row()).join("");
     const groups = new Map();
     for (const i of shown) {
-      const [key, rest] = groupOf(i);
+      const [key, rest] = groupOf(i, s.id);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push({ i, rest });
     }
-    const real = [...groups].filter(([k, m]) => k && m.length > 1);
+    const shaderGroups = s.id === "shader-cache";
+    const real = [...groups].filter(([k, m]) => k && (shaderGroups || m.length > 1));
     // One group holding everything isn't worth a header.
-    if (!real.length || (real.length === 1 && real[0][1].length === shown.length)) return shown.map(one).sort(cmp).map((e) => e.row()).join("");
+    if (!real.length || (!shaderGroups && real.length === 1 && real[0][1].length === shown.length)) return shown.map(one).sort(cmp).map((e) => e.row()).join("");
     const shut = shown.length > 12 && real.length > 1;
     const entries = [];
     for (const [k, members] of groups) {
-      if (k && members.length > 1) entries.push({ ...weigh(k, members.map((m) => m.i)), row: () => groupBlock(s, list, k, members, picking, shut, cmp) });
+      if (k && (shaderGroups || members.length > 1)) entries.push({ ...weigh(k, members.map((m) => m.i)), row: () => groupBlock(s, list, k, members, picking, shut, cmp) });
       else for (const m of members) entries.push(one(m.i));
     }
     return entries.sort(cmp).map((e) => e.row()).join("");
@@ -2570,7 +2580,7 @@ in ${x.cwd}`)}">
     const danger = (s.action === "delete" && !recycling(s)) || s.action === "empty-bin";
     const moves = s.action === "move";
     const busy = state.trash.busy;
-    const tools = (s.items || []).length > 8 ? listTools() : "";
+    const tools = (s.items || []).length > 8 || (s.id === "shader-cache" && (s.items || []).length > 1) ? listTools() : "";
     const lastGoes = p.goes[p.goes.length - 1];
     return `<div class="sheet-head">
         <div><h2 id="sheet-title">${esc(s.label)}</h2>
@@ -2676,9 +2686,11 @@ in ${x.cwd}`)}">
 
   // ------------------------------------------------------------ rooms
 
+  const roomNotice = () => ROOM_CHANGES_AVAILABLE ? "" : `<p class="sheet-note">${esc(ROOM_CHANGES_UNAVAILABLE)}</p>`;
+
   function renderRooms() {
     if (state.roomOpen) return renderRoom(state.roomOpen);
-    let html = `<div class="lead"><span class="lead-note">Folders mom keeps an eye on.</span><button class="secondary" data-act="add-room">Add a folder</button></div>`;
+    let html = roomNotice() + `<div class="lead"><span class="lead-note">Folders mom keeps an eye on.</span><button class="secondary" data-act="add-room">Add a folder</button></div>`;
     if (!state.roomPaths.length) {
       return html + section("rooms", "Rooms", "", `<p class="empty">Add a project or data folder and mom will grade how tidy it is, and say what to fix.</p>`);
     }
@@ -2712,7 +2724,7 @@ in ${x.cwd}`)}">
 
   function renderRoom(path) {
     const r = state.rooms[path];
-    let html = `<button class="back" data-act="close-room">All rooms</button>`;
+    let html = `<button class="back" data-act="close-room">All rooms</button>` + roomNotice();
     const why = state.roomErrors[path];
     if (why)
       return (
@@ -2723,12 +2735,12 @@ in ${x.cwd}`)}">
     if (!r) return html + section("room", "Looking", "", `<p class="empty">Looking…</p>`);
     if (r.moms) return html + momsRoom();
     const sel = state.roomSel[path] || new Set();
-    html += `<div class="room-title"><h2>${esc(r.name)}</h2>${grade(r.grade, 4)}<p class="said">${esc(r.line)}</p></div>`;
+    html += `<div class="room-title"><h2>${esc(r.name)}</h2>${grade(r.grade, 4)}<p class="said">${esc(ROOM_CHANGES_AVAILABLE ? r.line : "Scan results for this folder.")}</p></div>`;
     const careful = [];
     if (r.codeProject) careful.push(`This folder has code in it. Moving things can break paths, so nothing is ticked. "Copy chores for an agent" lets an agent tidy and fix the paths.`);
     else if (r.projects >= 2)
       careful.push(`This folder holds ${r.projects} projects (git repos and packages). Mom never moves or groups them, since tools and agents find them by path. She only tidies inside them.`);
-    if (r.personal) careful.push("This is one of your own folders, so mom only ticks what's plainly throwaway. Everything else waits for you.");
+    if (r.personal) careful.push(ROOM_CHANGES_AVAILABLE ? "This is one of your own folders, so mom only ticks what's plainly throwaway. Everything else waits for you." : "This is one of your own folders. The scan is for inspection; nothing will be changed.");
     if (r.partial) careful.push("It's too big to look through in full, so this is what mom saw in the first part of it.");
     if (careful.length) html += section("code", "Careful", "", careful.map((t) => `<p class="empty">${esc(t)}</p>`).join(""));
     const findings = r.findings.map((f) => `<div class="room-finding" id="f-${hash(f.title)}"><strong>${pathy(f.title)}</strong><p>${pathy(f.detail)}</p></div>`).join("");
@@ -2736,23 +2748,23 @@ in ${x.cwd}`)}">
     if (r.actions.length) {
       const checks = r.actions
         .map(
-          (a) => `<label class="check" id="a-${hash(a.id)}"><input type="checkbox" data-act="toggle-action" data-aid="${esc(a.id)}" ${sel.has(a.id) ? "checked" : ""}>
+          (a) => `<label class="check" id="a-${hash(a.id)}"><input type="checkbox" data-act="toggle-action" data-aid="${esc(a.id)}" ${sel.has(a.id) ? "checked" : ""} ${!ROOM_CHANGES_AVAILABLE ? "disabled" : ""}>
             <span class="check-main">${pathy(sizeless(a.title))}<small>${esc(a.reason)}</small></span><span class="num">${a.bytes ? bytes(a.bytes) : ""}</span></label>`
         )
         .join("");
-      html += section("plan", "Mom's plan", tickAllButton("room-pick-all", r.actions.every((a) => sel.has(a.id))), checks);
+      html += section("plan", "Mom's plan", tickAllButton("room-pick-all", r.actions.every((a) => sel.has(a.id)), "", !ROOM_CHANGES_AVAILABLE), checks);
     }
     html += `<div class="button-row">
-      <button class="primary" data-act="apply-room" ${!sel.size || state.roomBusy ? "disabled" : ""}>Do the checked ones${sel.size ? ` (${sel.size})` : ""}</button>
-      <button class="secondary" data-act="copy-chores">Copy chores for an agent</button>
-      <button class="secondary" data-act="undo-room">Undo last tidy-up</button>
+      <button class="primary" data-act="apply-room" ${!ROOM_CHANGES_AVAILABLE || !sel.size || state.roomBusy ? "disabled" : ""}>Do the checked ones${sel.size ? ` (${sel.size})` : ""}</button>
+      <button class="secondary" data-act="copy-chores" ${!ROOM_CHANGES_AVAILABLE ? "disabled" : ""}>Copy chores for an agent</button>
+      <button class="secondary" data-act="undo-room" ${!ROOM_CHANGES_AVAILABLE ? "disabled" : ""}>Undo last tidy-up</button>
     </div>
     <div class="button-row">
       <button class="link-btn" data-act="rescan-room">Look again</button>
       <button class="link-btn" data-act="reveal-room">Show folder</button>
       <button class="link-btn" data-act="remove-room">Stop watching this folder</button>
     </div>
-    <p class="foot">Moves can be undone. Deleted files go to the Recycle Bin.</p>`;
+    ${ROOM_CHANGES_AVAILABLE ? `<p class="foot">Moves can be undone. Deleted files go to the Recycle Bin.</p>` : ""}`;
     return html;
   }
 
@@ -3637,6 +3649,7 @@ in ${x.cwd}`)}">
     const el = e.target.closest("[data-act]");
     if (!el) return;
     const a = el.dataset.act;
+    if (!ROOM_CHANGES_AVAILABLE && roomMutationActions.has(a)) { toast(ROOM_CHANGES_UNAVAILABLE, true); return; }
     const rowEl = el.closest("[data-id]");
     const g = rowEl ? groupById(rowEl.dataset.id) : null;
     switch (a) {

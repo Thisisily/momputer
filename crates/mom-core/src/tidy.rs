@@ -1005,6 +1005,18 @@ fn within(room: &Path, p: &Path) -> bool {
 }
 
 pub fn apply(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyReport {
+    if !crate::ROOM_CHANGES_AVAILABLE {
+        return ApplyReport {
+            failed: vec![crate::ROOM_CHANGES_UNAVAILABLE.into()],
+            message: crate::ROOM_CHANGES_UNAVAILABLE.into(),
+            ..Default::default()
+        };
+    }
+    apply_enabled(report, ids, journal_dir)
+}
+
+// The protected implementation stays fixture-tested while the public Room API is held.
+fn apply_enabled(report: &RoomReport, ids: &[String], journal_dir: &Path) -> ApplyReport {
     apply_with(report, ids, journal_dir, &mut |path| trash::delete(path).map_err(|e| e.to_string()))
 }
 
@@ -1249,6 +1261,17 @@ enum Back {
 /// where they are. And what couldn't go back this time stays on the record, so undoing again,
 /// once the way is clear, finishes the job without redoing what's done.
 pub fn undo_last(journal_dir: &Path) -> UndoReport {
+    if !crate::ROOM_CHANGES_AVAILABLE {
+        return UndoReport {
+            failed: vec![crate::ROOM_CHANGES_UNAVAILABLE.into()],
+            message: crate::ROOM_CHANGES_UNAVAILABLE.into(),
+            ..Default::default()
+        };
+    }
+    undo_last_enabled(journal_dir)
+}
+
+fn undo_last_enabled(journal_dir: &Path) -> UndoReport {
     undo_last_with(journal_dir, &|path| std::fs::symlink_metadata(path))
 }
 
@@ -1490,6 +1513,58 @@ pub fn chore_prompt(report: &RoomReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Keep exercising every protection in the held implementations. The public gate has
+    // its own regression below and remains active in this test build as well.
+    use super::{apply_enabled as apply, undo_last_enabled as undo_last};
+
+    #[test]
+    fn held_room_apis_refuse_without_changing_sources_or_journals() {
+        let root = tmp("room-release-hold");
+        let room = root.join("room");
+        let source = room.join("report.md");
+        write(&source, "keep this report exactly where it is");
+        let (report, ids) = plan(&room, &["report.md"]);
+        let journal = root.join("journal");
+        let applied = super::apply(&report, &ids, &journal);
+        assert_eq!(applied.message, crate::ROOM_CHANGES_UNAVAILABLE);
+        assert_eq!(applied.failed, [crate::ROOM_CHANGES_UNAVAILABLE]);
+        assert_eq!((applied.moved, applied.recycled, applied.removed), (0, 0, 0));
+        assert!(applied.journal.is_none());
+        assert!(!journal.exists() && !room.join("Documents").exists());
+        assert_eq!(text(&source), "keep this report exactly where it is");
+
+        let undone = super::undo_last(&journal);
+        assert_eq!(undone.message, crate::ROOM_CHANGES_UNAVAILABLE);
+        assert!(!journal.exists());
+        // Normal undo retires empty old journals, so an empty old record proves the gate
+        // runs before even that housekeeping. An existing move record must also stay intact.
+        let empty = journal.join("tidy-1-001.json");
+        write(&empty, "");
+        let undone = super::undo_last(&journal);
+        assert_eq!(undone.message, crate::ROOM_CHANGES_UNAVAILABLE);
+        assert!(empty.is_file() && text(&empty).is_empty());
+        let moved = room.join("Documents/other.md");
+        write(&moved, "previously moved report");
+        let old_journal = Journal {
+            room: room.to_string_lossy().into_owned(), at: 2,
+            entries: vec![JournalEntry {
+                op: Op::Move, from: room.join("other.md").to_string_lossy().into_owned(),
+                to: Some(moved.to_string_lossy().into_owned()),
+            }],
+        };
+        let saved = start_journal(&journal, &old_journal).unwrap();
+        let bytes = std::fs::read(&saved).unwrap();
+        let undone = super::undo_last(&journal);
+        assert_eq!(undone.message, crate::ROOM_CHANGES_UNAVAILABLE);
+        assert_eq!(undone.failed, [crate::ROOM_CHANGES_UNAVAILABLE]);
+        assert_eq!((undone.restored, undone.pending), (0, 0));
+        assert!(empty.is_file() && text(&empty).is_empty());
+        assert_eq!(std::fs::read(&saved).unwrap(), bytes);
+        assert_eq!(text(&moved), "previously moved report");
+        assert!(!room.join("other.md").exists());
+        assert_eq!(text(&source), "keep this report exactly where it is");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn mkdir(p: &Path) {
         std::fs::create_dir_all(p).unwrap();

@@ -157,3 +157,27 @@ test("pending Windows update files cannot be ticked or counted through stale sel
   const clear = { ...setup, goes: true, reason: "Last changed 800 days ago" };
   assert.match(ui.itemRow(spot, clear, true), /<input[^>]+data-act="pick"/);
 });
+
+
+test("shader caches form collapsible app groups even when every item has one vendor", () => {
+  const ui = harness();
+  ui.state.listView = { sort: "name", group: true, q: "" };
+  const item = (name, n) => ({ name, path: `C:\\Fake\\${n}`, bytes: 100, goes: false, reason: "App identity from cache; installation unknown" });
+  const items = [item("NVIDIA · alpha.exe · a.bin", 1), item("NVIDIA · alpha.exe · b.bin", 2), item("NVIDIA · beta.exe · c.bin", 3), item("NVIDIA · App unknown · d.bin", 4)];
+  const html = ui.listBody({ id: "shader-cache", action: "delete" }, items, false, "stays");
+  assert.equal((html.match(/data-act="toggle-group"/g) || []).length, 3);
+  for (const name of ["NVIDIA · alpha.exe", "NVIDIA · beta.exe", "NVIDIA · App unknown"]) assert.ok(html.includes(`class="lgroup-name">${name}</span>`), name);
+  assert.match(html, /installation unknown/);
+  assert.doesNotMatch(html, /uninstalled/);
+  const ordinary = ui.listBody({ id: "old-temp", action: "delete" }, items, false, "stays");
+  assert.doesNotMatch(ordinary, /data-act="toggle-group"/);
+});
+
+test("Steam shader names and unknown app IDs stay distinct and escaped", () => {
+  const ui = harness();
+  ui.state.listView = { sort: "name", group: true, q: "" };
+  const items = ["Steam · Portal 2 · Shader cache", "Steam · Steam app 999999 · Shader cache", "DirectX · Game & tool.exe · cache.db"].map((name, n) => ({ name, path: `C:\\Fake\\${n}`, bytes: 100, goes: false }));
+  const html = ui.listBody({ id: "shader-cache", action: "delete" }, items, false, "stays");
+  for (const name of ["Steam · Portal 2", "Steam · Steam app 999999", "DirectX · Game &amp; tool.exe"]) assert.ok(html.includes(`class="lgroup-name">${name}</span>`), name);
+  assert.equal((html.match(/data-act="toggle-group"/g) || []).length, 3);
+});

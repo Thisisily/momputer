@@ -1334,6 +1334,9 @@ fn remove_room(path: String, s: State<'_, S>) -> Res<()> {
 
 #[tauri::command]
 async fn apply_tidy(path: String, ids: Vec<String>, s: State<'_, S>) -> Res<tidy::ApplyReport> {
+    if !mom_core::ROOM_CHANGES_AVAILABLE {
+        return Err(mom_core::ROOM_CHANGES_UNAVAILABLE.into());
+    }
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let report = s.rooms.lk().get(&path).cloned().ok_or("Look at the room first.")?;
@@ -1351,6 +1354,9 @@ async fn apply_tidy(path: String, ids: Vec<String>, s: State<'_, S>) -> Res<tidy
 
 #[tauri::command]
 async fn undo_tidy(s: State<'_, S>) -> Res<tidy::UndoReport> {
+    if !mom_core::ROOM_CHANGES_AVAILABLE {
+        return Err(mom_core::ROOM_CHANGES_UNAVAILABLE.into());
+    }
     let s = s.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let r = tidy::undo_last(&s.paths.journal_dir());

@@ -110,6 +110,9 @@ pub fn terminate(pid: u32, expected_start: u64) -> Result<bool, String> {
         PROCESS_TERMINATE,
     };
     const SYNCHRONIZE: u32 = 0x0010_0000;
+    if expected_start == 0 {
+        return Err("couldn't verify its identity (the recorded start time is missing)".into());
+    }
     unsafe {
         let h = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid);
         if h.is_null() {
@@ -119,33 +122,57 @@ pub fn terminate(pid: u32, expected_start: u64) -> Result<bool, String> {
                 e => Err(format!("couldn't open it (error {e})")),
             };
         }
-        let mut created: FILETIME = std::mem::zeroed();
-        let mut exited: FILETIME = std::mem::zeroed();
-        let mut kernel: FILETIME = std::mem::zeroed();
-        let mut user: FILETIME = std::mem::zeroed();
-        if expected_start != 0 && GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user) != 0 {
-            let ticks = ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64;
-            let start = (ticks / 10_000_000).saturating_sub(11_644_473_600);
-            if start.abs_diff(expected_start) > 2 {
-                CloseHandle(h);
-                return Ok(false);
-            }
-        }
-        let ok = TerminateProcess(h, 1) != 0;
-        let err = GetLastError();
-        if ok {
-            WaitForSingleObject(h, 3000);
-        }
+        let result = stop_with_verified_start(
+            expected_start,
+            || {
+                let mut created: FILETIME = std::mem::zeroed();
+                let mut exited: FILETIME = std::mem::zeroed();
+                let mut kernel: FILETIME = std::mem::zeroed();
+                let mut user: FILETIME = std::mem::zeroed();
+                if GetProcessTimes(h, &mut created, &mut exited, &mut kernel, &mut user) == 0 {
+                    return Err(format!("couldn't verify its identity (error {})", GetLastError()));
+                }
+                let ticks = ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64;
+                Ok((ticks / 10_000_000).saturating_sub(11_644_473_600))
+            },
+            || {
+                let ok = TerminateProcess(h, 1) != 0;
+                let err = GetLastError();
+                if ok {
+                    WaitForSingleObject(h, 3000);
+                    Ok(true)
+                } else if err == 5 {
+                    // Already exiting processes report access denied.
+                    Ok(false)
+                } else {
+                    Err(format!("TerminateProcess failed (error {err})"))
+                }
+            },
+        );
         CloseHandle(h);
-        if ok {
-            Ok(true)
-        } else if err == 5 {
-            // Already exiting processes report access denied.
-            Ok(false)
-        } else {
-            Err(format!("TerminateProcess failed (error {err})"))
-        }
+        result
     }
+}
+
+/// A missing or unreadable start time is not permission to stop an unverified PID.
+/// Keep the existing two-second tolerance for the sampler's timestamp precision.
+#[cfg(windows)]
+fn stop_with_verified_start(
+    expected_start: u64,
+    read_start: impl FnOnce() -> Result<u64, String>,
+    stop: impl FnOnce() -> Result<bool, String>,
+) -> Result<bool, String> {
+    if expected_start == 0 {
+        return Err("couldn't verify its identity (the recorded start time is missing)".into());
+    }
+    let start = read_start()?;
+    if start == 0 {
+        return Err("couldn't verify its identity (the current start time is missing)".into());
+    }
+    if start.abs_diff(expected_start) > 2 {
+        return Ok(false);
+    }
+    stop()
 }
 
 #[cfg(not(windows))]
@@ -161,6 +188,48 @@ pub fn terminate(pid: u32, _expected_start: u64) -> Result<bool, String> {
 mod tests {
     use super::*;
     use crate::procs::Sampler;
+
+    #[test]
+    fn missing_recorded_identity_does_not_query_or_stop() {
+        let result = stop_with_verified_start(
+            0,
+            || panic!("missing identity must be refused before querying"),
+            || panic!("missing identity must never stop a process"),
+        );
+        assert!(result.unwrap_err().contains("recorded start time is missing"));
+    }
+
+    #[test]
+    fn unavailable_current_identity_never_stops_a_process() {
+        for current in [Err("query failed (error 5)".to_string()), Ok(0)] {
+            let result = stop_with_verified_start(100, || current, || panic!("identity was not verified"));
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn recycled_pid_never_reaches_the_stop_operation() {
+        for current in [97, 103, u64::MAX] {
+            assert_eq!(
+                stop_with_verified_start(100, || Ok(current), || panic!("different process identity")),
+                Ok(false)
+            );
+        }
+    }
+
+    #[test]
+    fn verified_identity_preserves_stop_results_and_timestamp_tolerance() {
+        for current in [98, 100, 102] {
+            let stops = std::cell::Cell::new(0);
+            let result = stop_with_verified_start(100, || Ok(current), || {
+                stops.set(stops.get() + 1);
+                Err("stop failed".into())
+            });
+            assert_eq!(result, Err("stop failed".into()));
+            assert_eq!(stops.get(), 1);
+        }
+        assert_eq!(stop_with_verified_start(100, || Ok(100), || Ok(true)), Ok(true));
+    }
 
     #[test]
     fn stops_a_real_child_process_and_respects_start_times() {

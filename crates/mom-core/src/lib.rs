@@ -48,6 +48,11 @@ use std::collections::{BTreeMap, HashMap};
 pub use config::Config;
 pub use paths::Paths;
 
+/// Room mutations are held in this release; other protected cleanup remains available.
+/// This is a fixed release capability, not a user-configurable safety override.
+pub const ROOM_CHANGES_AVAILABLE: bool = false;
+pub const ROOM_CHANGES_UNAVAILABLE: &str = "Room changes and undo are temporarily unavailable in this release. You can still scan and inspect rooms.";
+
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Machine {

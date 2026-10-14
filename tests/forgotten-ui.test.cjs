@@ -73,7 +73,7 @@ function harness(initial = spot()) {
     render = () => renderSheet();
     react = () => {};
     toast = (text, error) => messages.push({ text, error: !!error });
-    globalThis.ui = { state, spotNow, picked, cleanSpot, renderSpot, effectNow, exactChoices, pickOf };
+    globalThis.ui = { state, spotNow, picked, cleanSpot, renderSpot, effectNow, exactChoices, pickOf, invoke, renderRoom };
   })();`, context, { filename: "app/ui/app.js" });
   const ui = context.ui;
   ui.state.tab = "upkeep";
@@ -362,4 +362,30 @@ test("failed, stopped, recycled, admin and archive cleanups consume selections s
     await clean(h);
     assert.equal(cleanCalls(h).length, 1, JSON.stringify(scenario));
   }
+});
+
+
+test("only Room mutations are disabled; file cleanup and app-data disposal remain available", async () => {
+  const h = harness();
+  const room = "C:\\Example";
+  h.state.rooms[room] = { name: "Example", grade: "B", line: "Scan results", findings: [], actions: [{ id: "example", title: "Move example", reason: "Synthetic", bytes: 10 }] };
+  h.state.roomSel[room] = new Set(["example"]);
+  const html = h.renderRoom(room);
+  assert.match(html, /Room changes and undo are temporarily unavailable/);
+  for (const act of ["apply-room", "undo-room", "copy-chores", "toggle-action", "room-pick-all"]) assert.ok(allDisabled(html, act), act);
+  for (const act of ["rescan-room", "reveal-room"]) assert.ok(hasAct(html, act) && !allDisabled(html, act), act);
+  await mode(h, "delete");
+  assert.ok(hasAct(h.html(), "clean-spot") && !allDisabled(h.html(), "clean-spot"));
+  assert.doesNotMatch(h.html(), /temporarily unavailable/);
+});
+
+test("Room gate rejects forged actions and direct IPC without blocking other cleanup commands", async () => {
+  const h = harness();
+  for (const act of ["apply-room", "undo-room", "copy-chores", "toggle-action", "room-pick-all"]) await h.action(act, {});
+  for (const cmd of ["apply_tidy", "undo_tidy", "chore_prompt"]) await assert.rejects(h.invoke(cmd, {}), /Room changes and undo are temporarily unavailable/);
+  assert.deepEqual(h.calls, []);
+  h.backend(async () => "Allowed fake IPC");
+  const allowed = ["clean_trash", "recycle_files", "bring_back", "delete_moved", "choose_archive_dir", "inspect_room"];
+  for (const cmd of allowed) assert.equal(await h.invoke(cmd, {}), "Allowed fake IPC");
+  assert.deepEqual(h.calls.map((x) => x.cmd), allowed);
 });

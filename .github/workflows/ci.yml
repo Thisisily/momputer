@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/release-031-room-hold]
   pull_request:
 
 permissions:

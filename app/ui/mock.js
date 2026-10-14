@@ -233,6 +233,19 @@
       ],
     }),
     spot({
+      id: "shader-cache", label: "Graphics shader caches", group: "windows", action: "delete", safety: "review",
+      detail: "Graphics caches with app or game names when their metadata identifies them.",
+      what: "Graphics caches with app or game names when their metadata identifies them. Unknown owners remain unknown; a missing executable does not establish that an app was uninstalled.",
+      totalBytes: 720 * MB, reclaimableBytes: 0, reclaimableItems: 0, keptItems: 5,
+      items: [
+        item("NVIDIA · nimbus.exe · DXCache a.bin", "Executable name from cache; installation unknown", 200 * MB, false, "Scan only", null),
+        item("NVIDIA · nimbus.exe · DXCache b.bin", "Executable name from cache; installation unknown", 120 * MB, false, "Scan only", null),
+        item("NVIDIA · App unknown · DXCache c.bin", "App could not be identified", 100 * MB, false, "Scan only", null),
+        item("Steam · Portal 2 · Shader cache", "Steam app 620 · Game present in Steam library", 180 * MB, false, "Scan only", null),
+        item("Steam · Steam app 999999 · Shader cache", "Game name unknown", 120 * MB, false, "Scan only", null),
+      ],
+    }),
+    spot({
       id: "old-conversations", label: "Old conversations", group: "agents", action: "move", safety: "safe", path: null,
       what: "Your agents' past conversations: Codex's and Claude Code's chats, images Codex made, and other agents' sessions. They add up to gigabytes. Moving the old ones to another drive frees this one, and a link in each one's place means the agents still find them where they were.",
       effect: "Moves 4 folders (3.1 GB) of Codex and Claude Code conversations whose latest recorded change is over 67 days old to a drive you choose, and leaves a link in each one's place, so they still open from where they were. Nothing is deleted, and Bring back puts any of them back here. While that drive is unplugged, those conversations can't be opened.",
@@ -1062,6 +1075,9 @@
 
   window.momMock = {
     invoke: async (cmd, args) => {
+      if (["apply_tidy", "undo_tidy", "chore_prompt"].includes(cmd)) {
+        throw new Error("Room changes and undo are temporarily unavailable in this release. You can still scan and inspect rooms.");
+      }
       const h = handlers[cmd];
       if (!h) throw new Error(`mock: no handler for ${cmd}`);
       return h(args || {});

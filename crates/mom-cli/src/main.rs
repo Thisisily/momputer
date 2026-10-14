@@ -502,6 +502,9 @@ fn allowed_elevated(cmd: &Option<Cmd>) -> bool {
 }
 
 fn run(cli: Cli) -> Result<i32> {
+    if room_changes_unavailable(&cli.cmd) {
+        bail!("{}", mom_core::ROOM_CHANGES_UNAVAILABLE);
+    }
     if mom_core::elevate::is_elevated() && !allowed_elevated(&cli.cmd) {
         if matches!(cli.cmd, Some(Cmd::Hook { .. })) {
             return Ok(0); // an agent running as administrator: stay out of the way
@@ -1568,9 +1571,32 @@ fn install(st: &Style, paths: &Paths, what: Vec<String>, on: bool) -> Result<i32
     Ok(0)
 }
 
+fn room_changes_unavailable(cmd: &Option<Cmd>) -> bool {
+    !mom_core::ROOM_CHANGES_AVAILABLE && matches!(cmd, Some(Cmd::Tidy { apply: true, .. } | Cmd::Undo))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn held_room_commands_fail_before_loading_state_without_blocking_other_cleanup() {
+        for args in [vec!["mom", "tidy", "--apply"], vec!["mom", "tidy", "--apply", "--only", "one,two"], vec!["mom", "undo"]] {
+            let cli = Cli::try_parse_from(&args).unwrap();
+            let error = run(cli).unwrap_err();
+            assert_eq!(error.to_string(), mom_core::ROOM_CHANGES_UNAVAILABLE, "{args:?}");
+        }
+        // Only parse these commands: this test must not run cleanup or settings actions.
+        for args in [
+            vec!["mom", "tidy"], vec!["mom", "tidy", "--json"], vec!["mom", "tidy", "--prompt"],
+            vec!["mom", "trash", "clean", "all", "--yes"],
+            vec!["mom", "trash", "clean", "windows-junk", "--yes", "--elevated"],
+            vec!["mom", "files", "--json"], vec!["mom", "settings", "undo", "proxy"],
+        ] {
+            let cli = Cli::try_parse_from(&args).unwrap();
+            assert!(!room_changes_unavailable(&cli.cmd), "this command is outside the Room hold: {args:?}");
+        }
+    }
 
     #[test]
     fn as_administrator_mom_only_looks_and_cleans_what_needs_one() {
