@@ -72,6 +72,8 @@ pub struct Extension {
     pub app: bool,
     /// A theme: Chrome lists it under Appearance, not with the extensions.
     pub theme: bool,
+    /// The theme the browser shows now: it isn't left over, whatever its age.
+    pub in_use: bool,
     /// The site a Chrome app opens ("desmos.com"), when it's one that just opens a site.
     pub site: Option<String>,
     /// What sort of thing it is: "ad blocker", "crypto wallet", "VPN", ...
@@ -255,6 +257,9 @@ fn profiles(root: &Path, scheme: &str, now: u64) -> Vec<Profile> {
 fn extensions(profile: &Path, scheme: &str) -> Vec<(Extension, Vec<PathBuf>)> {
     let Some(prefs) = read_json(&profile.join("Secure Preferences")).or_else(|| read_json(&profile.join("Preferences"))) else { return vec![] };
     let Some(settings) = prefs.pointer("/extensions/settings").and_then(Value::as_object) else { return vec![] };
+    // The theme in use is named in the ordinary Preferences, whichever file holds the settings.
+    let current_theme = read_json(&profile.join("Preferences"))
+        .and_then(|p| p.pointer("/extensions/theme/id").and_then(Value::as_str).map(str::to_string));
     let mut out = Vec::new();
     for (id, e) in settings {
         // From the store (1) or unpacked (4); the browser's own components don't count.
@@ -296,6 +301,7 @@ fn extensions(profile: &Path, scheme: &str) -> Vec<(Extension, Vec<PathBuf>)> {
             on: !disabled,
             app,
             theme,
+            in_use: theme && current_theme.as_deref() == Some(id.as_str()),
             site: manifest.pointer("/app/launch/web_url").and_then(Value::as_str).and_then(site_of),
             can,
             everywhere,
@@ -544,6 +550,7 @@ mod tests {
             on: true,
             app,
             theme: false,
+            in_use: false,
             site: None,
             kind,
             can: vec![],

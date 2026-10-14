@@ -509,7 +509,7 @@
   ];
   // Browsers: profiles and their extensions (made-up profile names).
   const ext = (name, kind, on, can, saved, extra = {}) => ({
-    id: name.toLowerCase().replace(/[^a-z]/g, "").padEnd(32, "a").slice(0, 32), name, description: extra.description || "", version: "1.0", on, app: !!extra.app, theme: !!extra.theme, site: extra.site || null, kind,
+    id: name.toLowerCase().replace(/[^a-z]/g, "").padEnd(32, "a").slice(0, 32), name, description: extra.description || "", version: "1.0", on, app: !!extra.app, theme: !!extra.theme, inUse: !!extra.inUse, site: extra.site || null, kind,
     can, everywhere: can[0] === "Reads and changes every site you visit", added: now - (extra.addedDays || 400) * 86400, lastSaved: saved == null ? null : now - saved * 86400,
     size: (extra.mb || 4) * MB, page: extra.app ? "chrome://apps" : "chrome://extensions/?id=x",
   });

@@ -927,6 +927,8 @@
 
   // Old Chrome apps and themes aren't extensions, and the browser's extensions page doesn't list them.
   const isExtension = (e) => !e.app && !e.theme;
+  // Old Chrome apps, and themes other than the one the browser shows now.
+  const isOld = (e) => e.app || (e.theme && !e.inUse);
 
   // Names come from the apps' own files: one plain line each, quoted, so none can pass for an instruction.
   const quoted = (s, n = 60) => JSON.stringify(String(s || "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029`]/g, " ").replace(/\s+/g, " ").trim().slice(0, n));
@@ -943,17 +945,17 @@
       ...list.map((e) => `- ${quoted(e.name)}${e.theme ? ", a theme" : siteName(e.site) ? `, opens ${siteName(e.site)}` : ""}, id ${extensionId(e.id)}`),
       "",
       "1. Look each one up by its id and tell me in a line what it was, so I can keep any I still want.",
-      `2. Open ${b.name} in that profile and go to ${scheme}://apps. Right-click each app and remove it. If one isn't there, open ${scheme}://extensions/?id=<its id> and press Remove.`,
-      `3. For a theme, go to ${scheme}://settings/appearance and press Reset to default.`,
-      "4. Remove only these. Leave every other extension alone, wallets above all.",
-      "5. Don't delete files in the profile folder or edit its Preferences by hand: the browser checks those and may reset your settings.",
+      `2. Open ${b.name} in that profile and go to ${scheme}://apps. Right-click each app and remove it. If one isn't there, or it's a theme, open ${scheme}://extensions/?id=<its id> and press Remove.`,
+      "3. Remove only these. Leave every other extension alone, wallets above all, and the theme you're using now.",
+      "4. Don't delete files in the profile folder or edit its Preferences by hand: the browser checks those and may reset your settings.",
       "If you can't open browser pages yourself, walk me through it one step at a time. Then tell me what was removed.",
     ].join("\n");
   }
 
   function profileDetail(b, p) {
     const key = `${b.id}|${p.dir}`;
-    const old = p.extensions.filter((e) => !isExtension(e));
+    const old = p.extensions.filter(isOld);
+    const theme = p.extensions.find((e) => e.theme && e.inUse);
     const on = p.extensions.filter((e) => isExtension(e) && e.on);
     const off = p.extensions.filter((e) => isExtension(e) && !e.on);
     const cookies = p.cookiesBytes != null ? `${bytes(p.cookiesBytes)} · file size only` : "File size unavailable";
@@ -962,6 +964,7 @@
       ["Cache", `${bytes(p.cache)} · rebuilds itself`],
       ["History", bytes(p.history)],
       ["Cookies", cookies],
+      ...(theme ? [["Theme", `${theme.name} · in use`]] : []),
     ]
       .map(([k, v]) => `<div class="pc-row"><span class="pc-key">${esc(k)}</span><span class="pc-val num">${esc(v)}</span></div>`)
       .join("");
