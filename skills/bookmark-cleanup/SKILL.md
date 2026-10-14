@@ -4,7 +4,7 @@ description: Tidies browser bookmarks without ever writing to the browser's own 
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Needs to run on the computer whose browser it is (Windows, macOS or Linux) with Python 3.8+ (standard library only), or to be given an exported bookmarks HTML file. Everything works offline except the optional dead-link check.
 metadata:
-  version: "1.0.0"
+  version: "1.0.1"
 ---
 
 # Bookmark cleanup
