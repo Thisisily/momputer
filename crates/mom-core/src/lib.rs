@@ -28,9 +28,11 @@ pub mod paths;
 pub mod ports;
 pub mod procs;
 pub mod programs;
+pub mod repos;
 pub mod restart;
 pub mod rules;
 pub mod scan;
+pub mod secrets;
 pub mod setup;
 pub mod skills;
 pub mod space; // 0.5.0 C1

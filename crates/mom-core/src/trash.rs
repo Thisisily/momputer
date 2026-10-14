@@ -897,6 +897,12 @@ pub fn cleans_without_asking(id: &str) -> bool {
     def(id).map(|d| d.safety == "safe" && !matches!(d.action, "tool" | "move") && !needs_admin(d.id)).unwrap_or(false)
 }
 
+/// Where your code is kept: your rooms and the usual code folders in your home and at the top
+/// of each drive. Other looks at your projects (`repos`) start from the same places.
+pub(crate) fn project_roots(paths: &Paths, rooms: &[PathBuf]) -> Vec<PathBuf> {
+    builds::default_roots(paths, rooms)
+}
+
 /// Spots only an administrator can clean: the app asks Windows to run `mom` elevated for them.
 const ADMIN: &[&str] = &["windows-junk", "admin-leftovers", "old-drivers"];
 
