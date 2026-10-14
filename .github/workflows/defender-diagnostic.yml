@@ -1,0 +1,101 @@
+name: Defender diagnostic
+
+# A comparison experiment, not a release. Each source ref gets a fresh hosted runner.
+# Neither the CLI nor any test binary is executed, and no Defender settings are changed.
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Baseline commit, tag or branch
+        required: true
+        default: 898565ff71cb6144e329509769e3e7a502b24d78
+        type: string
+      candidate_ref:
+        description: Candidate ref (blank uses this workflow dispatch commit)
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: ${{ matrix.label }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: baseline
+            source_ref: ${{ inputs.baseline_ref }}
+          - label: candidate
+            source_ref: ${{ inputs.candidate_ref || github.sha }}
+    steps:
+      - name: Initialize evidence
+        shell: pwsh
+        env:
+          SOURCE_REF: ${{ matrix.source_ref }}
+          ROLE: ${{ matrix.label }}
+        run: |
+          New-Item -ItemType Directory -Path evidence -Force | Out-Null
+          [ordered]@{
+            result = 'inconclusive'
+            reason = 'The diagnostic has not completed.'
+            label = $env:ROLE
+            requestedRef = $env:SOURCE_REF
+            workflowSha = $env:GITHUB_SHA
+            runId = $env:GITHUB_RUN_ID
+            runAttempt = $env:GITHUB_RUN_ATTEMPT
+          } | ConvertTo-Json | Set-Content evidence/bootstrap.json -Encoding utf8
+
+      # The baseline need not contain this script. Both sides use the same diagnostic
+      # implementation from the workflow dispatch commit, not code from either input ref.
+      - name: Check out the diagnostic
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic-tools
+          persist-credentials: false
+          sparse-checkout: scripts/defender-diagnostic.ps1
+          sparse-checkout-cone-mode: false
+
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.source_ref }}
+          path: source
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249
+        with:
+          toolchain: 1.99.0
+
+      # No Rust or build cache: the two binaries must come from independent builds.
+      - name: Check protection, build and scan without executing the CLI
+        id: diagnostic
+        shell: pwsh
+        env:
+          SOURCE_REF: ${{ matrix.source_ref }}
+          ROLE: ${{ matrix.label }}
+        run: |
+          ./diagnostic-tools/scripts/defender-diagnostic.ps1 `
+            -SourceDirectory ./source -EvidenceDirectory ./evidence `
+            -Label $env:ROLE -RequestedRef $env:SOURCE_REF
+
+      - name: Upload diagnostic evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: defender-evidence-${{ matrix.label }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+
+      - name: Upload the exact scanned binary only after all checks pass
+        if: success() && steps.diagnostic.outputs.clean == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: defender-binary-${{ matrix.label }}-${{ steps.diagnostic.outputs.source_sha }}-${{ github.run_attempt }}
+          path: source/target/release/mom.exe
+          if-no-files-found: error
