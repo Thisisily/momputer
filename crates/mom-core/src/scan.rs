@@ -257,9 +257,16 @@ pub fn project_name(dir: &str) -> Option<String> {
         return Some(format!("{name} (scratch)"));
     }
     let path = std::path::Path::new(&d);
+    // The outermost repository names a project (a worktree's or submodule's own .git sits inside
+    // it), but never the home folder or one above it: some people keep their home folder in git.
+    let home = dirs::home_dir().map(|h| norm_path(&h.to_string_lossy()));
     let mut git_root: Option<&std::path::Path> = None;
     for anc in path.ancestors() {
         if anc.parent().is_none() {
+            break;
+        }
+        let a = norm_path(&anc.to_string_lossy());
+        if home.as_ref().is_some_and(|h| *h == a || h.starts_with(&format!("{a}\\"))) {
             break;
         }
         if anc.join(".git").exists() {
