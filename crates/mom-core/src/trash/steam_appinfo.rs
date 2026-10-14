@@ -268,7 +268,7 @@ pub(super) mod tests {
         assert_eq!(apps.len(), 2);
         let a = &apps[&480];
         assert_eq!((a.name.as_str(), a.folder.as_str()), ("Lanternfall", "Lanternfall"));
-        assert_eq!(a.programs, ["launcher.exe", "lanternfall-win64-shipping.exe"]);
+        assert_eq!(a.programs, ["lanternfall-win64-shipping.exe", "launcher.exe"]);
         assert_eq!(apps[&970].programs, ["game.exe"]);
     }
 

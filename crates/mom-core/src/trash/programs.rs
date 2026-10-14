@@ -137,10 +137,20 @@ impl Programs {
             }
         }
 
+        // Only this PC's own drives: a folder from a manifest or the registry could name a network
+        // share, and just listing it would make Windows sign in to that server as you.
+        let drives: Vec<PathBuf> = match paths.system_drive.parent() {
+            Some(fixture_root) => vec![fixture_root.to_path_buf()],
+            None => std::iter::once(paths.system_drive.clone()).chain(paths.other_drives.iter().cloned()).collect(),
+        };
         let start = Instant::now();
         let mut left = MAX_ENTRIES;
         let mut walked = HashSet::new();
         for (root, depth, title) in roots {
+            if !on_these_drives(&root, &drives) {
+                me.complete = false;
+                continue;
+            }
             if !walked.insert(crate::util::norm_path(&root.to_string_lossy())) {
                 continue;
             }
@@ -267,6 +277,24 @@ enum Title {
     FolderUnder,
 }
 
+/// `path` is an ordinary local path (a drive letter, no "..") on one of `drives`.
+fn on_these_drives(path: &Path, drives: &[PathBuf]) -> bool {
+    use std::path::Component;
+    if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return false;
+    }
+    #[cfg(windows)]
+    if !matches!(path.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_))) {
+        return false;
+    }
+    let key = |p: &Path| {
+        let text = p.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+        text.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(text).trim_end_matches('\\').to_string()
+    };
+    let path = key(path);
+    drives.iter().map(|d| key(d)).any(|d| path == d || path.starts_with(&format!("{d}\\")))
+}
+
 /// A whole small file, if it's an ordinary file no bigger than `cap`.
 fn read_capped(path: &Path, cap: u64) -> Option<Vec<u8>> {
     let m = std::fs::symlink_metadata(path).ok()?;
@@ -283,6 +311,18 @@ mod tests {
     fn put(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"x").unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn only_folders_on_this_pcs_drives_are_looked_in() {
+        let drives = [PathBuf::from(r"C:\"), PathBuf::from(r"E:\")];
+        assert!(on_these_drives(Path::new(r"C:\Program Files\Lanternfall"), &drives));
+        assert!(on_these_drives(Path::new(r"e:\Games"), &drives));
+        assert!(!on_these_drives(Path::new(r"\\server.example\share\Games"), &drives));
+        assert!(!on_these_drives(Path::new(r"Z:\Games"), &drives), "a mapped drive isn't one of this PC's");
+        assert!(!on_these_drives(Path::new(r"C:\Games\..\..\x"), &drives));
+        assert!(!on_these_drives(Path::new(r"Games"), &drives));
     }
 
     #[test]
@@ -334,6 +374,13 @@ mod tests {
         assert_eq!(judge("example.gone_0123456789abc").state, State::Gone);
         let unknown = judge("somethingelse.exe");
         assert_eq!((unknown.title, unknown.state, unknown.detail), (None, State::Gone, "Not on this PC any more"));
+
+        // A manifest naming a network share isn't looked in, so nothing is called gone.
+        let manifests = paths.program_data.join("Epic").join("EpicGamesLauncher").join("Data").join("Manifests");
+        std::fs::create_dir_all(&manifests).unwrap();
+        std::fs::write(manifests.join("x.item"), r#"{"InstallLocation": "\\\\server.example\\games\\Atlas", "DisplayName": "Atlas"}"#).unwrap();
+        assert_eq!(Programs::find(&paths).judge("somethingelse.exe").state, State::Unknown);
+        std::fs::remove_dir_all(paths.program_data.join("Epic")).unwrap();
 
         // Without Steam's records, a game missing from the folders is only "not on this PC";
         // and when the look couldn't finish, nothing is called gone.
