@@ -701,10 +701,18 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
     }
     let nvidia = data.join("NVIDIA Corporation");
     list.push(agent("NVIDIA", Spot::AdminApps, vec![nvidia.clone()]).junk(vec![
-        src(nvidia.join("NVIDIA app").join("UpdateFramework").join("ota-artifacts").join("grd"), ("Driver installer", "older driver installers"), any)
+        src(nvidia.join("NVIDIA app").join("UpdateFramework").join("ota-artifacts").join("grd"), ("Driver installer cache", "cached driver installation files"), any)
             .keep_newest(1)
-            .named(|_, rel| format!("driver installer {}", rel[0])),
-        src(nvidia.join("Downloader"), ("Downloaded installer", "older downloaded installers"), any).keep_newest(1),
+            .named(|_, rel| {
+                if rel[0].eq_ignore_ascii_case("post-processing") {
+                    "extracted driver installers".into()
+                } else {
+                    format!("driver installer download {}", rel[0])
+                }
+            }),
+        src(nvidia.join("Downloader"), ("Download cache entry", "installer downloads and download metadata"), any)
+            .keep_newest(1)
+            .named(|_, rel| format!("download cache {}", rel[0])),
     ]));
     let epic = p.program_files_x86.join("Epic Games").join("Launcher").join("VaultCache");
     list.push(agent("Epic Games", Spot::AdminApps, vec![epic.clone()]).junk(vec![src(epic, ("Downloaded sample", "downloaded samples (the Launcher gets them again if asked)"), any)]));
@@ -869,6 +877,9 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
         Some(i) => i,
         None => looked_up.get_or_init(|| crate::installed::Installed::scan(ctx.paths)),
     };
+    // Metadata is descriptive only. Bound extra I/O even for unexpectedly large caches.
+    let mut shader_reads = 0;
+    let mut shader_metadata_budget = 64 << 20;
     for (mut c, a, s) in found {
         if s.empty_only && (c.files > 0 || c.links > 0 || c.bytes > 0) {
             continue; // not empty after all: it isn't a leftover
@@ -880,7 +891,9 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             *n += 1;
             *n <= s.keep_newest
         };
-        let label = if newest { "Newest version" } else { s.kind.0 };
+        // Cache retention is a precaution, not a check of the installed driver version.
+        let nvidia_cache = a.name == "NVIDIA" && a.spot == Spot::AdminApps;
+        let label = if newest && nvidia_cache { "Kept cache entry" } else if newest { "Newest version" } else { s.kind.0 };
         c.sub = Some(match c.sub.take() {
             Some(inside) => format!("{label}, {inside}"),
             None => label.to_string(),
@@ -892,6 +905,24 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
         }
         c.kind = Some(s.kind.1);
         c.tool = Some(a.name);
+        if spot == Spot::Shaders {
+            let owner = if c.links == 0 && shader_reads < 4096 && matches!(a.name, "NVIDIA" | "DirectX") {
+                shader_reads += 1;
+                super::shader_owner::describe(&c.path, &mut shader_metadata_budget)
+            } else {
+                None
+            };
+            let tail = c.name.strip_prefix(&format!("{} · ", a.name)).unwrap_or(&c.name);
+            let (name, detail) = match owner {
+                Some(owner) => (owner.name, owner.detail),
+                None => ("App unknown".into(), "App could not be identified".into()),
+            };
+            c.name = format!("{} · {name} · {tail}", a.name);
+            c.sub = Some(match c.sub.take() {
+                Some(sub) => format!("{detail} · {sub}"),
+                None => detail,
+            });
+        }
         if s.empty_only {
             f.cands.push(c.verdict(true, "Empty, from an older version"));
             continue;
@@ -904,11 +935,34 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             } else if s.remade && one_app {
                 c.verdict(false, format!("{} makes it again when it starts", a.name))
             } else {
-                c.verdict(false, NEWEST)
+                c.verdict(false, if nvidia_cache { "Kept as a precaution" } else { NEWEST })
             });
             continue;
         }
         f.cands.push(judge(c, ctx, min_age, s.sessions));
+    }
+    if spot == Spot::Shaders {
+        let caches = super::steam_shaders::discover(ctx.paths);
+        let paths = caches.iter().map(|cache| (cache.path.clone(), format!("Steam · {} · Shader cache", cache.name))).collect();
+        for (mut c, cache) in super::cands(paths, ctx.now).into_iter().zip(caches) {
+            if c.files == 0 && c.links == 0 && c.complete {
+                continue;
+            }
+            c.sub = Some(match c.sub.take() {
+                Some(sub) => format!("{} · {sub}", cache.detail),
+                None => cache.detail,
+            });
+            c.kind = Some("shader caches");
+            c.tool = Some("Steam");
+            c = judge(c, ctx, min_age, false);
+            // Adding an ownership view must not silently expand automatic cleanup. An absent
+            // game is evidence to show, never a reason to tick a cache or bypass safety checks.
+            if c.goes {
+                let reason = format!("Last changed {} ago; select to clear", ago(c.age));
+                c = c.kept_but_tickable(reason);
+            }
+            f.cands.push(c);
+        }
     }
     f.available = f.available || !f.cands.is_empty();
     f
@@ -1279,6 +1333,65 @@ mod tests {
     }
 
     #[test]
+    fn nvidia_installer_labels_do_not_claim_the_retained_cache_is_an_installed_version() {
+        let root = fixture("nvidia-installer-labels");
+        let paths = Paths::under(&root);
+        let nvidia = paths.program_data.join("NVIDIA Corporation");
+        let installers = nvidia.join("NVIDIA app/UpdateFramework/ota-artifacts/grd");
+        write(&installers.join("post-processing/driver.bin"), 100, 300);
+        write(&installers.join("560.80/driver.exe"), 200, 300);
+        write(&nvidia.join("Downloader/metadata.json"), 50, 300);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("admin-leftovers", &ctx).unwrap();
+        assert!(spot.items.iter().any(|i| i.name == "NVIDIA · extracted driver installers"));
+        assert!(spot.items.iter().any(|i| i.name == "NVIDIA · driver installer download 560.80"));
+        assert!(spot.items.iter().any(|i| i.name == "NVIDIA · download cache metadata.json"));
+        let nvidia_items: Vec<_> = spot.items.iter().filter(|i| i.name.starts_with("NVIDIA · ")).collect();
+        assert!(nvidia_items.iter().all(|i| !i.sub.as_deref().unwrap_or("").contains("Newest version")));
+        assert!(nvidia_items.iter().any(|i| i.sub.as_deref().unwrap_or("").contains("Kept cache entry")));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn steam_shader_ownership_does_not_select_new_caches_for_automatic_cleanup() {
+        let root = fixture("steam-shader-selection");
+        // Fixtures can use ordinary or canonical verbatim drive paths. Model the
+        // ordinary spelling Steam writes without changing the production boundary.
+        #[cfg(windows)]
+        let root = {
+            let ordinary = root.to_string_lossy();
+            std::path::PathBuf::from(ordinary.strip_prefix(r"\\?\").unwrap_or(&ordinary))
+        };
+        let paths = Paths::under(&root);
+        let steam = paths.program_files_x86.join("Steam");
+        let apps = steam.join("steamapps");
+        let installed = apps.join("shadercache").join("123").join("cache.bin");
+        let leftover = apps.join("shadercache").join("456").join("cache.bin");
+        write(&installed, 300, 400);
+        write(&leftover, 500, 400);
+        std::fs::create_dir_all(apps.join("common").join("Example Game")).unwrap();
+        std::fs::write(apps.join("libraryfolders.vdf"), format!(
+            "\"libraryfolders\" {{ \"0\" {{ \"path\" \"{}\" }} }}",
+            steam.to_string_lossy().replace('\\', "\\\\")
+        )).unwrap();
+        std::fs::write(apps.join("appmanifest_123.acf"),
+            r#""AppState" { "appid" "123" "name" "Example Game" "installdir" "Example Game" }"#
+        ).unwrap();
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("shader-cache", &ctx).unwrap();
+        assert_eq!(spot.items.len(), 2);
+        assert!(spot.items.iter().all(|item| !item.goes && item.optional));
+        assert!(spot.items.iter().any(|item| item.name == "Steam · Example Game · Shader cache"));
+        assert!(spot.items.iter().any(|item| item.sub.as_deref().is_some_and(|s| s.contains("Not found in installed Steam games"))));
+        assert_eq!(spot.reclaimable_bytes, 0);
+        assert_eq!(clean("shader-cache", &ctx, None).deleted, 0);
+        assert!(installed.exists() && leftover.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn shaders_game_logs_dev_caches_and_older_versions_go_saves_and_newest_stay() {
         let root = fixture("more");
         let paths = Paths::under(&root);
@@ -1303,7 +1416,7 @@ mod tests {
             v.sort();
             v
         };
-        assert_eq!(going("shader-cache"), vec!["NVIDIA · DXCache old.toc"]);
+        assert_eq!(going("shader-cache"), vec!["NVIDIA · App unknown · DXCache old.toc"]);
         assert_eq!(going("game-junk"), vec!["Unity games · Swordship · Player.log", "Unreal games · Atlas · Atlas.log"]);
         assert_eq!(going("dev-leftovers"), vec!["Developer tools · Dart · package cache"]);
         assert_eq!(going("app-leftovers"), vec!["Chrome · version 151.0.1 snapshot", "Squirrel apps · Slack 4.40.0"]);

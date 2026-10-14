@@ -12,6 +12,9 @@ mod builds;
 mod claude;
 mod forgotten;
 mod harness;
+mod shader_owner;
+pub mod shader_clean;
+mod steam_shaders;
 mod walk;
 
 use crate::agents::AgentKind;
@@ -654,10 +657,11 @@ const DEFS: &[Def] = &[
     Def {
         id: "shader-cache",
         label: "Graphics shader caches",
-        detail: "Shaders your graphics driver compiled for games and apps. Unused ones are made again if ever needed.",
+        detail: "Graphics caches grouped by app or game when local metadata identifies them.",
         what: "When a game or app draws something new, the graphics driver (NVIDIA, AMD, Intel) or DirectX compiles \
                a shader for it and keeps it, so next time is quicker. Shaders of games you no longer play just sit \
-               there; these caches easily reach gigabytes.",
+               there; these caches easily reach gigabytes. Names come from local cache metadata or Steam manifests; \
+               unknown owners stay unknown. A missing executable does not prove an app was uninstalled.",
         group: "windows",
         action: "delete",
         safety: "safe",

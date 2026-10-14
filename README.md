@@ -67,11 +67,13 @@ Want every detail? [momputer, in detail](docs/in-detail.md).
 
 ## Install
 
-**0.3.1 UI fallback:** this release uses the 0.3.0 backend with browser-card interaction,
-selection-state, wording and taskbar fixes. File cleanup, archive moves/restores/deletion,
-duplicate recycling and Room Apply/Undo are temporarily unavailable while their safety
-update is validated. Scans, previews and Room plans remain available. The broader 0.3.1
-backend changes are not included.
+**0.3.2 cache update:** NVIDIA shader caches group by the app identity recorded in their
+metadata, when available. Steam shader caches show game names from local manifests and
+cautious installation-status labels. The widget can clear explicitly selected NVIDIA and
+Steam shader files after a fresh scan, with identity checks and no administrator access.
+Other file cleanup, archive moves/restores/deletion, duplicate recycling and Room Apply/Undo
+remain temporarily unavailable while their safety update is validated. Scans, previews,
+Room plans and the 0.3.1 browser-card, selection-state and taskbar fixes remain available.
 
 **[Download for Windows](https://thisisily.github.io/momputer/)**: one button, three steps.
 
@@ -96,8 +98,9 @@ cargo build --release -p mom-cli -p momputer
 .\target\release\momputer.exe
 ```
 
-Run from a folder of your own like this to try the app. File cleanup remains disabled in
-0.3.1, including in source builds and the CLI.
+Run from a folder of your own like this to try the app. General file cleanup remains disabled,
+including in source builds and the CLI. The widget's dedicated NVIDIA/Steam shader operation
+uses explicit selections from a fresh, single-use scan; it never calls general cleanup.
 
 </details>
 

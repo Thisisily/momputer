@@ -8,12 +8,13 @@
   const bridge = T ? { invoke: T.core.invoke, listen: T.event.listen } : window.momMock;
   // This fallback keeps the baseline scanner. Its file-changing safety update is not shipped yet.
   const FILE_CHANGES_AVAILABLE = false;
-  const FILE_CHANGES_UNAVAILABLE = "File cleanup is temporarily unavailable in 0.3.1 while its safety update is validated. Scans and previews remain available.";
+  const FILE_CHANGES_UNAVAILABLE = "General file cleanup is temporarily unavailable while its safety update is validated. Scans and previews remain available.";
   const fileMutationCommands = new Set(["clean_trash", "recycle_files", "bring_back", "delete_moved", "apply_tidy", "undo_tidy"]);
   const fileMutationActions = new Set(["clean-spot", "files-recycle", "bring-back", "delete-moved", "apply-room", "undo-room"]);
   const invoke = (cmd, args) => !FILE_CHANGES_AVAILABLE && fileMutationCommands.has(cmd)
     ? Promise.reject(new Error(FILE_CHANGES_UNAVAILABLE)) : bridge.invoke(cmd, args);
-  const fileChangesNotice = () => FILE_CHANGES_AVAILABLE ? "" : `<p class="group-note cleanup-hold">${esc(FILE_CHANGES_UNAVAILABLE)}</p>`;
+  const SHADER_CLEANUP_NOTICE = "Selected cache files are deleted permanently; folders stay. Fresh, changed or in-use files are skipped. Caches may regenerate and games may stutter while shaders rebuild.";
+  const fileChangesNotice = (id) => id === "shader-cache" ? `<p class="group-note">${esc(SHADER_CLEANUP_NOTICE)}</p>` : FILE_CHANGES_AVAILABLE ? "" : `<p class="group-note cleanup-hold">${esc(FILE_CHANGES_UNAVAILABLE)}</p>`;
   const G = window.gsap;
   // The widget should cost nothing while you're not looking at it. 60 frames a second is plenty
   // (GSAP would draw at the screen's rate, 240 on some), and once the last tween ends GSAP stops
@@ -81,6 +82,10 @@
     sheet: null, // { kind: "spot", id } or { kind: "settings" }
     picks: {}, // clean-up id -> what's ticked in its lists (see pickOf)
     cleanConfirm: null,
+    shaderToken: null,
+    shaderConfirm: null,
+    shaderUsedTokens: new Set(),
+    shaderIndex: null,
     cleaning: null,
     archive: null, // where old conversations go, and what's been moved there
     adminBlock: undefined, // why mom can't ask for an administrator from this copy (null: she can)
@@ -2176,7 +2181,7 @@ in ${x.cwd}`)}">
 
   // Clean-ups that delete your own files can send them to the Recycle Bin instead. Docker's things
   // aren't files, and admin clean-ups run as another user, whose bin you wouldn't see.
-  const canRecycle = (s) => s.action === "delete" && !s.admin && s.id !== "docker";
+  const canRecycle = (s) => s.action === "delete" && !s.admin && s.id !== "docker" && s.id !== "shader-cache";
   const recycling = (s) => canRecycle(s) && state.recycle;
 
   const ACTION_WORD = {
@@ -2216,7 +2221,61 @@ in ${x.cwd}`)}">
   // What's ticked in a clean-up's two lists. Goes starts all ticked and Stays all unticked, and
   // "Tick all" / "Untick all" flip a whole list, so they also cover the smaller items that
   // aren't listed. `ticked` and `unticked` are the listed items changed from that.
-  const pickOf = (id) => state.picks[id] || (state.picks[id] = { goes: true, new: false, ticked: new Set(), unticked: new Set() });
+  const emptyPick = () => ({ goes: false, new: false, ticked: new Set(), unticked: new Set() });
+  const pickOf = (id) => state.picks[id] || (state.picks[id] = { ...emptyPick(), goes: id !== "shader-cache" });
+
+  // The backend owns eligibility. The UI only maps displayed rows to exact frozen leaf paths.
+  const shaderPath = (path) => typeof path === "string" ? path.replaceAll("/", "\\").replace(/\\+$/, "") : "";
+  function shaderIndex(s) {
+    const snapshot = state.trash.shaderCleanup;
+    const token = !state.trash.busy && snapshot && typeof snapshot.token === "string" && snapshot.token && Array.isArray(snapshot.files) ? snapshot.token : null;
+    if (token !== state.shaderToken) {
+      state.shaderToken = token;
+      state.shaderConfirm = null;
+      state.shaderIndex = null;
+      state.picks["shader-cache"] = emptyPick();
+      if (state.cleanConfirm === "shader-cache") { state.cleanConfirm = null; clearTimeout(cleanTimer); }
+    }
+    if (!token || state.shaderUsedTokens.has(token)) return null;
+    const items = s.items || [];
+    const kept = JSON.stringify(items.filter(i => i.kept).map(i => i.path));
+    const cached = state.shaderIndex;
+    if (cached && cached.snapshot === snapshot && cached.items === items && cached.kept === kept) return cached;
+    const rows = new Map(items.filter(i => i.path).map(i => [shaderPath(i.path), i]));
+    const protectedPaths = new Set(items.filter(i => i.kept).map(i => shaderPath(i.path)));
+    const byPath = new Map(), seen = new Set();
+    for (const file of snapshot.files) {
+      if (!file) continue;
+      const key = shaderPath(file.path);
+      if (!key || seen.has(key) || !Number.isSafeInteger(file.bytes) || file.bytes < 0) continue;
+      seen.add(key);
+      const owners = [];
+      let protectedRow = false;
+      for (let at = key; at; at = at.slice(0, Math.max(0, at.lastIndexOf("\\")))) {
+        if (protectedPaths.has(at)) protectedRow = true;
+        const row = rows.get(at);
+        if (row) { protectedRow ||= !!row.kept; owners.push(row); }
+      }
+      if (protectedRow) continue;
+      for (const row of owners) {
+        if (!byPath.has(row.path)) byPath.set(row.path, []);
+        byPath.get(row.path).push(file);
+      }
+    }
+    return state.shaderIndex = { snapshot, items, kept, token, byPath };
+  }
+  const shaderRowFiles = (s, i) => !i.kept ? shaderIndex(s)?.byPath.get(i.path) || [] : [];
+  const canPick = (s, i) => s.id === "shader-cache" ? shaderRowFiles(s, i).length > 0 : tickable(i);
+  function pickedShaders(s) {
+    const index = shaderIndex(s);
+    const pk = pickOf(s.id), items = s.items || [];
+    const files = new Map();
+    for (const i of items) if (!i.kept && isTicked(pk, i)) for (const file of index?.byPath.get(i.path) || []) files.set(shaderPath(file.path), file);
+    const chosen = [...files.values()];
+    return { pk, goes: items.filter(i => i.goes), fresh: items.filter(i => !i.goes && canPick(s, i)),
+      count: chosen.length, bytesChosen: chosen.reduce((n, f) => n + f.bytes, 0), partial: true,
+      goN: 0, newN: 0, token: index?.token, paths: chosen.map(f => f.path).sort() };
+  }
   const tickable = (i) => i.goes || i.optional;
   const startsTicked = (pk, i) => (i.goes ? pk.goes : pk.new);
   const isTicked = (pk, i) => (startsTicked(pk, i) ? !pk.unticked.has(i.path) : pk.ticked.has(i.path));
@@ -2224,6 +2283,7 @@ in ${x.cwd}`)}">
 
   /** What the button takes, counting items too small to be listed. */
   function picked(s) {
+    if (s.id === "shader-cache") return pickedShaders(s);
     const pk = pickOf(s.id);
     const items = s.items || [];
     const goes = items.filter((i) => i.goes);
@@ -2255,6 +2315,7 @@ in ${x.cwd}`)}">
 
   /** The spot's own explanation, adjusted for what the user ticked and unticked. */
   function effectNow(s, p) {
+    if (s.id === "shader-cache") return `${plural(p.count, "selected cache file")} (${bytes(p.bytesChosen)}). ${SHADER_CLEANUP_NOTICE}`;
     if (!p.partial) return s.effect;
     if (p.count === 0) return "Nothing is ticked, so the button does nothing.";
     const what = itemsSize(p.count, p.bytesChosen);
@@ -2273,6 +2334,7 @@ in ${x.cwd}`)}">
   }
 
   function cleanLabel(s, p, confirming) {
+    if (s.id === "shader-cache") return state.cleaning === s.id ? "Deleting selected cache files…" : !p.token ? "Check again before selecting files" : !p.count ? "Nothing ticked" : confirming ? `Sure? Delete ${plural(p.count, "cache file")} (${bytes(p.bytesChosen)}) permanently` : `Delete ${plural(p.count, "cache file")} (${bytes(p.bytesChosen)})`;
     const drive = driveOf(state.archive && state.archive.dir);
     const toBin = s.action === "recycle" || recycling(s);
     if (state.cleaning === s.id) return toBin ? "Moving to the Recycle Bin…" : s.action === "move" ? `Moving to ${drive}…` : "Cleaning…";
@@ -2319,10 +2381,11 @@ in ${x.cwd}`)}">
         }" aria-label="${i.kept ? "Stop keeping" : "Always keep"} ${esc(i.name)}" ${state.cleaning ? "disabled" : ""}>${ICON.lock}</button>`
       : "";
     const acts = keep || reveal ? `<span class="item-acts">${keep}${reveal}</span>` : "";
-    if (picking && tickable(i)) {
-      const on = isTicked(pickOf(s.id), i);
+    if (picking && (s.id === "shader-cache" || tickable(i))) {
+      const eligible = canPick(s, i);
+      const on = eligible && isTicked(pickOf(s.id), i);
       return `<label class="item${i.goes ? "" : " stays"}${on && !i.goes ? " added" : ""}${gone}" id="${id}">
-        <input type="checkbox" data-act="pick" data-path="${esc(i.path)}" ${on ? "checked" : ""} ${state.cleaning ? "disabled" : ""}>${main}${size}${acts}</label>`;
+        <input type="checkbox" data-act="pick" data-path="${esc(i.path)}" ${on ? "checked" : ""} ${state.cleaning || !eligible ? "disabled" : ""}>${main}${size}${acts}</label>`;
     }
     if (!i.goes) {
       // In use, kept by you, or otherwise not allowed: no box to tick.
@@ -2355,8 +2418,14 @@ in ${x.cwd}`)}">
   // Player.log" belongs to Unity games), or by the sort of thing (Docker's images, containers).
   const SEP = " · ";
   const KIND_NAMES = { images: "Images", "stopped containers": "Stopped containers", "build cache": "Build cache", volumes: "Volumes" };
-  function groupOf(i) {
+  function groupOf(i, spotId) {
     const parts = i.name.split(SEP);
+    // Shader rows carry vendor + metadata owner + cache entry. Steam's final label is fixed,
+    // so keep the complete game title even when it contains the display separator.
+    if (spotId === "shader-cache" && parts.length >= 3) {
+      const ownerEnd = parts[0] === "Steam" && parts.at(-1) === "Shader cache" ? parts.length - 1 : 2;
+      return [parts.slice(0, ownerEnd).join(SEP), parts.slice(ownerEnd)];
+    }
     if (parts.length >= 2) return [parts[0], parts.slice(1)];
     return [i.kind ? KIND_NAMES[i.kind] || cap(i.kind) : "", parts];
   }
@@ -2391,7 +2460,7 @@ in ${x.cwd}`)}">
     if (!v.group) return shown.map(one).sort(cmp).map((e) => e.row()).join("");
     const groups = new Map();
     for (const i of shown) {
-      const [key, rest] = groupOf(i);
+      const [key, rest] = groupOf(i, s.id);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push({ i, rest });
     }
@@ -2414,7 +2483,7 @@ in ${x.cwd}`)}">
     const items = members.map((m) => m.i);
     const total = items.reduce((a, i) => a + i.bytes, 0);
     const pk = pickOf(s.id);
-    const tick = items.filter(tickable);
+    const tick = items.filter(i => canPick(s, i));
     let box = "<span></span>";
     if (picking && tick.length) {
       const on = tick.filter((i) => isTicked(pk, i)).length;
@@ -2450,6 +2519,7 @@ in ${x.cwd}`)}">
 
   /** What the button does, as a few cards, with the whole story behind "Read more". */
   function doesBox(s, p) {
+    if (s.id === "shader-cache") return `<div class="does"><div class="does-head"><h3>Selected cache files</h3></div><p class="does-text">${plural(p.count, "file")} · ${bytes(p.bytesChosen)}</p><p class="does-text">${p.token ? "Only files eligible in the current scan can be selected. Unticked files stay." : "Check again to get a fresh list of eligible cache files."}</p></div>`;
     const n = p.count;
     const b = p.bytesChosen;
     const drive = driveOf(state.archive && state.archive.dir);
@@ -2532,22 +2602,25 @@ in ${x.cwd}`)}">
     const p = picked(s);
     const pk = p.pk;
     const stays = (s.items || []).filter((i) => !i.goes);
-    const picking = s.action !== "tool" && (p.goes.length > 0 || p.fresh.length > 0);
-    const unlisted = Math.max(0, (s.reclaimableItems || 0) - p.goes.length);
+    const picking = s.id === "shader-cache" ? (s.items || []).length > 0 : s.action !== "tool" && (p.goes.length > 0 || p.fresh.length > 0);
+    const unlisted = s.id === "shader-cache" ? 0 : Math.max(0, (s.reclaimableItems || 0) - p.goes.length);
     const keptUnlisted = Math.max(0, (s.keptItems || 0) - stays.length);
-    const newUnlisted = Math.max(0, (s.newItems || 0) - p.fresh.length);
-    const allButton = (list, items, base) => (picking && items.length ? tickAllButton("pick-all", allTicked(pk, base, items), `data-list="${list}"`, !!state.cleaning) : "");
-    const hint =
+    const newUnlisted = s.id === "shader-cache" ? 0 : Math.max(0, (s.newItems || 0) - p.fresh.length);
+    const allButton = (list, items, base) => {
+      const eligible = items.filter(i => canPick(s, i));
+      return picking && items.length ? tickAllButton("pick-all", s.id === "shader-cache" ? eligible.length > 0 && eligible.every(i => isTicked(pk, i)) : allTicked(pk, base, items), `data-list="${list}"`, !!state.cleaning || !eligible.length) : "";
+    };
+    const hint = s.id === "shader-cache" ? "Only current eligible cache files have selectable boxes; no cache starts ticked." :
       (p.fresh.length === stays.length ? "These are" : "The ones with a box are") +
       (s.action === "recycle"
         ? " kept only because they're new. Tick any you want gone too."
         : " kept only because they're new, and something might still want them. Tick any you're sure about.");
-    const go = s.reclaimableBytes || 0;
-    const kept = s.keptBytes ?? Math.max(0, s.totalBytes - go);
+    const go = s.id === "shader-cache" ? p.bytesChosen : s.reclaimableBytes || 0;
+    const kept = s.id === "shader-cache" ? Math.max(0, s.totalBytes - go) : s.keptBytes ?? Math.max(0, s.totalBytes - go);
     const cleaning = state.cleaning === s.id;
     const confirming = !cleaning && state.cleanConfirm === s.id;
     // Empty folders are 0 bytes but still worth clearing, so this goes by count, not size.
-    const disabled = !FILE_CHANGES_AVAILABLE || cleaning || (s.action !== "tool" && p.count === 0);
+    const disabled = (!FILE_CHANGES_AVAILABLE && s.id !== "shader-cache") || cleaning || (s.action !== "tool" && p.count === 0);
     const danger = (s.action === "delete" && !recycling(s)) || s.action === "empty-bin";
     const moves = s.action === "move";
     const busy = state.trash.busy;
@@ -2563,12 +2636,12 @@ in ${x.cwd}`)}">
           <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button>
         </div>
       </div>
-      ${fileChangesNotice()}
+      ${fileChangesNotice(s.id)}
       <p class="sheet-what">${esc(s.what)}</p>
       ${
         s.exact
           ? `<div class="split"><div class="split-bar"><span class="go" style="flex:${go || 0.0001}"></span><span class="stay" style="flex:${kept || 0.0001}"></span></div>
-        <div class="split-legend num"><span><span class="led red"></span><strong>${bytes(go)}</strong> ${moves ? "can move" : "can go"}</span><span><span class="led green"></span>${bytes(kept)} ${moves ? "stays here" : "stays"}</span><span class="dim">${bytes(s.totalBytes)} in all</span></div></div>`
+        <div class="split-legend num"><span><span class="led red"></span><strong>${bytes(go)}</strong> ${s.id === "shader-cache" ? "selected" : moves ? "can move" : "can go"}</span><span><span class="led green"></span>${bytes(kept)} ${moves ? "stays here" : "stays"}</span><span class="dim">${bytes(s.totalBytes)} in all</span></div></div>`
           : `<div class="split-legend num"><span>${bytes(s.totalBytes)} in all. The tool works out what's safe to drop.</span></div>`
       }
       ${doesBox(s, p)}
@@ -2606,7 +2679,7 @@ in ${x.cwd}`)}">
       <div class="sheet-foot${cleaning ? " cleaning" : ""}">
         ${
           cleaning
-            ? cleanProgress(s)
+            ? s.id === "shader-cache" ? `<span class="dim">Deleting selected cache files…</span>` : cleanProgress(s)
             : `${
                 confirming
                   ? `<button class="link-btn" data-act="cancel-clean">Cancel</button>`
@@ -3557,7 +3630,38 @@ in ${x.cwd}`)}">
   let winTimer = null;
   let filesTimer = null;
 
+  async function cleanShaderSpot() {
+    if (state.cleaning) return;
+    const s = state.trash.spots.find(s => s.id === "shader-cache");
+    if (!s) return;
+    const p = picked(s);
+    if (!p.token || !p.count) return;
+    const selection = JSON.stringify([p.token, p.paths]);
+    clearTimeout(cleanTimer);
+    if (state.cleanConfirm !== s.id || state.shaderConfirm !== selection) {
+      state.cleanConfirm = s.id;
+      state.shaderConfirm = selection;
+      renderSheet();
+      cleanTimer = setTimeout(() => { state.cleanConfirm = null; state.shaderConfirm = null; renderSheet(); }, 6000);
+      return;
+    }
+    // Consume authorization before the IPC, including rejected/failed attempts. A new scan is required.
+    state.shaderUsedTokens.add(p.token);
+    state.picks[s.id] = emptyPick();
+    state.shaderConfirm = null;
+    state.cleanConfirm = null;
+    state.cleaning = s.id;
+    renderSheet();
+    try {
+      await act(invoke("clean_shader_cache", { token: p.token, paths: p.paths }));
+    } finally {
+      state.cleaning = null;
+      renderSheet();
+    }
+  }
+
   async function cleanSpot(id) {
+    if (id === "shader-cache") return cleanShaderSpot();
     if (!FILE_CHANGES_AVAILABLE) { toast(FILE_CHANGES_UNAVAILABLE, true); return; }
     const s = state.trash.spots.find((x) => x.id === id);
     if (!s) return;
@@ -3606,7 +3710,7 @@ in ${x.cwd}`)}">
     const el = e.target.closest("[data-act]");
     if (!el) return;
     const a = el.dataset.act;
-    if (!FILE_CHANGES_AVAILABLE && fileMutationActions.has(a)) { toast(FILE_CHANGES_UNAVAILABLE, true); return; }
+    if (!FILE_CHANGES_AVAILABLE && fileMutationActions.has(a) && !(a === "clean-spot" && el.dataset.spot === "shader-cache")) { toast(FILE_CHANGES_UNAVAILABLE, true); return; }
     const rowEl = el.closest("[data-id]");
     const g = rowEl ? groupById(rowEl.dataset.id) : null;
     switch (a) {
@@ -4013,7 +4117,7 @@ in ${x.cwd}`)}">
         const list = gid.slice(id.length + 1).split(":")[0];
         const key = gid.slice(id.length + list.length + 2);
         const q = listQuery();
-        const items = s.items.filter((i) => (list === "goes" ? i.goes : !i.goes) && tickable(i) && groupOf(i)[0] === key && matches(i, q));
+        const items = s.items.filter((i) => (list === "goes" ? i.goes : !i.goes) && canPick(s, i) && groupOf(i, s.id)[0] === key && matches(i, q));
         const pk = pickOf(id);
         const on = !items.every((i) => isTicked(pk, i));
         for (const i of items) {
@@ -4185,7 +4289,7 @@ in ${x.cwd}`)}">
         const id = state.sheet && state.sheet.id;
         const s = state.trash.spots.find((x) => x.id === id);
         const i = s && s.items.find((x) => x.path === el.dataset.path);
-        if (!i) return;
+        if (!i || !canPick(s, i)) return;
         const pk = pickOf(id);
         // A change from how its list started: an untick if it started ticked, else a tick.
         const changes = startsTicked(pk, i) ? pk.unticked : pk.ticked;
@@ -4199,9 +4303,15 @@ in ${x.cwd}`)}">
         const id = state.sheet && state.sheet.id;
         const s = state.trash.spots.find((x) => x.id === id);
         if (!s) return;
+        if (s.id === "shader-cache") shaderIndex(s);
         const pk = pickOf(id);
         const goes = el.dataset.list === "goes";
-        const list = s.items.filter((i) => (goes ? i.goes : !i.goes && i.optional));
+        const list = s.items.filter((i) => (goes ? i.goes : !i.goes) && canPick(s, i));
+        if (s.id === "shader-cache") {
+          const on = !list.every(i => isTicked(pk, i));
+          for (const i of list) on ? pk.ticked.add(i.path) : pk.ticked.delete(i.path);
+          state.cleanConfirm = null; state.shaderConfirm = null; renderSheet(); break;
+        }
         const on = !allTicked(pk, goes ? pk.goes : pk.new, list);
         if (goes) pk.goes = on;
         else pk.new = on;

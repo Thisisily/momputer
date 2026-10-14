@@ -50,7 +50,7 @@ pub use paths::Paths;
 /// This partial release keeps inspection available while the protected cleanup release is held.
 /// This is a fixed release capability, not a user-configurable safety override.
 pub const FILE_CLEANUP_AVAILABLE: bool = false;
-pub const FILE_CLEANUP_UNAVAILABLE: &str = "File cleanup is temporarily unavailable in 0.3.1 while its safety update is validated. Scans and previews remain available.";
+pub const FILE_CLEANUP_UNAVAILABLE: &str = "General file cleanup is temporarily unavailable while its safety update is validated. Scans and previews remain available.";
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]

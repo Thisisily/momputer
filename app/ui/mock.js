@@ -233,6 +233,19 @@
       ],
     }),
     spot({
+      id: "shader-cache", label: "Graphics shader caches", group: "windows", action: "delete", safety: "review",
+      detail: "Graphics caches with app or game names when their metadata identifies them.",
+      what: "Graphics caches with app or game names when their metadata identifies them. Unknown owners remain unknown; a missing executable does not establish that an app was uninstalled.",
+      totalBytes: 720 * MB, reclaimableBytes: 0, reclaimableItems: 0, keptItems: 5,
+      items: [
+        item("NVIDIA · nimbus.exe · DXCache a.bin", "Executable name from cache; installation unknown", 200 * MB, false, "Scan only", 120 * D2),
+        item("NVIDIA · nimbus.exe · DXCache b.bin", "Executable name from cache; installation unknown", 120 * MB, false, "Scan only", 120 * D2),
+        item("NVIDIA · App unknown · DXCache c.bin", "App could not be identified", 100 * MB, false, "Scan only", 120 * D2),
+        item("Steam · Portal 2 · Shader cache", "Steam app 620 · Installed in Steam", 180 * MB, false, "Scan only", 120 * D2),
+        item("Steam · Steam app 999999 · Shader cache", "Game name unknown", 120 * MB, false, "Scan only", 120 * D2),
+      ],
+    }),
+    spot({
       id: "old-conversations", label: "Old conversations", group: "agents", action: "move", safety: "safe", path: null,
       what: "Your agents' past conversations: Codex's and Claude Code's chats, images Codex made, and other agents' sessions. They add up to gigabytes. Moving the old ones to another drive frees this one, and a link in each one's place means the agents still find them where they were.",
       effect: "Moves 4 folders (3.1 GB) of Codex and Claude Code conversations nobody has opened in 67 days to a drive you choose, and leaves a link in each one's place, so they still open from where they were. Nothing is deleted, and Bring back puts any of them back here. While that drive is unplugged, those conversations can't be opened.",
@@ -714,6 +727,18 @@
     return { stopped: [], alreadyGone: [], failed: [], freedMem: freed, groups: gone.length, message: gone.length === 1 ? "Turned it off. That's memory back for you." : `Turned off ${gone.length} things. That's memory back for you.` };
   }
 
+  // In-memory shader authorization for the browser demo only; no filesystem operations.
+  let shaderRevision = 0;
+  let shaderSnapshot = null;
+  let shaderLeaves = spots.find(s => s.id === "shader-cache").items.map(i => ({
+    path: i.name.startsWith("Steam · ") ? i.path + "\\cache.bin" : i.path, bytes: i.bytes, row: i.path,
+  }));
+  const refreshShaderSnapshot = () => {
+    const kept = new Set(spots.find(s => s.id === "shader-cache").items.filter(i => i.kept).map(i => i.path));
+    shaderSnapshot = { token: "demo-shaders-" + (++shaderRevision), files: shaderLeaves.filter(f => !kept.has(f.row)).map(({ path, bytes }) => ({ path, bytes })), skipped: 0 };
+  };
+  const trashView = (list = spots, busy = false) => ({ spots: JSON.parse(JSON.stringify(list)), busy, shaderCleanup: busy ? null : shaderSnapshot });
+
   const handlers = {
     get_snapshot: () => JSON.parse(JSON.stringify(snapshot)),
     refresh: () => null,
@@ -757,7 +782,26 @@
         list.push(s);
         emit("trash", { spots: JSON.parse(JSON.stringify(list)), busy: true });
       }
-      emit("trash", { spots: JSON.parse(JSON.stringify(list)), busy: false });
+      refreshShaderSnapshot();
+      emit("trash", trashView(list));
+    },
+    clean_shader_cache: async ({ token, paths }) => {
+      if (!shaderSnapshot || token !== shaderSnapshot.token) throw "The cache scan changed. Check again.";
+      const snapshot = shaderSnapshot;
+      shaderSnapshot = null;
+      const allowed = new Map(snapshot.files.map(f => [f.path, f]));
+      if (!Array.isArray(paths) || !paths.length || new Set(paths).size !== paths.length || paths.some(p => !allowed.has(p))) throw "Choose only files from the current cache scan.";
+      await wait(500);
+      const gone = new Set(paths);
+      const freed = paths.reduce((n, p) => n + allowed.get(p).bytes, 0);
+      shaderLeaves = shaderLeaves.filter(f => !gone.has(f.path));
+      const spot = spots.find(s => s.id === "shader-cache");
+      spot.items = spot.items.filter(i => shaderLeaves.some(f => f.row === i.path));
+      spot.totalBytes -= freed;
+      spot.keptBytes = spot.totalBytes;
+      spot.keptItems = spot.items.length;
+      emit("trash", trashView());
+      return { deleted: paths.length, freed, skipped: 0, message: "Deleted " + paths.length + " selected cache files. Folders were left in place." };
     },
     clean_trash: async ({ id, pick }) => {
       const s = spots.find((x) => x.id === id);
@@ -790,7 +834,7 @@
       s.keptItems = s.items.filter((i) => !i.goes).length;
       s.newItems = s.items.filter((i) => !i.goes && i.optional).length;
       s.newBytes = sum(s.items.filter((i) => !i.goes && i.optional));
-      emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
+      emit("trash", trashView());
       const size = `${(freed / 1024 / MB).toFixed(1)} GB`;
       if (s.action === "move") {
         for (const i of goes) archive.moved.push({ from: i.path, to: `${archive.dir}\\${i.name}`, archive: archive.dir, name: i.name, spot: s.id, bytes: i.bytes, files: i.files, movedAt: Date.now() / 1000, linked: true, reachable: true });
@@ -804,9 +848,9 @@
       return { id, freed, deleted: goes.length, skipped: 0, message };
     },
     admin_check: async () => (await wait(60), null),
-    app_version: () => "0.2.0",
+    app_version: () => "0.3.2",
     // "?update" in the address shows what a newer version looks like.
-    get_update: async () => (await wait(300), { current: "0.2.0", latest: location.search.includes("update") ? "0.3.0" : "0.2.0", newer: location.search.includes("update"), checked: now, asked: now, problem: null, getIt: "https://thisisily.github.io/momputer/" }),
+    get_update: async () => (await wait(300), { current: "0.3.2", latest: location.search.includes("update") ? "0.3.3" : "0.3.2", newer: location.search.includes("update"), checked: now, asked: now, problem: null, getIt: "https://thisisily.github.io/momputer/" }),
     measure_spot: async ({ id, more }) => {
       await wait(700);
       const s = spots.find((x) => x.id === id);
@@ -822,7 +866,8 @@
         }
         s.items = [...goes, ...extra, ...s.items.filter((i) => !i.goes)];
       }
-      emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
+      if (id === "shader-cache") refreshShaderSnapshot();
+      emit("trash", trashView());
       return id;
     },
     // Keeping and letting go, the way mom-core does it: what's kept stays, with no box to tick,
@@ -854,7 +899,7 @@
         s.keptItems = Math.max(s.keptItems || 0, stays.length) + (keep && i.was && i.was.goes ? 0 : 0);
         s.newItems = Math.max(0, (s.newItems || 0) + (i.was && i.was.optional ? (keep ? -1 : 0) : 0));
       }
-      emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
+      emit("trash", trashView());
       return null;
     },
     keep_nothing: async () => {
@@ -866,7 +911,7 @@
             Object.assign(i, i.was, { kept: false });
             delete i.was;
           }
-      emit("trash", { spots: JSON.parse(JSON.stringify(spots)), busy: false });
+      emit("trash", trashView());
       return null;
     },
     clean_progress: ({ since }) => ({ ...live, gone: live.gone.slice(since), goneCount: live.gone.length, stopping: liveStop }),

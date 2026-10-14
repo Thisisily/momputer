@@ -37,6 +37,8 @@ struct Shared {
     sampler: Mutex<Sampler>,
     snapshot: Mutex<Option<Snapshot>>,
     trash: Mutex<Vec<trash::Spot>>,
+    /// File identities are kept only in this process, never loaded from saved UI data.
+    shader_cleanup: Mutex<Option<trash::shader_clean::Snapshot>>,
     trash_busy: AtomicBool,
     /// Asked for while something was being measured: spots to measure again right after ("" is
     /// all of them), so a change made meanwhile (something to keep, more to list) isn't lost.
@@ -665,6 +667,7 @@ async fn stop_wsl(name: Option<String>, s: State<'_, S>) -> Res<()> {
 #[serde(rename_all = "camelCase")]
 struct TrashState {
     spots: Vec<trash::Spot>,
+    shader_cleanup: Option<trash::shader_clean::ScanView>,
     busy: bool,
     /// Every clean-up mom has is in `spots` (a saved measurement from an older version isn't).
     complete: bool,
@@ -673,7 +676,8 @@ struct TrashState {
 fn trash_state(s: &Shared) -> TrashState {
     let spots = s.trash.lk().clone();
     let complete = trash::spot_ids().iter().all(|id| spots.iter().any(|x| x.id == *id));
-    TrashState { spots, busy: s.trash_busy.load(Ordering::Relaxed), complete }
+    let shader_cleanup = s.shader_cleanup.lk().as_ref().map(trash::shader_clean::Snapshot::view);
+    TrashState { spots, shader_cleanup, busy: s.trash_busy.load(Ordering::Relaxed), complete }
 }
 
 #[tauri::command(async)]
@@ -708,8 +712,22 @@ fn measure_trash_now(app: AppHandle, s: S, only: Option<String>) {
             };
             for id in ids {
                 ctx.list_scale = s.trash_scale.lk().get(&id).copied().unwrap_or(1);
-                if let Some(spot) = trash::measure(&id, &ctx) {
+                if let Some(mut spot) = trash::measure(&id, &ctx) {
+                    let shader_snapshot = if id == "shader-cache" {
+                        match trash::shader_clean::scan(&s.paths, &cfg.trash.keep) {
+                            Ok(snapshot) => Some(snapshot),
+                            Err(why) => {
+                                spot.note = Some(format!("Shader cleanup unavailable: {why}"));
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     let mut list = s.trash.lk();
+                    if id == "shader-cache" {
+                        *s.shader_cleanup.lk() = shader_snapshot;
+                    }
                     match list.iter_mut().find(|x| x.id == spot.id) {
                         Some(x) => *x = spot,
                         None => list.push(spot),
@@ -816,6 +834,27 @@ fn clean_progress(since: usize, s: State<'_, S>) -> trash::LiveNow {
 #[tauri::command(async)]
 fn stop_clean(s: State<'_, S>) {
     s.cleaning.stop();
+}
+
+#[tauri::command]
+async fn clean_shader_cache(token: String, paths: Vec<String>, app: AppHandle, s: State<'_, S>) -> Res<trash::CleanReport> {
+    let shared = s.inner().clone();
+    let worker = shared.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // Serialize requests, and hold the current Keep settings for the entire operation.
+        // The core consumes a valid token even on a failed selection; repeats cannot expand it.
+        let cfg = worker.config.lk();
+        let mut snapshots = worker.shader_cleanup.lk();
+        let snapshot = snapshots.as_mut().ok_or("Refresh Graphics shader caches before selecting files.")?;
+        trash::shader_clean::clean(snapshot, &token, &paths, &cfg.trash.keep)
+    }).await.map_err(err)?;
+    if let Ok(report) = &result {
+        if report.deleted > 0 {
+            shared.note(format!("Cleared {} of selected shader cache files.", human_bytes(report.freed)));
+        }
+    }
+    measure_trash_now(app, shared, Some("shader-cache".into()));
+    result
 }
 
 #[tauri::command]
@@ -1724,6 +1763,7 @@ fn main() {
         sampler: Mutex::new(Sampler::new()),
         snapshot: Mutex::new(None),
         trash: Mutex::new(saved_trash),
+        shader_cleanup: Mutex::new(None),
         trash_busy: AtomicBool::new(false),
         trash_next: Mutex::new(HashSet::new()),
         trash_scale: Mutex::new(HashMap::new()),
@@ -1773,6 +1813,7 @@ fn main() {
             get_trash,
             measure_trash,
             clean_trash,
+            clean_shader_cache,
             archive_info,
             choose_archive_dir,
             bring_back,
