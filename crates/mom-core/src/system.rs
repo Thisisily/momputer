@@ -28,7 +28,7 @@ pub struct System {
 #[serde(rename_all = "camelCase")]
 pub struct Check {
     pub id: String,
-    /// "Security", "Updates", "Hardware", "Performance" or "Registry".
+    /// "Security", "Updates", "Hardware", "Performance", "Backups" or "Registry".
     pub area: &'static str,
     /// "warn", "tip" or "ok".
     pub level: &'static str,
@@ -52,7 +52,7 @@ pub struct Item {
     pub led: &'static str,
 }
 
-fn check(id: &str, area: &'static str, level: &'static str, title: String, detail: String, fix: Option<Fix>) -> Check {
+pub(crate) fn check(id: &str, area: &'static str, level: &'static str, title: String, detail: String, fix: Option<Fix>) -> Check {
     Check { id: id.into(), area, level, title, detail, fix, more: Vec::new(), items: Vec::new() }
 }
 
@@ -117,6 +117,10 @@ $c = Get-CimInstance Win32_Processor | Select-Object -First 1; $o.cpu = @{ name 
 $o.gpu = @(Get-CimInstance Win32_VideoController | ForEach-Object { @{ name = "$($_.Name)"; driver = "$($_.DriverVersion)"; date = & $d $_.DriverDate } })
 $g = Get-CimInstance -Namespace root/Microsoft/Windows/DeviceGuard -ClassName Win32_DeviceGuard; $o.dg = @{ running = @($g.SecurityServicesRunning) }
 $o.qfe = & $d ((Get-CimInstance Win32_QuickFixEngineering | Where-Object InstalledOn | Sort-Object InstalledOn -Descending | Select-Object -First 1).InstalledOn)
+$o.pnp = @(Get-CimInstance Win32_PnPEntity -Filter 'ConfigManagerErrorCode <> 0' | Select-Object -First 50 | ForEach-Object { @{ name = "$($_.Name)"; code = [int]$_.ConfigManagerErrorCode } })
+$o.net = @(Get-NetAdapter -Physical | Select-Object -First 16 | ForEach-Object { @{ up = ($_.Status -eq 'Up'); media = "$($_.PhysicalMediaType)"; bps = [int64]$_.ReceiveLinkSpeed; desc = "$($_.InterfaceDescription)"; options = @((Get-NetAdapterAdvancedProperty -Name $_.Name -RegistryKeyword '*SpeedDuplex').ValidDisplayValues) } })
+$o.vols = @(Get-CimInstance Win32_Volume -Filter 'DriveType=3' | Where-Object DriveLetter | ForEach-Object { @{ letter = "$($_.DriveLetter)"; label = "$($_.Label)" } })
+$o.onedrive = [bool](Get-Process OneDrive)
 $o | ConvertTo-Json -Depth 4 -Compress
 "#;
 
@@ -151,6 +155,20 @@ fn gather() -> System {
     checks.extend(updates(&facts, &reg, now));
     checks.extend(hardware(&facts, gpu.as_ref(), now));
     checks.extend(performance(&reg));
+    // Screens, devices, the network, starting and sleeping, the week after a change, backups.
+    let paths = crate::paths::Paths::detect();
+    checks.extend(crate::display::checks(&crate::display::screens()));
+    checks.extend(crate::devices::checks(&crate::devices::problems(&facts)));
+    checks.extend(crate::network::checks(&crate::network::adapters(&facts), crate::network::read_air().as_ref()));
+    let startup: Vec<String> = crate::health::startup_apps(&paths).into_iter().map(|a| a.name).collect();
+    checks.extend(crate::power::read_boots().map(|b| crate::power::boot_checks(&b, &startup)).unwrap_or_default());
+    checks.extend(crate::power::wake_checks(&crate::power::read_wakes(), now));
+    let memory = arr(&facts, "mem").iter().map(|m| num(m, "conf")).filter(|s| *s > 0).min().unwrap_or(0) as u32;
+    if let Some(change) = crate::stability::watch(&paths.state_dir(), memory, &text(&facts["bios"], "ver"), now) {
+        checks.push(crate::stability::watch_check(&change, &crate::stability::get()));
+    }
+    checks.extend(crate::backups::cover_checks(&crate::backups::cover(&facts)));
+    checks.extend(crate::backups::repair_checks(&crate::backups::repairs(&facts)));
     let sound = crate::sound::endpoints();
     checks.extend(crate::sound::checks(&sound, &installed));
     checks.extend(registry());
@@ -708,7 +726,7 @@ fn channel(slot: &str) -> Option<char> {
 
 /// Hardware names as the firmware gives them, made safe to put in a sentence: printable
 /// characters only, and not long.
-fn plain(s: &str) -> String {
+pub(crate) fn plain(s: &str) -> String {
     let kept: String = s.chars().map(|c| if c.is_ascii_graphic() { c } else { ' ' }).collect();
     kept.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect()
 }
@@ -977,7 +995,7 @@ fn target(s: &str) -> Option<String> {
     (l.len() > 3 && l.as_bytes()[1] == b':' && (l.ends_with(".exe") || l.ends_with(".dll"))).then_some(expanded)
 }
 
-fn expand_env(s: &str) -> String {
+pub(crate) fn expand_env(s: &str) -> String {
     let mut out = String::new();
     let mut rest = s;
     while let Some(start) = rest.find('%') {

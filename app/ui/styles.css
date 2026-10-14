@@ -4447,3 +4447,18 @@ button.row-name:hover {
   gap: 6px 16px;
   padding: 10px 2px 0;
 }
+
+/* Thirty days of stability in Speed: a square a day. */
+.st-none {
+  fill: none;
+  stroke: var(--line-2);
+  stroke-width: 1;
+}
+
+.st-app {
+  fill: var(--ink-3);
+}
+
+.st-bad {
+  fill: var(--red);
+}

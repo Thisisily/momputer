@@ -606,6 +606,7 @@
     if (f.kind === "tab") return `<button class="secondary" data-act="go-tab" data-to="${esc(f.value)}">${esc(f.label)}</button>`;
     if (f.kind === "read") return `<button class="secondary" data-act="open-doc" data-id="${esc(f.value)}">${esc(f.label)}</button>`;
     if (f.kind === "launch") return `<button class="secondary" data-act="open-program" data-url="${esc(f.value)}">${esc(f.label)}${ICON.out}</button>`;
+    if (f.kind === "reveal") return `<button class="secondary" data-act="reveal-path" data-path="${esc(f.value)}">${ICON.folder}${esc(f.label)}</button>`;
     if (f.kind === "regfix") {
       const armed = state.regConfirm === f.value;
       const busy = state.regBusy === f.value;
@@ -707,8 +708,55 @@
           <div class="row-act"></div>
         </div>`);
     }
+    if (sp.stability) html += section("stability", "Stability", "", stabilityRow(sp.stability));
     html += section("busy", "Busy right now", "", rows.join("") || `<p class="empty">Nothing's busy. Your PC is resting.</p>`);
     return html;
+  }
+
+  /** "1 blue screen, 2 graphics driver resets and 1 hardware error". */
+  const andWords = (list) => (list.length > 1 ? `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}` : list[0] || "");
+
+  /** What went wrong in a stretch of days, in words: each kind with its count. */
+  const troubleWords = (d) =>
+    [[d.blueScreens, "blue screen"], [d.shutdowns, "unexpected shutdown"], [d.gpuResets, "graphics driver reset"], [d.hardwareErrors, "hardware error"]]
+      .filter(([n]) => n)
+      .map(([n, one]) => plural(n, one));
+
+  /** The last thirty days in Speed: how steady Windows has been, the apps that crashed most, and
+      a square for each day (red when Windows itself had trouble, grey when an app crashed). */
+  function stabilityRow(st) {
+    const trouble = troubleWords(st);
+    const fell = st.blueScreens + st.shutdowns + st.hardwareErrors;
+    const title = trouble.length ? `${andWords(trouble)} in 30 days` : "Windows has been steady for 30 days";
+    const detail = st.appCrashes
+      ? `Apps crashed ${plural(st.appCrashes, "time")}${st.apps.length ? `, ${st.apps[0][0]} the most` : ""}. Event Viewer has the details.`
+      : "No app crashed either.";
+    const c = {
+      id: "stability",
+      level: fell ? "warn" : trouble.length ? "tip" : "ok",
+      title,
+      detail,
+      fix: trouble.length || st.appCrashes ? { label: "Event Viewer", kind: "launch", value: "eventvwr.exe" } : null,
+      more: [],
+      items: st.apps.map(([name, n]) => ({ name, note: `crashed ${plural(n, "time")}`, led: "off" })),
+    };
+    return checkRow(c, "spd", stabilityStrip(st));
+  }
+
+  function stabilityStrip(st) {
+    const W = 320, n = Math.max(1, st.days.length), step = W / n;
+    const when = (at) => new Date(at * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    const cells = st.days
+      .map((d, i) => {
+        const said = [...troubleWords(d), ...(d.appCrashes ? [plural(d.appCrashes, "app crash", "app crashes")] : [])];
+        const cls = troubleWords(d).length ? "st-bad" : d.appCrashes ? "st-app" : "st-none";
+        return `<rect x="${(i * step + 1).toFixed(1)}" y="6" width="${Math.max(2, step - 3).toFixed(1)}" height="14" rx="2" class="${cls}"><title>${esc(when(d.at))}: ${esc(said.length ? said.join(", ") : "nothing went wrong")}</title></rect>`;
+      })
+      .join("");
+    const label = `${st.days.filter((d) => troubleWords(d).length).length} of ${st.days.length} days had trouble with Windows, ${st.days.filter((d) => d.appCrashes).length} had an app crash`;
+    return `<svg class="timeline stability" viewBox="0 0 ${W} 40" role="img" aria-label="${esc(label)}">${cells}
+        <text x="1" y="36" class="tl-label">${st.days.length} days ago</text><text x="${W - 1}" y="36" text-anchor="end" class="tl-label">today</text>
+      </svg>`;
   }
 
   /** Looks at what slows the PC down. The busy list changes by the second; the slow parts (the
@@ -1682,6 +1730,7 @@ in ${x.cwd}`)}">
     ["Hardware", "Hardware"],
     ["Sound", "Sound"],
     ["Performance", "Performance"],
+    ["Backups", "Backups"],
     ["Registry", "Registry leftovers"],
   ];
 

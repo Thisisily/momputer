@@ -466,6 +466,14 @@
         more: [{ label: "Uninstall IObit Uninstaller 16", kind: "uninstall", value: "HKLM\IObit Uninstaller_is1", hint: null }] },
     ],
     gpu: { name: "RTX 2070 SUPER", temp: 41, busy: 3, powerLimit: 215, defaultPowerLimit: 215 },
+    // Thirty days: the two driver crashes above, and a few app crashes.
+    stability: (() => {
+      const today = now - (now % 86400);
+      const days = Array.from({ length: 30 }, (_, i) => ({
+        at: today - (29 - i) * 86400, blueScreens: 0, shutdowns: 0, gpuResets: i === 21 || i === 22 ? 1 : 0, hardwareErrors: 0, appCrashes: [3, 9, 15, 27].includes(i) ? 2 : 0,
+      }));
+      return { from: days[0].at, to: now, days, blueScreens: 0, shutdowns: 0, gpuResets: 2, hardwareErrors: 0, appCrashes: 8, apps: [["lanternfall.exe", 5], ["copperline.exe", 3]] };
+    })(),
     busy: [
       { name: "Claude", cpu: 2.8, mem: 3.8 * GB, count: 23 },
       { name: "Desktop Window Manager", cpu: 0.9, mem: 230 * MB, count: 1 },
@@ -952,6 +960,14 @@
           { id: "av-leftover-bitdefender", area: "Security", level: "tip", title: "Bitdefender's antivirus is gone, but its helpers aren't", detail: "Bitdefender Agent still runs at every start, with nothing left for it to look after. Uninstall it from Installed apps.", fix: { label: "Installed apps", kind: "open", value: "ms-settings:appsfeatures", hint: null } },
           { id: "windows-support", area: "Updates", level: "ok", title: "Windows 11 Pro 25H2 (build 26200) gets security updates", detail: "Until 12 October 2027.", fix: null },
           { id: "memory-speed", area: "Hardware", level: "warn", title: "Your memory runs at 2666, but it's made for 3600", detail: "Switching on D.O.C.P. in the BIOS runs it at full speed. Test it afterwards. With four sticks, if it isn't stable, try one step lower.", fix: { label: "Copy for your agent", kind: "copy", value: "My PC's memory runs at 2666 MT/s, but its sticks (4 x Crucial BL16G36C16U4BL) are rated for 3600 MT/s.", hint: "Paste it to your agent." } },
+          { id: "display-refresh-0", area: "Hardware", level: "warn", title: "Your 240 Hz screen runs at 60 Hz", detail: "It can do 240 Hz at 2560×1440. Pick it under Advanced display; everything moves smoother.", fix: { label: "Display settings", kind: "open", value: "ms-settings:display-advanced", hint: null } },
+          { id: "devices-broken", area: "Hardware", level: "warn", title: "Lanternfall USB Hub stopped after reporting a problem", detail: "Unplugging it and trying another USB port or cable usually fixes it.", fix: { label: "Device Manager", kind: "launch", value: "devmgmt.msc", hint: null },
+            more: [{ label: "Copy for your agent", kind: "copy", value: "Device Manager on my PC shows these devices with a problem:\n- \"Lanternfall USB Hub\": stopped after reporting a problem (Device Manager code 43)\n", hint: "Paste it to your agent." }] },
+          { id: "watch-change", area: "Hardware", level: "ok", title: "Since the BIOS update to 4604 on 12 Oct: no hardware errors", detail: "Mom keeps an eye on it for a week.", fix: null },
+          { id: "backup-onedrive-off", area: "Backups", level: "warn", title: "Your Documents, Desktop and Pictures aren't backed up", detail: "They're in your OneDrive folder, but OneDrive isn't running, so nothing syncs.", fix: { label: "Windows Backup", kind: "open", value: "ms-settings:backup", hint: null },
+            more: [{ label: "Copy for your agent", kind: "copy", value: "My Documents, Desktop and Pictures live in my OneDrive folder, but OneDrive isn't running, so nothing syncs.", hint: "Paste it to your agent." }] },
+          { id: "drive-repairs-f", area: "Backups", level: "warn", title: "F: has needed disk repairs 16 times in 3 months", detail: "That's usually a drive wearing out. Copy what matters somewhere else.", fix: { label: "Show F:", kind: "reveal", value: "F:\\", hint: null },
+            more: [{ label: "Copy for your agent", kind: "copy", value: "My drive F: (\"Backup\") keeps needing disk repairs.", hint: "Paste it to your agent." }] },
           { id: "ssd-health-1", area: "Hardware", level: "ok", title: "Samsung SSD 970 EVO Plus 1TB is healthy", detail: "12% of its rated life used, 59 °C, 173 TB written, switched on for 3.6 years in all. No errors.", fix: null },
           { id: "sound-outputs", area: "Sound", level: "tip", title: "6 sound outputs, 4 made by apps", detail: "To switch one off: Sound settings, open it, Don't allow.",
             fix: { label: "Sound settings", kind: "open", value: "ms-settings:sound", hint: null },

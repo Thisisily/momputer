@@ -1380,6 +1380,12 @@ fn print_speed(st: &Style, sp: &mom_core::speed::Speed) {
         println!("
 {}  {}", st.bold("GRAPHICS CARD"), st.dim(&bits.join(" · ")));
     }
+    if let Some(s) = &sp.stability {
+        let apps: Vec<String> = s.apps.iter().map(|(name, n)| format!("{name} {n}")).collect();
+        let most = if apps.is_empty() { String::new() } else { format!(" Crashed most: {}.", apps.join(", ")) };
+        println!("
+{}  {}", st.bold("STABILITY"), st.dim(&format!("{}{most}", s.summary())));
+    }
     println!("
 {}", st.bold("BUSY RIGHT NOW"));
     for b in &sp.busy {
