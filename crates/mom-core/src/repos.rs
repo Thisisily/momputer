@@ -29,6 +29,9 @@ const OLD_CHANGES: u64 = 7 * 86_400;
 const OLD_STASH: u64 = 14 * 86_400;
 /// Changed files whose dates are read, per project.
 const MAX_CHANGED: usize = 500;
+/// A project's .git with more than this many folders and files isn't looked at whole, so git
+/// isn't asked about it.
+const MAX_GIT_ENTRIES: usize = 200_000;
 /// Projects with a finding of their own; the rest share one.
 const MAX_CHECKS: usize = 12;
 
@@ -256,21 +259,40 @@ fn settings(repo: &Path) -> Option<String> {
             return None;
         }
     }
-    // Its folders must be real folders here, not links that lead somewhere else.
-    for folder in ["objects", "objects/info", "objects/pack", "refs", "info", "logs"] {
-        if std::fs::symlink_metadata(dot.join(folder)).is_ok_and(|m| linked(&m) || !m.is_dir()) {
-            return None;
-        }
-    }
-    let packs = std::fs::read_dir(dot.join("objects").join("pack")).into_iter().flatten().take(5_000);
-    for entry in packs {
-        if entry.ok().and_then(|e| std::fs::symlink_metadata(e.path()).ok()).is_none_or(|m| linked(&m)) {
-            return None;
-        }
+    // Nothing in it may lead elsewhere: every folder and file is looked at, and a project too
+    // big to look at whole is left alone too.
+    if !all_here(&dot) {
+        return None;
     }
     let config = dot.join("config");
     std::fs::symlink_metadata(&config).ok().filter(|m| m.is_file() && m.len() <= 64 << 10)?;
     std::fs::read_to_string(&config).ok()
+}
+
+/// Everything in `.git` is a real folder or file here: no link, no junction, nothing that
+/// can't be read. False as well past MAX_GIT_ENTRIES: then it wasn't all looked at.
+fn all_here(dot: &Path) -> bool {
+    let mut left = MAX_GIT_ENTRIES;
+    let mut todo = vec![dot.to_path_buf()];
+    while let Some(dir) = todo.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { return false };
+        for entry in entries {
+            let Some(left_now) = left.checked_sub(1) else { return false };
+            left = left_now;
+            // On Windows the entry's details come from the folder listing: a link isn't followed.
+            let Ok(meta) = entry.and_then(|e| e.metadata().map(|m| (e.path(), m))) else { return false };
+            let (path, meta) = meta;
+            if linked(&meta) {
+                return false;
+            }
+            if meta.is_dir() {
+                todo.push(path);
+            } else if !meta.is_file() {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// A link or junction: something that leads elsewhere.
@@ -649,6 +671,25 @@ mod tests {
         std::fs::remove_file(git_dir.join("objects").join("info").join("alternates")).unwrap();
         std::fs::write(git_dir.join("commondir"), "../elsewhere\n").unwrap();
         assert_eq!(settings(&root), None, "settings in a common folder elsewhere");
+        std::fs::remove_file(git_dir.join("commondir")).unwrap();
+        assert!(settings(&root).is_some());
+        // A junction inside .git leads elsewhere: the project is left alone.
+        #[cfg(windows)]
+        {
+            let target = root.join("elsewhere");
+            std::fs::create_dir_all(&target).unwrap();
+            let link = git_dir.join("refs");
+            let made = std::process::Command::new(std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into()))
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(&link)
+                .arg(&target)
+                .output()
+                .is_ok_and(|o| o.status.success());
+            if made {
+                assert_eq!(settings(&root), None, "a junction in .git");
+                std::fs::remove_dir(&link).unwrap();
+            }
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 
