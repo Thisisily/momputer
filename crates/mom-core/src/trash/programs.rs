@@ -8,9 +8,9 @@
 //! report, Windows' own folders, and top-level game folders on every drive ("Games", "itch",
 //! "Epic Games"...). Nothing is read inside the programs; only names and folders.
 //!
-//! "Gone" is said only when Steam says the game isn't installed, or when the whole look
-//! finished without finding it. Anything less certain is "unknown", and then the cache is only
-//! judged by its age, as before.
+//! "Gone" is said only on a record's word: Steam's that the game isn't installed, or Windows'
+//! that a Store app's folder is gone. A program file the look didn't find is only "not found":
+//! portable programs live anywhere. Then the cache is judged by its age, as before.
 
 use super::steam_appinfo;
 use super::steam_shaders;
@@ -41,8 +41,14 @@ const GAME_ROOTS: &[&str] = &[
     "games", "game", "itch", "itch games", "itch.io", "epic games", "gog games", "gog galaxy", "xboxgames", "riot games", "ubisoft",
     "ubisoft games", "ea games", "origin games", "battle.net",
 ];
-const MAX_ENTRIES: usize = 400_000;
-const MAX_TIME: Duration = Duration::from_secs(20);
+const MAX_ENTRIES: usize = 1_200_000;
+const MAX_TIME: Duration = Duration::from_secs(10);
+/// Folders that never hold the programs a cache names, only lots of files: a game's assets,
+/// Steam's own libraries (their games are looked up through Steam), Windows' component store.
+const SKIP: &[&str] = &[
+    "steamapps", "windowsapps", "winsxs", "installer", "assembly", "servicing", "node_modules", ".git", "content", "paks",
+    "streamingassets", "locales", "__pycache__", "shadercache",
+];
 const APPINFO_BYTES: u64 = 96 << 20;
 const EPIC_MANIFEST_BYTES: u64 = 1 << 20;
 const MAX_EPIC_MANIFESTS: usize = 2_000;
@@ -63,7 +69,7 @@ pub(super) struct Programs {
     steam_known: bool,
     /// Where Store apps keep their data, if it could be listed.
     packages: Option<HashSet<String>>,
-    /// The whole look finished: a program it didn't find isn't here.
+    /// The whole look finished: a program it didn't find isn't in any program folder.
     complete: bool,
 }
 
@@ -71,13 +77,33 @@ impl Programs {
     pub(super) fn find(paths: &Paths) -> Programs {
         let mut me = Programs { complete: true, ..Default::default() };
         let fixture = paths.system_drive.parent().is_some();
-        let mut roots: Vec<(PathBuf, usize, Title)> = Vec::new();
+        // Where programs live, the likeliest first: if time runs out, it's in the game folders.
+        let mut roots: Vec<(PathBuf, usize, Title)> = vec![(paths.windows.clone(), 1, Title::None)];
+        // Each installed game's own folder, looked in last: the most files for the fewest programs.
+        let mut game_dirs: Vec<(PathBuf, usize, Title)> = Vec::new();
+        for sub in ["System32", "SysWOW64"] {
+            roots.push((paths.windows.join(sub), 1, Title::None));
+        }
+        roots.push((paths.windows.join("SystemApps"), 2, Title::None));
+        roots.push((paths.local_appdata.join("Programs"), 4, Title::None));
+        roots.push((paths.system_drive.join("Program Files"), 5, Title::None));
+        roots.push((paths.program_files_x86.clone(), 5, Title::None));
+        roots.push((paths.appdata.join("itch").join("apps"), 5, Title::FolderUnder));
+        for drive in std::iter::once(&paths.system_drive).chain(paths.other_drives.iter()) {
+            let Ok(entries) = std::fs::read_dir(drive) else { continue };
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                if GAME_ROOTS.contains(&name.as_str()) && entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    roots.push((entry.path(), 5, Title::FolderUnder));
+                }
+            }
+        }
 
         // ---- Steam: what's installed, and what the account has.
         if let Some(games) = steam_shaders::games(paths) {
             for (id, (name, dir)) in &games.installed {
                 me.steam_installed.insert(*id);
-                roots.push((dir.clone(), 7, Title::Given(name.clone())));
+                game_dirs.push((dir.clone(), 4, Title::Given(name.clone())));
             }
             match read_capped(&games.root.join("appcache").join("appinfo.vdf"), APPINFO_BYTES).and_then(|b| steam_appinfo::parse(&b)) {
                 Some(apps) => {
@@ -107,33 +133,7 @@ impl Programs {
                 let Some(text) = read_capped(&path, EPIC_MANIFEST_BYTES).and_then(|b| String::from_utf8(b).ok()) else { continue };
                 let Ok(item) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
                 let (Some(dir), Some(name)) = (item["InstallLocation"].as_str(), item["DisplayName"].as_str()) else { continue };
-                roots.push((PathBuf::from(dir), 7, Title::Given(name.chars().filter(|c| !c.is_control()).take(200).collect())));
-            }
-        }
-
-        // ---- Where programs live.
-        let program_files = paths.system_drive.join("Program Files");
-        roots.push((program_files, 5, Title::None));
-        roots.push((paths.program_files_x86.clone(), 5, Title::None));
-        roots.push((paths.local_appdata.join("Programs"), 5, Title::None));
-        roots.push((paths.appdata.join("itch").join("apps"), 6, Title::FolderUnder));
-        roots.push((paths.windows.clone(), 1, Title::None));
-        for sub in ["System32", "SysWOW64"] {
-            roots.push((paths.windows.join(sub), 1, Title::None));
-        }
-        roots.push((paths.windows.join("SystemApps"), 2, Title::None));
-        if !fixture {
-            for dir in crate::installed::Installed::scan(paths).dirs {
-                roots.push((dir, 5, Title::None));
-            }
-        }
-        for drive in std::iter::once(&paths.system_drive).chain(paths.other_drives.iter()) {
-            let Ok(entries) = std::fs::read_dir(drive) else { continue };
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-                if GAME_ROOTS.contains(&name.as_str()) && entry.file_type().is_ok_and(|t| t.is_dir()) {
-                    roots.push((entry.path(), 7, Title::FolderUnder));
-                }
+                game_dirs.push((PathBuf::from(dir), 5, Title::Given(name.chars().filter(|c| !c.is_control()).take(200).collect())));
             }
         }
 
@@ -146,18 +146,40 @@ impl Programs {
         let start = Instant::now();
         let mut left = MAX_ENTRIES;
         let mut walked = HashSet::new();
-        for (root, depth, title) in roots {
-            if !on_these_drives(&root, &drives) {
-                me.complete = false;
-                continue;
+        let walk_all = |me: &mut Programs, roots: Vec<(PathBuf, usize, Title)>, walked: &mut HashSet<String>, left: &mut usize| {
+            for (root, depth, title) in roots {
+                if !on_these_drives(&root, &drives) {
+                    me.complete = false;
+                    continue;
+                }
+                if !walked.insert(crate::util::norm_path(&root.to_string_lossy())) {
+                    continue;
+                }
+                if !me.walk(&root, depth, &title, left, start) {
+                    me.complete = false;
+                }
             }
-            if !walked.insert(crate::util::norm_path(&root.to_string_lossy())) {
-                continue;
-            }
-            if !me.walk(&root, depth, &title, &mut left, start) {
-                me.complete = false;
+        };
+        walk_all(&mut me, roots, &mut walked, &mut left);
+        // The folders installed programs report: a help, never a reason to doubt the rest. Some
+        // name a whole drive or a folder of yours, which isn't where a program lives.
+        if !fixture {
+            let wide = [&paths.home, &paths.local_appdata, &paths.appdata, &paths.program_files_x86, &paths.windows];
+            for dir in crate::installed::Installed::scan(paths).dirs {
+                let key = crate::util::norm_path(&dir.to_string_lossy());
+                let too_wide = dir.parent().is_none()
+                    || wide.iter().any(|w| within(w, &dir))
+                    || within(&paths.system_drive.join("Program Files"), &dir);
+                if too_wide || !on_these_drives(&dir, &drives) || !walked.insert(key) {
+                    continue;
+                }
+                let finished = me.walk(&dir, 4, &Title::None, &mut left, start);
+                if !finished && (left == 0 || start.elapsed() > MAX_TIME) {
+                    me.complete = false;
+                }
             }
         }
+        walk_all(&mut me, game_dirs, &mut walked, &mut left);
 
         // ---- Store apps keep a data folder for as long as they're installed.
         me.packages = std::fs::read_dir(paths.local_appdata.join("Packages"))
@@ -166,9 +188,10 @@ impl Programs {
         me
     }
 
-    /// Notes every program file under `root`, down to `depth` folders, without following
-    /// links. False if it couldn't finish (out of time or entries, or a folder it couldn't read
-    /// partway down). A root that isn't there is fine: nothing is installed there.
+    /// Notes every program file under `root`, down to `depth` folders, shallowest first, without
+    /// following links. False if it couldn't finish (out of time or entries, or the root couldn't
+    /// be read). A root that isn't there is fine: nothing is installed there. A folder inside it
+    /// that you may not open holds nothing you run, so it's passed over.
     fn walk(&mut self, root: &Path, depth: usize, title: &Title, left: &mut usize, start: Instant) -> bool {
         match std::fs::symlink_metadata(root) {
             Ok(m) if m.is_dir() && !m.file_type().is_symlink() => {}
@@ -177,10 +200,10 @@ impl Programs {
             Err(_) => return false,
         }
         let mut whole = true;
-        let mut stack = vec![(root.to_path_buf(), 0usize, None::<String>)];
-        while let Some((dir, level, under)) = stack.pop() {
+        let mut queue = std::collections::VecDeque::from([(root.to_path_buf(), 0usize, None::<String>)]);
+        while let Some((dir, level, under)) = queue.pop_front() {
             let Ok(entries) = std::fs::read_dir(&dir) else {
-                whole = false;
+                whole &= level > 0;
                 continue;
             };
             for entry in entries {
@@ -198,9 +221,9 @@ impl Programs {
                 }
                 let name = entry.file_name().to_string_lossy().to_string();
                 if kind.is_dir() {
-                    if level + 1 < depth {
+                    if level + 1 < depth && !SKIP.contains(&name.to_ascii_lowercase().as_str()) {
                         let under = under.clone().or_else(|| matches!(title, Title::FolderUnder).then(|| name.clone()));
-                        stack.push((entry.path(), level + 1, under));
+                        queue.push_back((entry.path(), level + 1, under));
                     }
                 } else if name.len() > 4 && name.to_ascii_lowercase().ends_with(".exe") {
                     let named = match title {
@@ -241,10 +264,8 @@ impl Programs {
         if !steam.is_empty() && self.steam_known {
             return Found { title: steam_title, state: State::Gone, detail: "Uninstalled from Steam" };
         }
-        if self.complete {
-            return Found { title: steam_title, state: State::Gone, detail: "Not on this PC any more" };
-        }
-        Found { title: steam_title, state: State::Unknown, detail: "Installation unknown" }
+        let detail = if self.complete { "Not found in program folders" } else { "Installation unknown" };
+        Found { title: steam_title, state: State::Unknown, detail }
     }
 
     /// A Steam game's name, from Steam's records.
@@ -277,6 +298,21 @@ enum Title {
     FolderUnder,
 }
 
+/// A name to show for a program: a Store app's package name says less than its last part
+/// ("openai.codex_2p2nqsd0c76g0" is Codex); a program file's name stays as it is.
+pub(super) fn display(program: &str) -> String {
+    if program.to_ascii_lowercase().ends_with(".exe") {
+        return program.to_string();
+    }
+    let app = program.rsplit_once('_').map_or(program, |(app, _)| app);
+    let last = app.rsplit('.').next().unwrap_or(app);
+    let mut chars = last.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => program.to_string(),
+    }
+}
+
 /// `path` is an ordinary local path (a drive letter, no "..") on one of `drives`.
 fn on_these_drives(path: &Path, drives: &[PathBuf]) -> bool {
     use std::path::Component;
@@ -287,12 +323,17 @@ fn on_these_drives(path: &Path, drives: &[PathBuf]) -> bool {
     if !matches!(path.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_))) {
         return false;
     }
+    drives.iter().any(|d| within(path, d))
+}
+
+/// `path` is `root` or inside it, whatever the letter case or slashes.
+fn within(path: &Path, root: &Path) -> bool {
     let key = |p: &Path| {
         let text = p.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
         text.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(text).trim_end_matches('\\').to_string()
     };
-    let path = key(path);
-    drives.iter().map(|d| key(d)).any(|d| path == d || path.starts_with(&format!("{d}\\")))
+    let (path, root) = (key(path), key(root));
+    path == root || path.starts_with(&format!("{root}\\"))
 }
 
 /// A whole small file, if it's an ordinary file no bigger than `cap`.
@@ -311,6 +352,13 @@ mod tests {
     fn put(path: &Path) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, b"x").unwrap();
+    }
+
+    #[test]
+    fn store_apps_show_their_last_name_part() {
+        assert_eq!(display("example.notes_0123456789abc"), "Notes");
+        assert_eq!(display("nimbus_0123456789abc"), "Nimbus");
+        assert_eq!(display("Lanternfall.exe"), "Lanternfall.exe");
     }
 
     #[cfg(windows)]
@@ -372,18 +420,18 @@ mod tests {
         assert_eq!(judge("taskmgr.exe").state, State::Installed);
         assert_eq!(judge("example.notes_0123456789abc").state, State::Installed);
         assert_eq!(judge("example.gone_0123456789abc").state, State::Gone);
+        // Not found anywhere it looked: only "not found", since a portable program lives anywhere.
         let unknown = judge("somethingelse.exe");
-        assert_eq!((unknown.title, unknown.state, unknown.detail), (None, State::Gone, "Not on this PC any more"));
+        assert_eq!((unknown.title, unknown.state, unknown.detail), (None, State::Unknown, "Not found in program folders"));
 
-        // A manifest naming a network share isn't looked in, so nothing is called gone.
+        // A manifest naming a network share isn't looked in, so the look isn't whole.
         let manifests = paths.program_data.join("Epic").join("EpicGamesLauncher").join("Data").join("Manifests");
         std::fs::create_dir_all(&manifests).unwrap();
         std::fs::write(manifests.join("x.item"), r#"{"InstallLocation": "\\\\server.example\\games\\Atlas", "DisplayName": "Atlas"}"#).unwrap();
-        assert_eq!(Programs::find(&paths).judge("somethingelse.exe").state, State::Unknown);
+        assert_eq!(Programs::find(&paths).judge("somethingelse.exe").detail, "Installation unknown");
         std::fs::remove_dir_all(paths.program_data.join("Epic")).unwrap();
 
-        // Without Steam's records, a game missing from the folders is only "not on this PC";
-        // and when the look couldn't finish, nothing is called gone.
+        // Without Steam's records, nothing says a game was uninstalled.
         std::fs::remove_file(steam.join("appcache").join("appinfo.vdf")).unwrap();
         let p = Programs::find(&paths);
         assert_eq!(p.judge("copperline-win64-shipping.exe").state, State::Unknown, "Steam's records unreadable: unsure");

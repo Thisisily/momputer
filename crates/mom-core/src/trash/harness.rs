@@ -930,8 +930,13 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             let tail = c.name.strip_prefix(&format!("{} · ", a.name)).unwrap_or(&c.name).to_string();
             let (name, detail) = match &program {
                 Some(program) => {
-                    let found = programs().judge(program);
-                    let name = found.title.unwrap_or_else(|| program.clone());
+                    let mut found = programs().judge(program);
+                    // Running right now: it's here, wherever it's installed.
+                    if found.state != super::programs::State::Installed && ctx.running(&program.to_ascii_lowercase()) {
+                        found.state = super::programs::State::Installed;
+                        found.detail = "Running now";
+                    }
+                    let name = found.title.unwrap_or_else(|| super::programs::display(program));
                     if found.state == super::programs::State::Gone {
                         gone = Some(name.clone());
                     }
