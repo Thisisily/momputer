@@ -945,9 +945,10 @@
       ...list.map((e) => `- ${quoted(e.name)}${e.theme ? ", a theme" : siteName(e.site) ? `, opens ${siteName(e.site)}` : ""}, id ${extensionId(e.id)}`),
       "",
       "1. Look each one up by its id and tell me in a line what it was, so I can keep any I still want.",
-      `2. Open ${b.name} in that profile and go to ${scheme}://apps. Right-click each app and remove it. If one isn't there, or it's a theme, open ${scheme}://extensions/?id=<its id> and press Remove.`,
-      "3. Remove only these. Leave every other extension alone, wallets above all, and the theme you're using now.",
-      "4. Don't delete files in the profile folder or edit its Preferences by hand: the browser checks those and may reset your settings.",
+      `2. Open ${b.name} in that profile and go to ${scheme}://apps. It shows these as unsupported apps. Right-click each one I want gone and remove it. If I want them all gone, the page's link to remove unsupported apps does it in one go: it removes every old Chrome app in this profile.`,
+      ...(list.some((e) => e.theme) ? [`3. A theme isn't on the Apps page: open ${scheme}://extensions/?id=<its id> and press Remove if that page shows it.`] : []),
+      `${list.some((e) => e.theme) ? 4 : 3}. Remove only these. Leave every other extension alone, wallets above all, and the theme I'm using now.`,
+      `${list.some((e) => e.theme) ? 5 : 4}. Don't delete files in the profile folder or edit its Preferences by hand: the browser checks those and may reset my settings.`,
       "If you can't open browser pages yourself, walk me through it one step at a time. Then tell me what was removed.",
     ].join("\n");
   }
