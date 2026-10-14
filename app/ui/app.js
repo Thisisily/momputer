@@ -951,11 +951,11 @@
     const meta = [p.lastUsed ? `browser recorded activity ${agoText(p.lastUsed)}` : "profile activity unknown", p.extensions.length ? `${on} of ${plural(p.extensions.length, "extension")} on` : "no extensions"].filter(Boolean);
     const idle = p.lastUsed && Date.now() / 1000 - p.lastUsed > 180 * 86400;
     return `<div class="row prof${open ? " is-open" : ""}" id="${id}" data-led="${p.notes.length ? "red" : !p.lastUsed || idle ? "off" : "green"}">
-      <button type="button" class="profile-toggle" data-act="profile-open" data-key="${esc(key)}" aria-expanded="${open}" aria-controls="${id}-details" aria-labelledby="${id}-name">
+      <button type="button" class="profile-toggle" data-act="profile-open" data-key="${esc(key)}" aria-expanded="${open}" aria-controls="${id}-details" aria-labelledby="${id}-name" aria-describedby="${id}-meta ${id}-size ${id}-cache">
         <span class="row-name" id="${id}-name">${esc(p.name)}</span>
-        <span class="row-meta"><span class="why">${esc(meta.join(" · "))}${p.notes.length ? ` · <span class="hot">${plural(p.notes.length, "note")}</span>` : ""}</span></span>
-        <span class="row-nums num">${bytes(p.size)}</span>
-        <span class="row-nums2 num">${bytes(p.cache)} cache</span>
+        <span class="row-meta" id="${id}-meta"><span class="why">${esc(meta.join(" · "))}${p.notes.length ? ` · <span class="hot">${plural(p.notes.length, "note")}</span>` : ""}</span></span>
+        <span class="row-nums num" id="${id}-size">${bytes(p.size)}</span>
+        <span class="row-nums2 num" id="${id}-cache">${bytes(p.cache)} cache</span>
         <span class="row-act" aria-hidden="true"><span class="row-chev">${ICON.chevron}</span></span>
       </button>
       <div class="row-detail" id="${id}-details" role="region" aria-labelledby="${id}-name">${open ? profileDetail(b, p) : ""}</div>

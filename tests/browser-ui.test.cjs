@@ -56,8 +56,13 @@ test("the profile name, metadata, size and chevron share one accessible native h
   }
   const panel = toggle[0].match(/aria-controls="([^"]+)"/)[1];
   const label = toggle[0].match(/aria-labelledby="([^"]+)"/)[1];
+  const descriptions = toggle[0].match(/aria-describedby="([^"]+)"/)[1].split(" ");
   assert.ok(html.includes(`id="${panel}" role="region" aria-labelledby="${label}"`));
   assert.ok(toggle[1].includes(`id="${label}">Work</span>`));
+  assert.equal(descriptions.length, 3, "metadata, total size and cache size remain screen-reader descriptions");
+  for (const [index, area] of ["row-meta", "row-nums num", "row-nums2 num"].entries()) {
+    assert.ok(toggle[1].includes(`class="${area}" id="${descriptions[index]}"`));
+  }
   assert.equal((html.match(/data-act="profile-open"/g) || []).length, 1);
   assert.doesNotMatch(toggle[1], /<button\b|<a\b/, "there are no nested interactive controls");
 });
