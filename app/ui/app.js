@@ -1449,6 +1449,13 @@ in ${x.cwd}`)}">
   // The PC checkup, split over Upkeep's tabs: drives and memory with Storage, what runs with
   // Apps, Windows' own checkups with Windows.
 
+  /** 0.5.0 C1: "At this rate C: is full in about 23 days", when a drive is filling up. */
+  function driveForecast(d) {
+    if (!d.fullInDays) return "";
+    const days = d.fullInDays === 1 ? "1 day" : `${d.fullInDays} days`;
+    return `<p class="gauge-soon"><span class="led red"></span>At this rate ${esc(d.root.replace(/\\$/, ""))} is full in about ${days}.</p>`;
+  }
+
   function renderDrives() {
     const h = state.health;
     if (!h) return section("pc", "Your PC", "", `<p class="empty">Checking…</p>`);
@@ -1460,6 +1467,7 @@ in ${x.cwd}`)}">
           <div class="gauge-head"><span class="gauge-name">${esc(d.root.replace(/\\$/, ""))} <span class="dim">${esc(d.label)}</span></span>
             <span class="num"><strong>${bytes(d.free)}</strong> free of ${bytes(d.total)}</span></div>
           ${meter(d.total ? used / d.total : 0, { warn })}
+          ${driveForecast(d)}
         </div>`;
       })
       .join("");

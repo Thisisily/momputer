@@ -1334,6 +1334,9 @@ fn print_health(st: &Style, h: &mom_core::health::Health) {
         let bar = if pct >= 90 { st.red(&bar) } else { bar };
         let name = format!("{}{}", d.label, if d.system { " (Windows)" } else { "" });
         println!("  {}{}{}  {}", pad(&d.root, 5), pad(&name, 26), bar, st.dim(&format!("{} free of {}", human_bytes(d.free), human_bytes(d.total))));
+        if let Some(days) = d.full_in_days {
+            println!("       {}", st.yellow(&mom_core::space::full_in_words(&d.root, days)));
+        }
     }
     println!(
         "\n{}  {}",
