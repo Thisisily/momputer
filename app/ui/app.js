@@ -44,6 +44,7 @@
     browsersLoading: false,
     browserOpen: null, // "browser|profile" open to its extensions
     extOff: new Set(), // profiles whose switched-off extensions are shown
+    oldApps: new Set(), // profiles whose old Chrome apps are shown
     regFixed: new Map(), // registry fixes done just now: id -> what they were, for Undo
     regConfirm: null,
     regBusy: null,
@@ -907,21 +908,48 @@
 
   function extRow(b, e) {
     const saved = e.lastSaved ? `storage changed ${agoText(e.lastSaved)}` : "storage activity unknown";
-    const meta = [e.can[0] || "Asks for nothing special", e.on ? saved : "switched off", e.added ? `added ${agoText(e.added)}` : ""].filter(Boolean);
-    const led = !e.on ? "off" : e.everywhere ? "red" : e.lastSaved ? "green" : "off";
+    const added = e.added ? `added ${agoText(e.added)}` : "";
+    const meta = e.app ? [e.site ? `Opens ${e.site}` : "Chrome app", `${b.name} no longer runs it`, added]
+      : e.theme ? ["Theme", added]
+      : [e.can[0] || "Asks for nothing special", e.on ? saved : "switched off", added];
+    const led = e.app || e.theme || !e.on ? "off" : e.everywhere ? "red" : e.lastSaved ? "green" : "off";
+    const hint = e.app ? `Paste it into ${b.name}'s address bar, then right-click ${e.name} and remove it.`
+      : e.theme ? `Paste it into ${b.name}'s address bar, then press Reset to default.`
+      : `Paste it into ${b.name}'s address bar: its page has Remove and an on/off switch.`;
     return `<div class="row ext${e.on ? "" : " is-off"}" id="ex-${hash(b.id + e.id)}" data-led="${led}" title="${esc(e.description || e.name)}">
-      <span class="row-name">${rowIcon(e.icon)}${esc(e.name)}${e.kind ? ` <span class="badge">${esc(e.kind)}</span>` : ""}${e.app ? ` <span class="badge look">Chrome app</span>` : ""}</span>
-      <div class="row-meta"><span class="why">${esc(meta.join(" · "))}</span></div>
+      <span class="row-name">${rowIcon(e.icon)}${esc(e.name)}${e.kind && !e.app && !e.theme ? ` <span class="badge">${esc(e.kind)}</span>` : ""}</span>
+      <div class="row-meta"><span class="why">${esc(meta.filter(Boolean).join(" · "))}</span></div>
       <div class="row-nums num">${e.size ? bytes(e.size) : ""}</div>
       <div class="row-nums2"></div>
-      <div class="row-act"><button class="mini-btn wide" data-act="copy-fix" data-text="${esc(e.page)}" data-hint="${esc(`Paste it into ${b.name}'s address bar: its page has Remove and an on/off switch.`)}" title="Copy its page in ${esc(b.name)}">${ICON.copy}Link</button></div>
+      <div class="row-act"><button class="mini-btn wide" data-act="copy-fix" data-text="${esc(e.page)}" data-hint="${esc(hint)}" title="Copy its page in ${esc(b.name)}">${ICON.copy}Link</button></div>
     </div>`;
+  }
+
+  // Old Chrome apps and themes aren't extensions, and the browser's extensions page doesn't list them.
+  const isExtension = (e) => !e.app && !e.theme;
+
+  /** Instructions an agent can follow to remove a profile's old Chrome apps and themes in the browser. */
+  function oldAppsPrompt(b, p, list) {
+    const scheme = b.extensionsPage.split("://")[0];
+    return [
+      `Please help me remove old Chrome apps from my ${b.name} profile "${p.name}" (folder "${p.dir}").`,
+      `${b.name} stopped running Chrome apps, and its extensions page doesn't list them, but they're still installed:`,
+      ...list.map((e) => `- ${e.name}${e.theme ? " (a theme)" : e.site ? ` (opens ${e.site})` : ""}, id ${e.id}`),
+      "",
+      "1. Look each one up and tell me in a line what it was, so I can keep any I still want.",
+      `2. Open ${b.name} in that profile and go to ${scheme}://apps. Right-click each app and remove it. If one isn't there, open ${scheme}://extensions/?id=<its id> and press Remove.`,
+      `3. For a theme, go to ${scheme}://settings/appearance and press Reset to default.`,
+      "4. Remove only these. Leave every other extension alone, wallets above all.",
+      "5. Don't delete files in the profile folder or edit its Preferences by hand: the browser checks those and may reset your settings.",
+      "If you can't open browser pages yourself, walk me through it one step at a time. Then tell me what was removed.",
+    ].join("\n");
   }
 
   function profileDetail(b, p) {
     const key = `${b.id}|${p.dir}`;
-    const on = p.extensions.filter((e) => e.on);
-    const off = p.extensions.filter((e) => !e.on);
+    const old = p.extensions.filter((e) => !isExtension(e));
+    const on = p.extensions.filter((e) => isExtension(e) && e.on);
+    const off = p.extensions.filter((e) => isExtension(e) && !e.on);
     const cookies = p.cookiesBytes != null ? `${bytes(p.cookiesBytes)} · file size only` : "File size unavailable";
     const stats = [
       ["Everything", bytes(p.size)],
@@ -938,8 +966,14 @@
     const offRows = state.extOff.has(key) ? off.map((e) => extRow(b, e)).join("") : "";
     return `<div class="pc">${stats}</div>
       ${notes ? `<div class="notes">${notes}</div>` : ""}
-      ${p.extensions.length ? `<h4 class="sub-head">Extensions <span class="dim num">${on.length} on${off.length ? `, ${off.length} off` : ""}</span></h4><div class="ext-list">${exts}${offRows}</div>` : ""}
+      ${on.length + off.length ? `<h4 class="sub-head">Extensions <span class="dim num">${on.length} on${off.length ? `, ${off.length} off` : ""}</span></h4><div class="ext-list">${exts}${offRows}</div>` : ""}
       ${off.length ? `<button class="quiet-toggle" data-act="ext-off" data-key="${esc(key)}">${state.extOff.has(key) ? "Hide the ones switched off" : `Show the ${off.length} switched off`}</button>` : ""}
+      ${old.length ? `<h4 class="sub-head">Old Chrome apps <span class="dim num">${old.length} · ${bytes(old.reduce((a, e) => a + (e.size || 0), 0))}</span></h4>
+        <p class="dim">${esc(`${b.name} stopped running these and doesn't list them with your extensions. They can go.`)}</p>
+        <div class="detail-actions"><button class="secondary" data-act="copy-fix" data-text="${esc(`${b.extensionsPage.split("://")[0]}://apps`)}" data-hint="${esc(`Paste it into ${b.name}'s address bar, then right-click an app and remove it.`)}">${ICON.copy}Apps page</button>
+        <button class="secondary" data-act="copy-say" data-text="${esc(oldAppsPrompt(b, p, old))}">${ICON.copy}Copy for your agent</button></div>
+        ${state.oldApps.has(key) ? `<div class="ext-list">${old.map((e) => extRow(b, e)).join("")}</div>` : ""}
+        <button class="quiet-toggle" data-act="old-apps" data-key="${esc(key)}">${state.oldApps.has(key) ? "Hide them" : `Show the ${old.length}`}</button>` : ""}
       <div class="detail-actions"><button class="link-btn" data-act="reveal-path" data-path="${esc(p.path)}">${ICON.folder}Show folder</button></div>`;
   }
 
@@ -947,8 +981,9 @@
     const key = `${b.id}|${p.dir}`;
     const id = `pr-${hash(key)}`;
     const open = state.browserOpen === key;
-    const on = p.extensions.filter((e) => e.on).length;
-    const meta = [p.lastUsed ? `browser recorded activity ${agoText(p.lastUsed)}` : "profile activity unknown", p.extensions.length ? `${on} of ${plural(p.extensions.length, "extension")} on` : "no extensions"].filter(Boolean);
+    const real = p.extensions.filter(isExtension);
+    const on = real.filter((e) => e.on).length;
+    const meta = [p.lastUsed ? `browser recorded activity ${agoText(p.lastUsed)}` : "profile activity unknown", real.length ? `${on} of ${plural(real.length, "extension")} on` : "no extensions"].filter(Boolean);
     const idle = p.lastUsed && Date.now() / 1000 - p.lastUsed > 180 * 86400;
     return `<div class="row prof${open ? " is-open" : ""}" id="${id}" data-led="${p.notes.length ? "red" : !p.lastUsed || idle ? "off" : "green"}">
       <button type="button" class="profile-toggle" data-act="profile-open" data-key="${esc(key)}" aria-expanded="${open}" aria-controls="${id}-details" aria-labelledby="${id}-name" aria-describedby="${id}-meta ${id}-size ${id}-cache">
@@ -968,7 +1003,7 @@
     if (!list) return `<div class="lead"><div class="lead-text"><p>Looking at your browsers, their profiles and every extension…</p></div>${again}</div>`;
     if (!list.length) return `<div class="lead"><div class="lead-text"><p>No Chrome, Edge, Brave or Vivaldi here.</p></div>${again}</div>`;
     const profiles = list.reduce((a, b) => a + b.profiles.length, 0);
-    const exts = list.reduce((a, b) => a + b.profiles.reduce((x, p) => x + p.extensions.filter((e) => e.on).length, 0), 0);
+    const exts = list.reduce((a, b) => a + b.profiles.reduce((x, p) => x + p.extensions.filter((e) => isExtension(e) && e.on).length, 0), 0);
     let html = `<div class="lead"><div class="lead-text"><div class="big"><span class="dot free-num">${exts}</span></div><p>${exts === 1 ? "extension is" : "extensions are"} on.<small>Across ${plural(profiles, "profile")} in ${plural(list.length, "browser")}. Open a profile to see what each one does.</small></p></div>${again}</div>`;
     for (const b of list) {
       const state_ = b.open ? `open for ${ageLong(b.openSecs)} · ${plural(b.processes, "process", "processes")} · ${bytes(b.mem)}` : "closed";
@@ -3821,6 +3856,11 @@ in ${x.cwd}`)}">
       case "ext-off":
         if (state.extOff.has(el.dataset.key)) state.extOff.delete(el.dataset.key);
         else state.extOff.add(el.dataset.key);
+        render();
+        break;
+      case "old-apps":
+        if (state.oldApps.has(el.dataset.key)) state.oldApps.delete(el.dataset.key);
+        else state.oldApps.add(el.dataset.key);
         render();
         break;
       case "browsers-again":

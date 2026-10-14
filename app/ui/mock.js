@@ -509,9 +509,9 @@
   ];
   // Browsers: profiles and their extensions (made-up profile names).
   const ext = (name, kind, on, can, saved, extra = {}) => ({
-    id: name.toLowerCase().replace(/[^a-z]/g, "").padEnd(32, "a").slice(0, 32), name, description: extra.description || "", version: "1.0", on, app: !!extra.app, kind,
+    id: name.toLowerCase().replace(/[^a-z]/g, "").padEnd(32, "a").slice(0, 32), name, description: extra.description || "", version: "1.0", on, app: !!extra.app, theme: !!extra.theme, site: extra.site || null, kind,
     can, everywhere: can[0] === "Reads and changes every site you visit", added: now - (extra.addedDays || 400) * 86400, lastSaved: saved == null ? null : now - saved * 86400,
-    size: (extra.mb || 4) * MB, page: "chrome://extensions/?id=x",
+    size: (extra.mb || 4) * MB, page: extra.app ? "chrome://apps" : "chrome://extensions/?id=x",
   });
   const everywhere = "Reads and changes every site you visit";
   const browsers = [
@@ -520,7 +520,7 @@
       profiles: [
         { dir: "Default", path: "C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\User Data\\Default", name: "Personal", lastUsed: now - 3000, size: 13.4 * GB, cache: 1.9 * GB, history: 123 * MB, cookiesBytes: 2.1 * MB, cookies: null, cookieSites: null,
           notes: [
-            { level: "tip", text: "15 Chrome apps AudioSauna, Beatlab, Coggle, Desmos and 11 more: Chrome stopped running Chrome apps on Windows, so they just sit there." },
+            { level: "tip", text: "2 old Chrome apps are still installed: Desmos Graphing Calculator, Sketchpad. Chrome stopped running Chrome apps, so they can go." },
             { level: "tip", text: "2 ad blockers do the same job twice: AdBlock, AdBlocker Ultimate. One is enough, and each slows every page." },
             { level: "tip", text: "18 extensions can read and change every site you visit, your bank's included. Keep the ones you trust and use." },
           ],
@@ -530,7 +530,7 @@
             ext("Grammarly", "AI assistant", true, [everywhere, "Sees your open tabs and their addresses"], 0, { mb: 31 }),
             ext("Phantom", "Crypto wallet", true, [everywhere], 0, { mb: 48 }),
             ext("VPN for Chrome", "VPN", true, ["Sends your browsing through its own servers", everywhere], 0, { mb: 6 }),
-            ext("Desmos Graphing Calculator", null, true, [], null, { app: true, mb: 1 }),
+            ext("Desmos Graphing Calculator", null, true, [], null, { app: true, mb: 1, site: "desmos.com" }),
             ext("Sketchpad", null, true, [], null, { app: true, mb: 2 }),
             ext("Nami", "Crypto wallet", true, [everywhere], 321, { mb: 12 }),
             ext("Toby: Tab Manager", "Tab manager", false, ["Sees your open tabs and their addresses"], null, { mb: 3 }),
