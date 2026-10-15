@@ -225,22 +225,28 @@ pub(crate) fn repair_checks(drives: &[Repairs]) -> Vec<Check> {
         if n < 3 && d.found < 3 {
             continue;
         }
+        // Most of these say Windows found damage (and wants a repair), not that it repaired it.
         let title = if n >= d.found {
-            format!("{}: has needed disk repairs {n} times in 3 months", d.letter)
+            format!("Windows found damage on {}: {n} times in 3 months", d.letter)
         } else {
-            format!("{}: has needed disk repairs {} times", d.letter, d.found)
+            format!("Windows has repaired {}: {} times", d.letter, d.found)
         };
         let label = if d.label.is_empty() { String::new() } else { format!(" (\"{}\")", d.label.replace(['"', '`'], "'")) };
+        let found = match d.found {
+            0 => String::new(),
+            1 => " One found.000 folder of recovered pieces sits at its top.".to_string(),
+            many => format!(" {many} found.NNN folders of recovered pieces sit at its top."),
+        };
         let prompt = format!(
-            "My drive {}:{label} keeps needing disk repairs: Windows logged {n} repairs in the last three months, and {} found.NNN folders of recovered pieces sit at its top. Help me, one step at a time: first copy what matters on it to another drive, then check its health (its SMART data, for example with CrystalDiskInfo), and tell me whether to replace it. Nothing may write to {}: until the copy is done.\n",
-            d.letter, d.found, d.letter
+            "Windows found file system damage on my drive {}:{label} {n} times in the last three months.{found} Help me, one step at a time: first make it read-only and copy what matters on it to another drive, then check its health (its SMART data, for example with CrystalDiskInfo) and whether it keeps losing power or its connection (a loose or weak USB port, the cable, unplugging without ejecting), and tell me whether to replace it. Nothing may write to {}: until the copy is done.\n",
+            d.letter, d.letter
         );
         let mut c = check(
             &format!("drive-repairs-{}", d.letter.to_ascii_lowercase()),
             "Backups",
             "warn",
             title,
-            "That's usually a drive wearing out. Copy what matters somewhere else.".into(),
+            "Usually from losing power or its connection while saving, sometimes a drive wearing out. Copy what matters somewhere else first.".into(),
             Some(Fix { label: format!("Show {}:", d.letter), kind: "reveal", value: format!("{}:\\", d.letter), hint: None }),
         );
         c.more.push(Fix { label: "Copy for your agent".into(), kind: "copy", value: prompt, hint: Some("Paste it to your agent.".into()) });
@@ -294,11 +300,15 @@ mod tests {
     fn a_drive_that_keeps_needing_repairs_says_so() {
         let worn = Repairs { letter: 'F', label: "Nimbus \"Backup\"".into(), times: vec![1, 2, 3, 4], found: 0 };
         let c = repair_checks(&[worn]);
-        assert_eq!((c[0].level, c[0].title.as_str()), ("warn", "F: has needed disk repairs 4 times in 3 months"));
+        assert_eq!((c[0].level, c[0].title.as_str()), ("warn", "Windows found damage on F: 4 times in 3 months"));
         assert_eq!((c[0].fix.as_ref().unwrap().kind, c[0].fix.as_ref().unwrap().value.as_str()), ("reveal", "F:\\"));
-        assert!(c[0].more[0].value.contains("My drive F: (\"Nimbus 'Backup'\") keeps needing disk repairs"));
+        let prompt = &c[0].more[0].value;
+        assert!(prompt.contains("damage on my drive F: (\"Nimbus 'Backup'\") 4 times"), "{prompt}");
+        assert!(!prompt.contains("found."), "no recovered pieces, so they aren't mentioned: {prompt}");
         let found = Repairs { letter: 'D', label: String::new(), times: vec![], found: 40 };
-        assert_eq!(repair_checks(&[found])[0].title, "D: has needed disk repairs 40 times");
+        let c = repair_checks(&[found]);
+        assert_eq!(c[0].title, "Windows has repaired D: 40 times");
+        assert!(c[0].more[0].value.contains("40 found.NNN folders"));
         assert!(repair_checks(&[Repairs { letter: 'C', label: String::new(), times: vec![1], found: 1 }]).is_empty());
         let dir = std::env::temp_dir().join(format!("mom-found-{}", std::process::id()));
         for n in ["found.000", "found.001", "FOUND.017", "found.things", "found.0001"] {
