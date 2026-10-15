@@ -317,12 +317,26 @@ fn tracked_in(git: &Path, repo: &Path, budget: &std::sync::atomic::AtomicU64) ->
             continue;
         }
         let Some(text) = read_small(&path, MAX_FILE) else { continue };
-        let kinds = keys_in(&text);
+        let mut kinds = keys_in(&text);
+        if test_data(&rel) {
+            kinds.retain(|k| *k != "Private key");
+        }
         if !kinds.is_empty() {
             out.push(Tracked { repo: repo.to_path_buf(), file: rel, kinds });
         }
     }
     out
+}
+
+/// In a folder of tests or fixtures: a private key there is a test's own, made for it and often
+/// public (Godot keeps tests/data/crypto/in.key), not anyone's secret. Keys to services still count.
+fn test_data(rel: &str) -> bool {
+    rel.split(['/', '\\']).rev().skip(1).any(|part| {
+        matches!(
+            part.to_ascii_lowercase().as_str(),
+            "test" | "tests" | "testdata" | "test_data" | "test-data" | "testing" | "fixtures" | "fixture" | "__tests__" | "__fixtures__" | "spec" | "specs"
+        )
+    })
 }
 
 /// A name or path, safe to put in a sentence or a prompt.
@@ -476,6 +490,12 @@ mod tests {
         let c = checks(paths);
         assert_eq!((c.len(), c[0].level), (1, "ok"));
         c[0].title.clone()
+    }
+
+    #[test]
+    fn a_private_key_made_for_a_test_is_not_a_secret() {
+        assert!(test_data("tests/data/crypto/in.key") && test_data(r"src\__fixtures__\server.pem") && test_data("spec/keys/id_rsa"));
+        assert!(!test_data("config/server.key") && !test_data("tests.key") && !test_data("backend/.env"));
     }
 
     #[test]
