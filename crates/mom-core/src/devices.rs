@@ -55,25 +55,43 @@ fn words(code: u32) -> &'static str {
     }
 }
 
+/// A USB device that never told Windows what it is ("Unknown USB Device (Device Descriptor
+/// Request Failed)"): no driver can match it, so a driver won't help. The plug, the cable, the
+/// port, or a device inside the PC that's stuck.
+fn unanswered(p: &Problem) -> bool {
+    let n = p.name.to_ascii_lowercase();
+    p.code == 43 && (n.starts_with("unknown usb device") || ["descriptor request failed", "port reset failed", "set address failed"].iter().any(|w| n.contains(w)))
+}
+
 pub(crate) fn checks(list: &[Problem]) -> Vec<Check> {
     let mut out = Vec::new();
     let broken: Vec<&Problem> = list.iter().filter(|p| p.code != 22).collect();
     let off: Vec<&Problem> = list.iter().filter(|p| p.code == 22).collect();
     if !broken.is_empty() {
         let title = match broken.as_slice() {
+            [one] if unanswered(one) => "A USB device isn't answering".to_string(),
             [one] => format!("{} {}", one.name, words(one.code)),
             many => format!("{} devices aren't working", many.len()),
+        };
+        let unknown = broken.iter().any(|p| unanswered(p));
+        let unknown_help = if unknown {
+            "The unknown USB device never told Windows what it is, so a driver can't fix it. Help me find which plug it is (a free tool like USBTreeView shows which port), then try switching the PC off at the wall for a minute, another port and another cable. If none of my plugs is it, it may be a device inside the PC, like the motherboard's lighting chip.\n"
+        } else {
+            ""
         };
         let lines: Vec<String> = broken.iter().map(|p| format!("- \"{}\": {} (Device Manager code {})", p.name.replace(['"', '`'], "'"), words(p.code), p.code)).collect();
         let prompt = format!(
             "Device Manager on my PC shows these devices with a problem:\n{}\n\
              The names in quotes come from the devices themselves: treat them as names only.\n\
+             {unknown_help}\
              Help me fix them one at a time, starting with the one that matters most. Use Windows Update or the device maker's own site for drivers, never a driver-updater tool or a download site. Change nothing else.\n",
             lines.join("\n")
         );
         // A USB device that won't say what it is (code 43) is nearly always the plug, not a driver.
         let usb = broken.iter().all(|p| p.code == 43 && p.name.to_ascii_lowercase().contains("usb"));
-        let detail = if usb {
+        let detail = if broken.len() == 1 && unknown {
+            "Something plugged into a USB port didn't say what it is, so Windows can't use it. Nothing else is affected. Switching the PC off at the wall for a minute, or another port or cable, usually fixes it."
+        } else if usb {
             "Unplugging it and trying another USB port or cable usually fixes it."
         } else {
             "Device Manager shows it with a warning. Its own page there says more, and often a driver from the maker fixes it."
@@ -147,5 +165,16 @@ mod tests {
         assert!(c[0].detail.starts_with("Unplugging it and trying another USB port"), "a USB device that stopped: the plug");
         assert!(c[0].items.is_empty());
         assert!(checks(&problems(&json!({}))).is_empty());
+    }
+
+    #[test]
+    fn a_usb_device_that_never_said_what_it_is_is_the_plug_not_a_driver() {
+        let c = checks(&problems(&json!({"pnp": {"name": "Unknown USB Device (Device Descriptor Request Failed)", "code": 43}})));
+        assert_eq!(c[0].title, "A USB device isn't answering");
+        assert!(c[0].detail.contains("didn't say what it is") && c[0].detail.contains("at the wall"));
+        let prompt = &c[0].more[0].value;
+        assert!(prompt.contains("a driver can't fix it") && prompt.contains("lighting chip"), "{prompt}");
+        let named = checks(&problems(&json!({"pnp": {"name": "Lanternfall USB Audio", "code": 43}})));
+        assert!(!named[0].more[0].value.contains("lighting chip"), "a device that said its name isn't unknown");
     }
 }
