@@ -77,6 +77,9 @@ pub struct Spot {
     pub exact: bool,
     pub available: bool,
     pub measured_at: u64,
+    /// How long measuring it took, in milliseconds: the slow ones are started first next time.
+    #[serde(default)]
+    pub took_ms: u64,
     /// A blocker or a tip ("Close Edge to clear its cache.").
     pub note: Option<String>,
     /// Biggest first: up to 300 that go, then up to 150 that stay (what you said to keep comes
@@ -1199,8 +1202,9 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
     let keep = &ctx.cfg.keep[..ctx.cfg.keep.len().min(MAX_KEPT)];
     let mut found = find_raw(id, ctx);
     if id != "docker" && id != "recycle-bin" {
+        let mut looked = crate::browser_data::Looked::default();
         for c in &mut found.cands {
-            if c.browser_data || c.targets.iter().any(|p| crate::browser_data::protects_path(p)) {
+            if c.browser_data || c.targets.iter().any(|p| crate::browser_data::protects_path_with(p, &mut looked)) {
                 c.browser_data = true;
                 c.goes = false;
                 c.optional = false;
@@ -1710,12 +1714,51 @@ pub(crate) fn claude_session_title(transcript: &Path) -> Option<String> {
 
 pub fn measure(id: &str, ctx: &TrashCtx) -> Option<Spot> {
     let def = def(id)?;
+    let began = std::time::Instant::now();
     let f = find(id, ctx);
-    Some(spot_from(def, f, ctx))
+    let mut spot = spot_from(def, f, ctx);
+    spot.took_ms = began.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+    Some(spot)
 }
 
-pub fn measure_all(ctx: &TrashCtx) -> Vec<Spot> {
-    DEFS.iter().filter_map(|d| measure(d.id, ctx)).collect()
+/// Spots measured at the same time. Each walks its folders on threads of its own that mostly wait
+/// on the disk, so a few side by side take about as long as the slowest, not all of them added up.
+const SPOTS_AT_ONCE: usize = 4;
+
+/// Measures each of `ids`, SPOTS_AT_ONCE at a time, in the order given (put the slow ones first).
+/// `ctx` makes the context one worker measures with, `scale` says how many times the usual number
+/// of items a spot lists, and `done` hears of each spot as it's measured.
+pub fn measure_each<'a>(ids: &[String], ctx: impl Fn() -> TrashCtx<'a> + Sync, scale: impl Fn(&str) -> usize + Sync, done: impl Fn(Spot) + Sync) {
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..SPOTS_AT_ONCE.min(ids.len()) {
+            scope.spawn(|| {
+                let mut ctx = ctx();
+                while let Some(id) = ids.get(next.fetch_add(1, std::sync::atomic::Ordering::SeqCst)) {
+                    ctx.list_scale = scale(id);
+                    if let Some(spot) = measure(id, &ctx) {
+                        done(spot);
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// `ids` with the spots that took longest last time (in `before`) first.
+pub fn slow_first(mut ids: Vec<String>, before: &[Spot]) -> Vec<String> {
+    let took = |id: &String| before.iter().find(|s| s.id == *id).map_or(0, |s| s.took_ms);
+    ids.sort_by_key(|id| std::cmp::Reverse(took(id)));
+    ids
+}
+
+pub fn measure_all<'a>(ctx: impl Fn() -> TrashCtx<'a> + Sync) -> Vec<Spot> {
+    let ids: Vec<String> = spot_ids().into_iter().map(String::from).collect();
+    let found = std::sync::Mutex::new(Vec::new());
+    measure_each(&ids, ctx, |_| 1, |spot| found.lock().unwrap_or_else(|e| e.into_inner()).push(spot));
+    let mut spots = found.into_inner().unwrap_or_else(|e| e.into_inner());
+    spots.sort_by_key(|s| DEFS.iter().position(|d| d.id == s.id));
+    spots
 }
 
 /// How many items a spot lists of each kind (the rest are summed up): enough for the widget to
@@ -1770,6 +1813,7 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
         exact,
         available: f.available,
         measured_at: ctx.now,
+        took_ms: 0,
         note: f.note,
         items,
     }

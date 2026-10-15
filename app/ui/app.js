@@ -551,13 +551,20 @@
     ["browsers", "Browsers"],
   ];
 
+  /** A view's own tabs, with an arrow at each edge that has more tabs past it. */
+  function strip(label, tabs) {
+    const arrow = (dir) =>
+      `<button class="strip-more ${dir < 0 ? "left" : "right"}" data-act="strip-more" data-dir="${dir}" tabindex="-1" aria-label="${dir < 0 ? "Earlier" : "More"} tabs">${ICON.chevron}</button>`;
+    return `<div class="strip"><div class="subtabs" role="tablist" aria-label="${label}">${tabs}</div>${arrow(-1)}${arrow(1)}</div>`;
+  }
+
   function runningTabs() {
     const warns = state.speed ? state.speed.findings.filter((f) => f.level === "warn").length : 0;
     const flagged = state.homework ? state.homework.filter((r) => r.flags.length).length : 0;
     const dot = (k) => (k === "speed" && warns ? `<span class="count num">${warns}</span>` : k === "homework" && flagged ? `<span class="count num">${flagged}</span>` : "");
-    return `<div class="subtabs" role="tablist" aria-label="Running">${RUNNING_TABS.map(
+    return strip("Running", RUNNING_TABS.map(
       ([k, label]) => `<button class="subtab" role="tab" data-act="running-tab" data-tab="${k}" aria-selected="${state.runningTab === k}">${label}${dot(k)}</button>`
-    ).join("")}</div>`;
+    ).join(""));
   }
 
   function renderRunning() {
@@ -1859,9 +1866,9 @@ in ${x.cwd}`)}">
     const w = state.winsettings;
     const serious = w ? w.filter((f) => f.level === "fix").length : 0;
     const dot = (k) => (k === "windows" && serious ? `<span class="count num">${serious}</span>` : "");
-    return `<div class="subtabs" role="tablist" aria-label="Upkeep">${UPKEEP_TABS.map(
+    return strip("Upkeep", UPKEEP_TABS.map(
       ([k, label]) => `<button class="subtab" role="tab" data-act="upkeep-tab" data-tab="${k}" aria-selected="${state.upkeepTab === k}">${label}${dot(k)}</button>`
-    ).join("")}</div>`;
+    ).join(""));
   }
 
   function renderUpkeep() {
@@ -2038,6 +2045,7 @@ in ${x.cwd}`)}">
     ["processor", "Processor", "Processor", (c) => c.area === "Performance", "Your processor", false, ["Power settings", "ms-settings:powersleep"]],
     ["memory", "Memory", "Memory", (c) => c.id.startsWith("memory"), "Your memory", false, null],
     ["graphics", "Graphics card", "Graphics", (c) => c.id.startsWith("gpu"), "Your graphics card", false, ["Display settings", "ms-settings:display"]],
+    ["monitor", "Monitor", "Screen", (c) => c.id.startsWith("display"), "Your monitor", false, ["Display settings", "ms-settings:display"]],
     ["disks", "Drives", "Disks", (c) => /^(ssd-health|disk-health|windows-on-hdd|trim-off|optimize-off)/.test(c.id), "Your drives", true, ["Storage settings", "ms-settings:storagesense"]],
     ["sound", "Sound", "Sound", (c) => c.area === "Sound", "Your sound", false, ["Sound settings", "ms-settings:sound"]],
     ["keyboard", "Keyboard", "Keyboard", () => false, "Your keyboard", false, ["Typing settings", "ms-settings:typing"]],
@@ -2056,14 +2064,14 @@ in ${x.cwd}`)}">
     // A keyboard's or mouse's maker often leaves a helper running all day (Speed knows): that's its to answer for.
     const helpers = state.speed ? state.speed.findings.filter((f) => f.id.startsWith("extras-")) : [];
     const parts = PARTS.map(([id, label, row, mine, subject, plural, settings]) => {
-      const text = rows.get(row) || "";
+      const text = rows.get(row) || (id === "monitor" && rows.get("Screens")) || "";
       let own = checks.filter(mine);
       if (id === "keyboard" || id === "mouse") {
         const makers = text.split(" · ").map((n) => n.split(" ")[0].toLowerCase()).filter((w) => w.length > 2);
         own = helpers.filter((f) => makers.some((w) => f.title.toLowerCase().includes(w)));
       }
       // Nothing plugged in that mom can see: its light stays off.
-      const level = !sys ? "none" : (id === "keyboard" || id === "mouse") && !text ? "none" : worst(own);
+      const level = !sys ? "none" : (id === "keyboard" || id === "mouse" || id === "monitor") && !text ? "none" : worst(own);
       return { id, label, subject, plural, settings, row: text, checks: own, level };
     });
     const memory = rows.get("Memory") || "";
@@ -2091,20 +2099,41 @@ in ${x.cwd}`)}">
       html = `<h3><span class="led green blink"></span>Looking over your PC…</h3><p class="stage-row">Its parts light up as mom gets to them.</p>`;
     } else if (p) {
       const rows = p.checks.map((c) => checkRow(c, "big")).join("");
+      const screens = p.id === "monitor" ? screensHtml() : "";
       const nothing = p.row ? "Nothing to say about it. That's good news." : `Mom can't see ${p.plural ? "any" : "one"} plugged in.`;
-      const settings = p.settings ? `<div class="stage-acts"><button class="link-btn" data-act="open-uri" data-url="${esc(p.settings[1])}">${esc(p.settings[0])}${ICON.out}</button></div>` : "";
-      html = `<h3>${led(p.level)}${esc(p.label)}</h3>${p.row ? `<p class="stage-row">${esc(p.row)}</p>` : ""}${rows || `<p class="stage-row">${nothing}</p>`}${settings}`;
+      // The monitor's settings each have their own button.
+      const settings = p.settings && !screens ? `<div class="stage-acts"><button class="link-btn" data-act="open-uri" data-url="${esc(p.settings[1])}">${esc(p.settings[0])}${ICON.out}</button></div>` : "";
+      const line = p.row && !screens ? `<p class="stage-row">${esc(p.row)}</p>` : "";
+      html = `<h3>${led(p.level)}${esc(p.label)}</h3>${line}${rows || (screens ? "" : `<p class="stage-row">${nothing}</p>`)}${screens}${settings}`;
     } else {
       const bad = m.parts.filter((x) => x.level === "warn").map((x) => x.label);
       const said = bad.length ? `${bad.join(", ")} ${bad.length === 1 ? "needs" : "need"} a look: the red ${bad.length === 1 ? "light" : "lights"}.` : "Every light is green.";
       html = `<h3>Your PC</h3><p class="stage-row">${esc(said)} Drag to look around, tap a part, or poke mom.</p>`;
     }
     morph($("#stage-info"), html);
+    // The monitor's settings are a long card: it sits over the tower, away from the monitor.
+    $("#stage-info").classList.toggle("tall", !!(p && p.id === "monitor" && state.system && (state.system.screens || []).length));
     if (!stage) return;
     // More sticks or drives than it was drawn with: draw it again.
     const shape = JSON.stringify([m.sticks, m.drives, m.cards]);
     if (shape !== stageShape) openStage();
     else stage.update(m);
+  }
+
+  /** BIG MODE's monitor: each screen and how it's set, with the Settings page that changes each. */
+  function screensHtml() {
+    const list = (state.system && state.system.screens) || [];
+    return list
+      .map(
+        (s) => `<div class="screen-set"><p class="screen-name"><b>${esc(s.title)}</b>${s.sub ? `<span>${esc(s.sub)}</span>` : ""}</p>${s.rows
+          .map(
+            (r) => `<div class="set-row"><span class="set-label">${esc(r.label)}</span><span class="set-val">${r.low ? '<span class="led red"></span>' : ""}${esc(r.value)}</span>${
+              r.open ? `<button class="set-open" data-act="open-uri" data-url="${esc(r.open)}" title="Open the setting" aria-label="Open the ${esc(r.label.toLowerCase())} setting">${ICON.out}</button>` : "<span></span>"
+            }</div>`
+          )
+          .join("")}</div>`
+      )
+      .join("");
   }
 
   /** Picks a part of the PC (again to let go): the desk leans in, and mom says how it is. */
@@ -3395,9 +3424,9 @@ in ${x.cwd}`)}">
   function rulesTabs() {
     const late = state.rules ? (state.rules.skills || []).filter((s) => s.behind).length : 0;
     const dot = (k) => (k === "skills" && late ? `<span class="count num">${late}</span>` : "");
-    return `<div class="subtabs" role="tablist" aria-label="House rules">${RULES_TABS.map(
+    return strip("House rules", RULES_TABS.map(
       ([k, label]) => `<button class="subtab" role="tab" data-act="rules-tab" data-tab="${k}" aria-selected="${state.rulesTab === k}">${label}${dot(k)}</button>`
-    ).join("")}</div>`;
+    ).join(""));
   }
 
   function renderRules() {
@@ -4228,6 +4257,11 @@ in ${x.cwd}`)}">
         state.hwOpen = state.hwOpen === el.dataset.key ? null : el.dataset.key;
         render();
         break;
+      case "strip-more": {
+        const tabs = el.closest(".strip").querySelector(".subtabs");
+        tabs.scrollBy({ left: Number(el.dataset.dir) * Math.max(120, tabs.clientWidth * 0.6) });
+        break;
+      }
       case "running-tab":
         if (state.runningTab === el.dataset.tab) break;
         openRunningTab(el.dataset.tab);
@@ -4937,9 +4971,12 @@ in ${x.cwd}`)}">
     );
   }
 
-  /** A strip of subtabs fades at whichever edge has more, and shows the chosen one. */
+  /** A strip of subtabs that doesn't fit draws its tabs closer together first; if they still
+   * don't fit, it fades at whichever edge has more, with an arrow there, and shows the chosen one. */
   function stripEdges() {
     for (const strip of document.querySelectorAll(".subtabs")) {
+      strip.classList.remove("tight");
+      if (strip.scrollWidth - strip.clientWidth > 2) strip.classList.add("tight");
       const more = strip.scrollWidth - strip.clientWidth > 2;
       const chosen = strip.querySelector('[aria-selected="true"]');
       if (more && chosen) {
@@ -4948,11 +4985,27 @@ in ${x.cwd}`)}">
         if (left < strip.scrollLeft) strip.scrollLeft = left;
         else if (right > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = right - strip.clientWidth;
       }
-      strip.classList.toggle("more-left", more && strip.scrollLeft > 2);
-      strip.classList.toggle("more-right", more && strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 2);
+      const left = more && strip.scrollLeft > 2;
+      const right = more && strip.scrollLeft < strip.scrollWidth - strip.clientWidth - 2;
+      for (const el of [strip, strip.parentElement]) {
+        el.classList.toggle("more-left", left);
+        el.classList.toggle("more-right", right);
+      }
     }
   }
   document.addEventListener("scroll", (e) => e.target.classList && e.target.classList.contains("subtabs") && stripEdges(), { capture: true, passive: true });
+  window.addEventListener("resize", stripEdges);
+  // A mouse wheel turns a strip that doesn't fit sideways.
+  document.addEventListener(
+    "wheel",
+    (e) => {
+      const strip = e.target.closest && e.target.closest(".subtabs");
+      if (!strip || strip.scrollWidth - strip.clientWidth <= 2 || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      strip.scrollLeft += e.deltaY;
+    },
+    { passive: false }
+  );
 
   document.addEventListener("input", (e) => {
     if (e.target.id === "rules-text") state.rulesDraft = e.target.value;

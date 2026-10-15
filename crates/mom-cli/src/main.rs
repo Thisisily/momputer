@@ -704,7 +704,7 @@ fn run(cli: Cli) -> Result<i32> {
                     if !json {
                         eprintln!("{}", st.dim("Measuring… (big folders take a moment)"));
                     }
-                    let spots = trash::measure_all(&ctx);
+                    let spots = trash::measure_all(|| trash::TrashCtx::new(&paths, &cfg, &table));
                     if json {
                         print_json(&spots)?;
                     } else {

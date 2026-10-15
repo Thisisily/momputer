@@ -20,6 +20,8 @@ pub struct System {
     /// What the PC is: ("Memory", "64 GB: 4 × 16 GB at 2666 MT/s"), in order.
     pub pc: Vec<(String, String)>,
     pub checks: Vec<Check>,
+    /// Each screen and its settings, for BIG MODE's monitor.
+    pub screens: Vec<crate::display::Shown>,
     /// Unix seconds.
     pub at: u64,
 }
@@ -186,7 +188,8 @@ fn gather() -> System {
     let (air, boots, wakes, stability) = logs
         .join()
         .unwrap_or_else(|_| (crate::network::read_air(), crate::power::read_boots(), crate::power::read_wakes(), crate::stability::get()));
-    checks.extend(crate::display::checks(&crate::display::screens()));
+    let screens = crate::display::screens();
+    checks.extend(crate::display::checks(&screens));
     checks.extend(crate::devices::checks(&crate::devices::problems(&facts)));
     checks.extend(crate::network::checks(&crate::network::adapters(&facts), air.as_ref()));
     let startup: Vec<String> = crate::health::startup_apps(&paths).into_iter().map(|a| a.name).collect();
@@ -207,13 +210,14 @@ fn gather() -> System {
     let mut pc = describe(&facts, &reg, gpu.as_ref());
     let (keyboards, mice) = input_devices(&facts);
     let before_board = |pc: &Vec<(String, String)>| pc.iter().position(|(k, _)| k == "Board").unwrap_or(pc.len());
-    for (label, list) in [("Sound", crate::sound::summary(&sound).into_iter().collect::<Vec<_>>()), ("Keyboard", keyboards), ("Mouse", mice)] {
+    let screen = crate::display::summary(&screens).into_iter().collect::<Vec<_>>();
+    for (label, list) in [(if screens.len() > 1 { "Screens" } else { "Screen" }, screen), ("Sound", crate::sound::summary(&sound).into_iter().collect::<Vec<_>>()), ("Keyboard", keyboards), ("Mouse", mice)] {
         if !list.is_empty() {
             let at = before_board(&pc);
             pc.insert(at, (label.into(), list.join(" · ")));
         }
     }
-    System { pc, checks, at: now }
+    System { pc, checks, screens: crate::display::shown(&screens, &crate::display::everywhere()), at: now }
 }
 
 // ------------------------------------------------------------------ registry facts

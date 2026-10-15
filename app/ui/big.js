@@ -1,7 +1,8 @@
 /* BIG MODE: the widget grown into a full window, with your PC on a desk beside it. A monitor
    with mom on its screen (the same live mom as the widget, laid onto the glass), and a glass-sided
    tower whose parts you can point at and tap: processor, memory, graphics card, drives, the
-   motherboard, the speakers, the keyboard, the mouse, and the power button for Windows itself.
+   motherboard, the monitor itself, the speakers, the keyboard, the mouse, and the power button
+   for Windows itself.
    Each part carries a little light: green when it's fine, red when something's wrong. The cooler
    on the processor has a dot display: mom's smile when every light is green, otherwise how many
    parts need a look.
@@ -402,9 +403,12 @@ export function open(host, screenEl, model, on = {}) {
     block(4.6, 0.022, 1.4, 0.06, matte(P.mat, 0.95), -1.0, 0, 1.4, scene).castShadow = false;
   }
 
-  // The monitor: mom lives on its screen. A slim panel on a brushed aluminium stand.
+  // The monitor: mom lives on its screen. A slim panel on a brushed aluminium stand, with its
+  // light under the screen where a power light would be. Tapping the frame or the stand picks it;
+  // tapping the screen pokes mom.
   const MX = -1.95;
-  const monitor = group();
+  const monitorPart = part("monitor");
+  const monitor = monitorPart.group;
   {
     const alu = metal(P.alu, 0.38);
     block(1.3, 0.045, 0.82, 0.035, alu, MX, 0, -0.45, monitor);
@@ -418,6 +422,7 @@ export function open(host, screenEl, model, on = {}) {
   const glass = new THREE.Mesh(glassGeo, glow(0xffffff));
   glass.position.set(MX, 0.8 + 1.13, -0.42 + 0.027);
   monitor.add(glass);
+  lamp(monitorPart, MX + 1.46, 0.866, -0.385);
   // The screen's light falls on the keyboard and the desk in front of it.
   {
     const spill = new THREE.PointLight(P.screenGlow, dark ? 1.6 : 0.6, 4.2, 2);

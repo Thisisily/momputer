@@ -155,41 +155,58 @@ pub(super) fn tally_many(paths: &[PathBuf], cap: u64, budget: u64) -> Vec<Tally>
     let cut: Vec<AtomicBool> = paths.iter().map(|_| AtomicBool::new(false)).collect();
     let spent = AtomicU64::new(0);
     // The paths themselves go through the pool too: even looking one up can wait on the antivirus.
-    let start: Vec<(usize, PathBuf)> = paths.iter().cloned().enumerate().rev().collect();
-    let found = in_parallel(start, |mine: &mut HashMap<usize, Tally>, i, dir, more| {
+    // A folder found inside one comes with what its parent's listing said about it, so it isn't
+    // looked up again (on Windows, a listing has each entry's times and kind).
+    let start: Vec<(usize, PathBuf, Option<std::fs::Metadata>)> = paths.iter().cloned().enumerate().rev().map(|(i, p)| (i, p, None)).collect();
+    let found = pooled(start, |mine: &mut HashMap<usize, Tally>, (i, dir, listed): (usize, PathBuf, Option<std::fs::Metadata>), more| {
+        let dir = dir.as_path();
         if cut[i].load(Ordering::Relaxed) {
             return;
         }
         let t = mine.entry(i).or_default();
-        // A root is an entry too. Descendants were reserved while enumerating their parent.
-        if dir == paths[i] && (seen[i].fetch_add(1, Ordering::Relaxed) >= cap || spent.fetch_add(1, Ordering::Relaxed) >= budget) {
-            cut[i].store(true, Ordering::Relaxed);
-            return;
-        }
-        match std::fs::symlink_metadata(dir) {
-            Ok(m) if m.is_symlink() => {
-                t.links += 1;
-                return; // a link: never followed
+        match listed {
+            Some(m) => t.observe(&m),
+            None => {
+                // A root is an entry too. Descendants were reserved while enumerating their parent.
+                if seen[i].fetch_add(1, Ordering::Relaxed) >= cap || spent.fetch_add(1, Ordering::Relaxed) >= budget {
+                    cut[i].store(true, Ordering::Relaxed);
+                    return;
+                }
+                match std::fs::symlink_metadata(dir) {
+                    Ok(m) if m.is_symlink() => {
+                        t.links += 1;
+                        return; // a link: never followed
+                    }
+                    Ok(m) if m.is_file() => return t.add_file(dir, &m),
+                    Ok(m) if m.is_dir() => {
+                        t.contains_browser_data |= crate::browser_data::marks_browser_data(dir, true);
+                        t.observe(&m);
+                        own_mtime[i].store(mtime_secs(&m), Ordering::Relaxed);
+                    }
+                    _ => { t.complete = false; return; }
+                }
             }
-            Ok(m) if m.is_file() && dir == paths[i] => return t.add_file(dir, &m),
-            Ok(m) if m.is_dir() => {
-                t.contains_browser_data |= crate::browser_data::marks_browser_data(dir, true);
-                t.observe(&m);
-                if dir == paths[i] { own_mtime[i].store(mtime_secs(&m), Ordering::Relaxed); }
-            }
-            _ => { t.complete = false; return; }
         }
         let Ok(rd) = std::fs::read_dir(dir) else { t.complete = false; return };
-        for entry in rd {
+        // The folder's entries are counted against the limits all at once: one shared count per
+        // folder, not per entry, which two dozen threads would otherwise fight over.
+        let entries: Vec<_> = rd.collect();
+        let n = entries.len() as u64;
+        let room = cap.saturating_sub(seen[i].fetch_add(n, Ordering::Relaxed));
+        let room = if budget == u64::MAX { room } else { room.min(budget.saturating_sub(spent.fetch_add(n, Ordering::Relaxed))) };
+        if room < n {
+            cut[i].store(true, Ordering::Relaxed);
+        }
+        for entry in entries.into_iter().take(room.min(n) as usize) {
             let Ok(e) = entry else { t.complete = false; continue };
-            if seen[i].fetch_add(1, Ordering::Relaxed) >= cap || spent.fetch_add(1, Ordering::Relaxed) >= budget {
-                cut[i].store(true, Ordering::Relaxed);
-                break;
-            }
             let Ok(ft) = e.file_type() else { t.complete = false; continue };
             t.contains_browser_data |= crate::browser_data::marks_browser_data(&e.path(), ft.is_dir());
             if ft.is_dir() {
-                more.push((i, e.path())); // links and junctions aren't dirs here, so never followed
+                // Links and junctions aren't dirs here, so never followed.
+                match e.metadata() {
+                    Ok(m) => more.push((i, e.path(), Some(m))),
+                    Err(_) => t.complete = false,
+                }
             } else if ft.is_file() {
                 if let Ok(m) = e.metadata() {
                     t.add_file(Path::new(&e.file_name()), &m);
@@ -503,9 +520,17 @@ where
             let mut more = Vec::new();
             work(&mut mine, job, &mut more);
             let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
+            let added = more.len();
             q.0.extend(more);
             q.1 -= 1;
-            wake.notify_all();
+            if q.1 == 0 && q.0.is_empty() {
+                wake.notify_all(); // all done: everyone can go
+            } else {
+                // A thread for each new job, not all of them at once.
+                for _ in 0..added.min(WALKERS) {
+                    wake.notify_one();
+                }
+            }
         }
     };
     std::thread::scope(|s| {

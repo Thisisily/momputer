@@ -114,6 +114,11 @@ pub(crate) mod keys {
 
 // ------------------------------------------------------------------ what mom reads
 
+/// One registry value as it is, for other parts of mom that only read.
+pub(crate) fn read_raw(hive: Hive, key: &str, name: &str) -> Option<Raw> {
+    os::raw(hive, key, name)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum Hive {
     #[serde(rename = "HKCU")]
@@ -154,13 +159,13 @@ impl Raw {
         units.push(0);
         Raw { kind: REG_MULTI_SZ, data: units.into_iter().flat_map(u16::to_le_bytes).collect() }
     }
-    fn as_dword(&self) -> Option<u32> {
+    pub(crate) fn as_dword(&self) -> Option<u32> {
         (self.kind == REG_DWORD && self.data.len() >= 4).then(|| u32::from_le_bytes([self.data[0], self.data[1], self.data[2], self.data[3]]))
     }
     fn units(&self) -> Vec<u16> {
         self.data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect()
     }
-    fn as_string(&self) -> Option<String> {
+    pub(crate) fn as_string(&self) -> Option<String> {
         if self.kind != REG_SZ && self.kind != REG_EXPAND_SZ {
             return None;
         }

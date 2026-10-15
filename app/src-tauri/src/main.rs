@@ -106,6 +106,15 @@ impl Shared {
 
 // ------------------------------------------------------------------ window & tray
 
+/// The widget's size, in logical pixels, on a screen with room for it.
+const WIDGET: (f64, f64) = (500.0, 800.0);
+
+/// The widget's size on this screen: WIDGET, or less on a small screen.
+fn widget_size(monitor: &tauri::Monitor) -> tauri::LogicalSize<f64> {
+    let area = monitor.work_area().size.to_logical::<f64>(monitor.scale_factor());
+    tauri::LogicalSize::new(WIDGET.0.min(area.width - 32.0).max(420.0), WIDGET.1.min(area.height - 32.0).max(440.0))
+}
+
 /// Where a widget of this size sits: by the tray, a little in from the corner.
 fn widget_spot(monitor: &tauri::Monitor, size: tauri::PhysicalSize<u32>) -> tauri::PhysicalPosition<i32> {
     let area = monitor.work_area();
@@ -116,7 +125,9 @@ fn widget_spot(monitor: &tauri::Monitor, size: tauri::PhysicalSize<u32>) -> taur
 }
 
 fn place_window(win: &tauri::WebviewWindow) {
-    if let (Ok(Some(monitor)), Ok(size)) = (win.primary_monitor(), win.outer_size()) {
+    let Ok(Some(monitor)) = win.primary_monitor() else { return };
+    let _ = win.set_size(widget_size(&monitor));
+    if let Ok(size) = win.outer_size() {
         let _ = win.set_position(widget_spot(&monitor, size));
     }
 }
@@ -710,22 +721,31 @@ fn measure_trash_now(app: AppHandle, s: S, only: Option<String>) {
             // Settings as they are now: what to keep may have changed since the last round.
             let cfg = s.cfg();
             let table = s.sampler.lk().sample();
-            let mut ctx = trash::TrashCtx::new(&s.paths, &cfg, &table);
             let ids: Vec<String> = match only.take() {
                 Some(id) => vec![id],
-                None => trash::spot_ids().into_iter().map(String::from).collect(),
+                None => trash::slow_first(trash::spot_ids().into_iter().map(String::from).collect(), &s.trash.lk()),
             };
-            for id in ids {
-                ctx.list_scale = s.trash_scale.lk().get(&id).copied().unwrap_or(1);
-                if let Some(spot) = trash::measure(&id, &ctx) {
-                    let mut list = s.trash.lk();
-                    match list.iter_mut().find(|x| x.id == spot.id) {
-                        Some(x) => *x = spot,
-                        None => list.push(spot),
+            let order = trash::spot_ids();
+            let put = |spot: trash::Spot| {
+                let mut list = s.trash.lk();
+                match list.iter_mut().find(|x| x.id == spot.id) {
+                    Some(x) => *x = spot,
+                    None => {
+                        list.push(spot);
+                        list.sort_by_key(|x| order.iter().position(|id| *id == x.id));
                     }
                 }
-                emit_trash(&app, &s);
-            }
+            };
+            // A few at a time, each shown as soon as it's measured.
+            trash::measure_each(
+                &ids,
+                || trash::TrashCtx::new(&s.paths, &cfg, &table),
+                |id| s.trash_scale.lk().get(id).copied().unwrap_or(1),
+                |spot| {
+                    put(spot);
+                    emit_trash(&app, &s);
+                },
+            );
             let mut next = s.trash_next.lk();
             if next.is_empty() {
                 s.trash_busy.store(false, Ordering::SeqCst);
@@ -1837,13 +1857,12 @@ fn set_big(on: bool, smooth: Option<bool>, bg: Option<String>, app: AppHandle, s
         }
         let _ = win.set_min_size(Some(tauri::LogicalSize::new(960.0, 620.0)));
     } else {
-        let _ = win.set_min_size(Some(tauri::LogicalSize::new(360.0, 440.0)));
+        let _ = win.set_min_size(Some(tauri::LogicalSize::new(420.0, 440.0)));
         if let Some(monitor) = monitor.as_ref().filter(|_| smooth) {
             // Back to her spot by the tray.
-            carried = morph(&app, s.inner(), &win, monitor.scale_factor(), &bg, tauri::LogicalSize::new(420.0, 680.0).to_physical::<u32>(monitor.scale_factor()), |whole| widget_spot(monitor, whole));
+            carried = morph(&app, s.inner(), &win, monitor.scale_factor(), &bg, widget_size(monitor).to_physical::<u32>(monitor.scale_factor()), |whole| widget_spot(monitor, whole));
         }
         if !carried {
-            let _ = win.set_size(tauri::LogicalSize::new(420.0, 680.0));
             place_window(&win);
         }
         let _ = win.set_always_on_top(s.cfg().ui.always_on_top);

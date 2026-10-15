@@ -142,22 +142,57 @@ fn known_profile_boundary(parts: &[String]) -> Option<usize> {
 /// a browser's marks, or can't be checked without following links. Cache folders of the nearest
 /// browser folder, and what's inside them, are allowed.
 pub(crate) fn protects_path(path: &Path) -> bool {
+    protects_path_with(path, &mut Looked::default())
+}
+
+/// What `protects_path` found out about folders, kept while one list is checked: thousands of
+/// items share the folders above them (C:\, C:\Users, … Temp), and each of those is looked at
+/// once instead of once per item.
+#[derive(Default)]
+pub(crate) struct Looked {
+    /// A real folder (true) or file (false) here; None for a link or anything else.
+    kind: std::collections::HashMap<PathBuf, Option<bool>>,
+    browser: std::collections::HashMap<PathBuf, Option<bool>>,
+}
+
+impl Looked {
+    fn kind(&mut self, p: &Path) -> Option<bool> {
+        if let Some(k) = self.kind.get(p) {
+            return *k;
+        }
+        let k = plain_metadata(p).map(|m| m.is_dir());
+        self.kind.insert(p.to_path_buf(), k);
+        k
+    }
+
+    fn browser(&mut self, p: &Path) -> Option<bool> {
+        if let Some(b) = self.browser.get(p) {
+            return *b;
+        }
+        let b = browser_folder(p);
+        self.browser.insert(p.to_path_buf(), b);
+        b
+    }
+}
+
+/// `protects_path`, remembering in `looked` what it found out about folders.
+pub(crate) fn protects_path_with(path: &Path, looked: &mut Looked) -> bool {
     if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)) {
         return true;
     }
     let known_home = known_profile_home(path);
     if known_home.as_ref().is_some_and(|home| !path.strip_prefix(home).is_ok_and(cache_relative)) { return true; }
     // Validate the entire ancestry before allowing a leaf below the nearest browser folder.
-    let Some(ancestors) = path.ancestors().map(|ancestor| plain_metadata(ancestor).map(|meta| (ancestor, meta))).collect::<Option<Vec<_>>>() else { return true };
-    for (ancestor, meta) in &ancestors {
-        if marks_browser_data(ancestor, meta.is_dir()) { return true; }
+    let Some(ancestors) = path.ancestors().map(|ancestor| looked.kind(ancestor).map(|dir| (ancestor, dir))).collect::<Option<Vec<_>>>() else { return true };
+    for (ancestor, dir) in &ancestors {
+        if marks_browser_data(ancestor, *dir) { return true; }
     }
-    for (ancestor, meta) in ancestors {
-        if !meta.is_dir() { continue; }
+    for (ancestor, dir) in ancestors {
+        if !dir { continue; }
         // A known profile was checked above; the folder holding it (with its Local State)
         // must not override the cache leaf already allowed in this nearer profile.
         if known_home.as_deref() == Some(ancestor) { break; }
-        match browser_folder(ancestor) {
+        match looked.browser(ancestor) {
             Some(false) => {},
             Some(true) => {
                 if !path.strip_prefix(ancestor).is_ok_and(cache_relative) { return true; }
