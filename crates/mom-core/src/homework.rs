@@ -5,10 +5,13 @@
 //! sessions mom writes a receipt: the files it changed, what it deleted (and whether that was
 //! outside its project), what it installed and pushed, how many commands it ran, and how its last
 //! test or build went. When its last words say the tests pass and its last test run failed, the
-//! receipt says so.
+//! receipt says so; so does one that switched a feature or tests off in the code, threw away
+//! changes that weren't committed, put files back to an older version, changed a release on
+//! GitHub, skipped the checks before a commit or changed Microsoft Defender's settings.
 //!
 //! Facts only: mom can't prove anything, she puts the facts beside the claim. Commands are read
-//! as text and never run. Every log is read line by line, at most its last 32 MB.
+//! as text and never run. Every log of the week is read, several at a time, line by line, at most
+//! its last 128 MB.
 
 use crate::paths::Paths;
 use crate::util::{ellipsize, norm_path, now_secs};
@@ -22,9 +25,9 @@ use std::time::{Duration, Instant};
 
 /// How far back, and how many sessions.
 pub const DAYS: u64 = 7;
-const MAX_SESSIONS: usize = 60;
+const MAX_SESSIONS: usize = 600;
 /// The most of one log that's read: its latest part.
-const MAX_BYTES: u64 = 32 << 20;
+const MAX_BYTES: u64 = 128 << 20;
 /// Lines longer than this (pictures, huge outputs) are passed over unread.
 const MAX_LINE: usize = 2 << 20;
 /// Paths, installs and pushes kept per receipt. The counts go on.
@@ -32,13 +35,24 @@ const KEEP: usize = 50;
 /// The most of a command's output that's searched for signs of failure: its end.
 const OUTPUT_TAIL: usize = 20_000;
 /// A whole look takes at most this long; what's left waits for the next one.
-const MAX_TIME: Duration = Duration::from_secs(12);
+const MAX_TIME: Duration = Duration::from_secs(45);
 /// Receipts are kept this long before mom reads the logs again.
 const KEEP_FOR: u64 = 60;
 
 pub const FLAG_OUTSIDE: &str = "Deleted something outside its project";
 pub const FLAG_FORCE: &str = "Force-pushed";
 pub const FLAG_CLAIM: &str = "Said tests pass; the last test run failed";
+pub const FLAG_TESTS_OFF: &str = "Turned tests off";
+pub const FLAG_DISCARDED: &str = "Threw away changes that weren't committed";
+pub const FLAG_DEFENDER: &str = "Changed Microsoft Defender's settings";
+pub const FLAG_NO_VERIFY: &str = "Skipped the checks before committing";
+pub const FLAG_ROLLED_BACK: &str = "Put files back to an older version";
+pub const FLAG_RELEASE: &str = "Changed a release on GitHub";
+
+/// A feature turned off in the code: "Switched FILE_CLEANUP_AVAILABLE off".
+pub fn flag_switched_off(name: &str) -> String {
+    format!("Switched {name} off")
+}
 
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -131,23 +145,35 @@ fn look(paths: &Paths, now: u64, old: Seen) -> (Vec<Receipt>, Seen) {
     logs.extend(codex_logs(paths, since));
     logs.sort_by(|a, b| b.2.cmp(&a.2));
     logs.truncate(MAX_SESSIONS);
-    let started = Instant::now();
     let ctx = Places::new(paths);
+    // Logs that changed since the last look are read again, several at a time; what isn't
+    // reached in time waits for the next look.
+    let fresh: Vec<usize> = (0..logs.len()).filter(|&i| !old.get(&logs[i].1).is_some_and(|(l, m, _)| *l == logs[i].3 && *m == logs[i].2)).collect();
+    let fresh_paths: Vec<PathBuf> = fresh.iter().map(|&i| logs[i].1.clone()).collect();
+    let agents: HashMap<&Path, (Agent, u64)> = logs.iter().map(|(a, p, _, len)| (p.as_path(), (*a, *len))).collect();
+    let read = crate::repos::each(&fresh_paths, Instant::now() + MAX_TIME, |p| {
+        let (agent, len) = agents[p];
+        Some(match agent {
+            Agent::Claude => read_claude(p, len, &ctx),
+            Agent::Codex => read_codex(p, len, &ctx),
+        })
+    });
+    let mut read: HashMap<PathBuf, Receipt> = fresh_paths.into_iter().zip(read).filter_map(|(p, r)| Some((p, r?))).collect();
     let mut files = HashMap::new();
     let mut list = Vec::new();
-    for (agent, path, mtime, len) in logs {
+    for (_, path, mtime, len) in logs {
         let receipt = match old.get(&path) {
             Some((l, m, r)) if *l == len && *m == mtime => r.clone(),
-            _ if started.elapsed() > MAX_TIME => continue, // the rest wait for the next look
-            _ => match agent {
-                Agent::Claude => read_claude(&path, len, &ctx),
-                Agent::Codex => read_codex(&path, len, &ctx),
+            _ => match read.remove(&path) {
+                Some(r) => r,
+                None => continue, // the next look reads it
             },
         };
-        if receipt.started == 0 && receipt.ended == 0 && receipt.commands == 0 && receipt.changed_count == 0 {
-            continue; // nothing in it yet
-        }
         files.insert(path, (len, mtime, receipt.clone()));
+        // A session that did nothing (a review that only read, one that only talked) isn't listed.
+        if receipt.commands == 0 && receipt.changed_count == 0 && receipt.deleted_count == 0 {
+            continue;
+        }
         list.push(receipt);
     }
     // Codex threads get the names Codex gave them.
@@ -304,6 +330,8 @@ struct Build {
     /// Its last words, with when they were said.
     last_words: Option<(String, u64)>,
     first_ask: Option<String>,
+    /// The flags its commands and edits earned, besides the ones decided at the end, in order.
+    noticed: Vec<String>,
 }
 
 impl Build {
@@ -365,8 +393,34 @@ impl Build {
             if is_check(&words) {
                 check = Some(plain(&seg.text, 160));
             }
+            if let Some(flag) = risky(&words) {
+                self.notice(flag);
+            }
         }
         check
+    }
+    fn notice(&mut self, flag: impl Into<String>) {
+        let flag = flag.into();
+        if !self.noticed.contains(&flag) {
+            self.noticed.push(flag);
+        }
+    }
+    /// Lines a file gained (from an edit, a new file or a patch): a feature or tests switched off.
+    fn added<'a>(&mut self, path: &str, lines: impl Iterator<Item = &'a str>) {
+        if !is_code(path) {
+            return;
+        }
+        for line in lines.take(20_000) {
+            if line.len() > 400 {
+                continue;
+            }
+            if let Some(name) = switched_off(line) {
+                self.notice(flag_switched_off(&plain(name, 60)));
+            }
+            if tests_off(line) {
+                self.notice(FLAG_TESTS_OFF);
+            }
+        }
     }
     /// A script handed to a shell inside a command (powershell -Command "…"): the same, without
     /// counting another command.
@@ -418,6 +472,13 @@ impl Build {
                 self.r.flags.push(FLAG_CLAIM.into());
             }
         }
+        // The rest by how much each deserves a look: a feature or tests switched off first.
+        let rank = |f: &String| {
+            [FLAG_TESTS_OFF, FLAG_DISCARDED, FLAG_DEFENDER, FLAG_NO_VERIFY, FLAG_ROLLED_BACK, FLAG_RELEASE].iter().position(|x| x == f).map_or(0, |i| i + 1)
+        };
+        let mut noticed = std::mem::take(&mut self.noticed);
+        noticed.sort_by_key(rank);
+        self.r.flags.extend(noticed);
         self.r.last_check = self.check.map(|(c, _)| c);
         self.r
     }
@@ -477,6 +538,12 @@ fn read_claude(path: &Path, len: u64, places: &Places) -> Receipt {
                             "Edit" | "Write" | "MultiEdit" => {
                                 if let Some(p) = input.get("file_path").and_then(Value::as_str) {
                                     b.changed(p);
+                                    let edits = input.get("edits").and_then(Value::as_array).cloned().unwrap_or_else(|| vec![input.clone()]);
+                                    for e in &edits {
+                                        let old = e.get("old_string").and_then(Value::as_str).unwrap_or_default();
+                                        let new = e.get("new_string").or_else(|| e.get("content")).and_then(Value::as_str).unwrap_or_default();
+                                        b.added(p, new.lines().filter(|l| !old.contains(l.trim())));
+                                    }
                                 }
                             }
                             "NotebookEdit" => {
@@ -680,6 +747,13 @@ fn file_change(b: &mut Build, path: &str, change: &Value) {
     } else {
         let moved = change.get("move_path").or_else(|| change.pointer("/update/move_path")).and_then(Value::as_str);
         b.changed(moved.unwrap_or(path));
+        let diff = change.get("unified_diff").or_else(|| change.pointer("/update/unified_diff")).and_then(Value::as_str);
+        let content = change.get("content").or_else(|| change.pointer("/add/content")).and_then(Value::as_str);
+        if let Some(d) = diff {
+            b.added(path, d.lines().filter(|l| l.starts_with('+') && !l.starts_with("+++")).map(|l| &l[1..]));
+        } else if let Some(c) = content.filter(|_| kind == "add") {
+            b.added(path, c.lines());
+        }
     }
 }
 
@@ -918,6 +992,94 @@ fn push(words: &[String]) -> Option<bool> {
     }
     let force = l.iter().skip(i + 1).any(|w| w == "--force" || w == "-f" || w.starts_with("--force-with-lease") || w.starts_with("--force-if-includes") || (w.starts_with('+') && w.len() > 1));
     Some(force)
+}
+
+/// What a command does that deserves a look, if anything: throwing away changes that weren't
+/// committed, putting files back to an older version, skipping the checks before a commit,
+/// changing a release on GitHub, or changing Microsoft Defender's settings.
+fn risky(words: &[String]) -> Option<&'static str> {
+    let l: Vec<String> = words.iter().map(|w| w.to_ascii_lowercase()).collect();
+    match base(&l[0]).as_str() {
+        "git" => {
+            // git -C <dir> -c <setting> <what> …
+            let mut i = 1;
+            while i < l.len() && l[i].starts_with('-') {
+                i += if l[i] == "-c" { 2 } else { 1 };
+            }
+            let rest = l.get(i + 1..).unwrap_or_default();
+            let has = |w: &str| rest.iter().any(|x| x == w);
+            let starts = |w: &str| rest.iter().any(|x| x.starts_with(w));
+            match l.get(i).map(String::as_str).unwrap_or_default() {
+                "reset" if has("--hard") => Some(FLAG_DISCARDED),
+                "checkout" => {
+                    let dashes = rest.iter().position(|w| w == "--");
+                    let before: Vec<&String> = rest[..dashes.unwrap_or(rest.len())].iter().filter(|w| !w.starts_with('-')).collect();
+                    match dashes {
+                        // `git checkout <commit> -- <files>`: those files as they were then.
+                        Some(_) if !before.is_empty() => Some(FLAG_ROLLED_BACK),
+                        // `git checkout -- <files>`: their changes thrown away.
+                        Some(_) => Some(FLAG_DISCARDED),
+                        None if before.first().is_some_and(|w| *w == ".") => Some(FLAG_DISCARDED),
+                        None => None,
+                    }
+                }
+                "restore" if starts("--source") || has("-s") => Some(FLAG_ROLLED_BACK),
+                "restore" if !has("--staged") && !has("-s") && !has("-S") && rest.iter().any(|w| !w.starts_with('-')) => Some(FLAG_DISCARDED),
+                "stash" if matches!(rest.first().map(String::as_str), Some("drop" | "clear")) => Some(FLAG_DISCARDED),
+                "commit" if has("--no-verify") || has("-n") => Some(FLAG_NO_VERIFY),
+                "push" | "merge" | "rebase" if has("--no-verify") => Some(FLAG_NO_VERIFY),
+                _ => None,
+            }
+        }
+        "gh" if l.get(1).map(String::as_str) == Some("release") && matches!(l.get(2).map(String::as_str), Some("create" | "edit" | "delete" | "upload" | "delete-asset")) => {
+            Some(FLAG_RELEASE)
+        }
+        "add-mppreference" | "set-mppreference" | "remove-mppreference" => Some(FLAG_DEFENDER),
+        _ => None,
+    }
+}
+
+/// A file of code, where a switch or a skipped test means something (not a note or a doc).
+fn is_code(path: &str) -> bool {
+    let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+    matches!(
+        ext.as_str(),
+        "rs" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "go" | "java" | "kt" | "cs" | "rb" | "php" | "swift" | "c" | "cc" | "cpp" | "h" | "hpp" | "vue" | "svelte" | "dart" | "scala"
+    )
+}
+
+/// A line that sets a feature's switch to off: `pub const FILE_CLEANUP_AVAILABLE: bool = false;`,
+/// `export const syncEnabled = false`, `UPLOADS_ALLOWED = False`. Its name, if so.
+fn switched_off(line: &str) -> Option<&str> {
+    static OFF: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = OFF.get_or_init(|| {
+        regex::Regex::new(
+            r"^\s*(?:(?:pub(?:\([a-z]+\))?|export|public|private|static|final|readonly)\s+)*(?:(?:const|static|let|var|val)\s+(?:mut\s+)?)?([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*bool(?:ean)?\s*)?=\s*(?:false|False|FALSE)\s*[;,]?\s*(?://.*|#.*)?$",
+        )
+        .expect("a fixed pattern")
+    });
+    let found = re.captures(line)?.get(1)?;
+    let name = found.as_str();
+    let l = name.to_ascii_lowercase();
+    // A constant (not a variable that starts off false), or a CONSTANT_NAME; and the name has to
+    // sound like a switch.
+    let declared = line[..found.start()].split_whitespace().any(|w| matches!(w, "const" | "static" | "final" | "readonly"));
+    let switch = ["available", "enabled", "enable", "allowed", "allow", "supported", "active", "feature"].iter().any(|w| l.contains(w));
+    (switch && (declared || name.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'))).then_some(name)
+}
+
+/// A line that turns a test off: `#[ignore]`, `it.skip(`, `xit(`, `@pytest.mark.skip`, `.only(`
+/// (which skips all the others). Not when it's only written about, in quotes or after `//`.
+fn tests_off(line: &str) -> bool {
+    static SKIP: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = SKIP.get_or_init(|| {
+        regex::Regex::new(r"^\s*#\[ignore\b|\b(?:it|test|describe|context|suite)\.(?:skip|only)\(|^\s*x(?:it|describe|test)\(|@pytest\.mark\.skip|@unittest\.skip|\bt\.Skip\(")
+            .expect("a fixed pattern")
+    });
+    re.find_iter(line).any(|m| {
+        let before = &line[..m.start()];
+        before.matches('"').count().is_multiple_of(2) && before.matches('\'').count().is_multiple_of(2) && !before.contains("//")
+    })
 }
 
 /// A test or build run.
@@ -1181,6 +1343,69 @@ mod tests {
         assert_eq!(segments("a && b || c; d | e\nf 2>&1").iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["a", "b", "c", "d", "e", "f 2>&1"]);
         assert_eq!(segments("echo 'a && b'").len(), 1);
         assert_eq!(shell_script(&words(r#"powershell.exe -NoProfile -Command "Remove-Item x""#)).as_deref(), Some("Remove-Item x"));
+    }
+
+    #[test]
+    fn what_deserves_a_look_is_read_from_commands_and_edits() {
+        let words = |s: &str| unwrap(tokens(s));
+        assert_eq!(risky(&words("git reset --hard origin/main")), Some(FLAG_DISCARDED));
+        assert_eq!(risky(&words("git checkout -- src/app.ts")), Some(FLAG_DISCARDED));
+        assert_eq!(risky(&words("git checkout .")), Some(FLAG_DISCARDED));
+        assert_eq!(risky(&words("git restore src/app.ts")), Some(FLAG_DISCARDED));
+        assert_eq!(risky(&words("git stash drop")), Some(FLAG_DISCARDED));
+        assert_eq!(risky(&words("git restore --source=77c4a78 -- Cargo.toml")), Some(FLAG_ROLLED_BACK));
+        assert_eq!(risky(&words("git checkout 77c4a78 -- src/lib.rs")), Some(FLAG_ROLLED_BACK));
+        assert_eq!(risky(&words("git -C repo commit -n -m wip")), Some(FLAG_NO_VERIFY));
+        assert_eq!(risky(&words("gh release edit v0.3.1 --title held")), Some(FLAG_RELEASE));
+        assert_eq!(risky(&words("Add-MpPreference -ExclusionPath C:\\x")), Some(FLAG_DEFENDER));
+        for fine in ["git checkout main", "git checkout -b feature", "git restore --staged a.ts", "git reset HEAD~1", "git stash", "gh release view v1", "rg -n Add-MpPreference crates", "git commit -m 'no-verify docs'"] {
+            assert_eq!(risky(&words(fine)), None, "{fine}");
+        }
+        assert_eq!(switched_off("pub const FILE_CLEANUP_AVAILABLE: bool = false;"), Some("FILE_CLEANUP_AVAILABLE"));
+        assert_eq!(switched_off("export const syncEnabled = false"), Some("syncEnabled"));
+        assert_eq!(switched_off("UPLOADS_ALLOWED = False  # for now"), Some("UPLOADS_ALLOWED"));
+        assert_eq!(switched_off("static PREVIEW_FEATURE: bool = false;"), Some("PREVIEW_FEATURE"));
+        for fine in ["const FILE_CLEANUP_AVAILABLE: bool = true;", "enabled: false,", "let done = false;", "if !FILE_CLEANUP_AVAILABLE {", "isEnabled = false", "    let mut enabled = false;"] {
+            assert_eq!(switched_off(fine), None, "{fine}");
+        }
+        assert!(tests_off("    #[ignore]") && tests_off("it.skip('works', () => {") && tests_off("describe.only('x', () => {") && tests_off("xit('x')") && tests_off("@pytest.mark.skip(reason='flaky')"));
+        assert!(!tests_off("// it.skips the first") && !tests_off("let ignore = true;"));
+        assert!(!tests_off(r#"assert!(tests_off("it.skip('works')"));"#) && !tests_off("// it.only('x') while debugging"), "only written about");
+        assert!(is_code("src/lib.rs") && !is_code("docs/notes.md"));
+    }
+
+    #[test]
+    fn a_session_that_switched_a_feature_off_and_rolled_files_back_says_so() {
+        let (root, paths) = fixture("switched");
+        let cwd = root.join("work").join("atlas").to_string_lossy().to_string();
+        let id = "0199c2f4-1a2b-7c3d-8e4f-5a6b7c8d9e01";
+        let day = chrono::Local::now().format("%Y/%m/%d").to_string();
+        let log = paths.codex_dir().join("sessions").join(day.replace('/', "\\")).join(format!("rollout-2026-10-14T10-00-00-{id}.jsonl"));
+        let item = |item: Value, s: u32| json!({"timestamp": format!("2026-10-14T10:{s:02}:00Z"), "type": "event_msg", "payload": {"type": "item_completed", "item": item}});
+        write_lines(&log, &[
+            json!({"timestamp": "2026-10-14T10:00:00Z", "type": "session_meta", "payload": {"id": id, "cwd": cwd}}),
+            item(json!({"type": "FileChange", "changes": {
+                format!("{cwd}\\src\\lib.rs"): {"type": "update", "unified_diff": "@@ -1,2 +1,2 @@\n-pub const UPLOADS_AVAILABLE: bool = true;\n+pub const UPLOADS_AVAILABLE: bool = false;\n"},
+                format!("{cwd}\\docs\\notes.md"): {"type": "add", "content": "const NOTES_ENABLED = false\n"},
+            }, "status": "completed"}), 1),
+            item(json!({"type": "CommandExecution", "command": "pwsh.exe -Command \"git restore --source=77c4a78 -- Cargo.toml; gh release edit v1.2.0 --draft\"", "cwd": cwd, "exit_code": 0, "status": "completed"}), 2),
+            // A Claude-style session elsewhere would say the same of an edit that skips a test.
+        ]);
+        let r = &recent(&paths, true)[0];
+        assert_eq!(r.flags, [flag_switched_off("UPLOADS_AVAILABLE"), FLAG_ROLLED_BACK.to_string(), FLAG_RELEASE.to_string()], "a note isn't code");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_session_that_did_nothing_is_not_listed() {
+        let (root, paths) = fixture("quiet");
+        let log = paths.claude_dir().join("projects").join("C--work-nimbus").join("s2.jsonl");
+        write_lines(&log, &[
+            json!({"type": "user", "timestamp": "2026-10-14T10:00:00.000Z", "cwd": "C:\\work\\nimbus", "message": {"role": "user", "content": "Review this diff"}}),
+            json!({"type": "assistant", "timestamp": "2026-10-14T10:01:00.000Z", "cwd": "C:\\work\\nimbus", "message": {"role": "assistant", "content": [{"type": "text", "text": "It looks fine."}]}}),
+        ]);
+        assert!(recent(&paths, true).is_empty());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
