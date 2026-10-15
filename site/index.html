@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>momputer: a mom for you, your computer and your AIs</title>
-  <meta name="description" content="She turns off what AI agents left running, frees up disk space, checks your drives, memory, sound and Windows settings, and tidies your folders. A widget for Windows 10 and 11, free for personal use.">
+  <meta name="description" content="She turns off what AI agents left running, frees disk space, checks drives, memory, sound and Windows settings, and tidies folders. Free on Windows 10 and 11.">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#ececec" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
@@ -29,6 +29,48 @@
     // as wide as the widget really is, if the window is tall enough for it.
     if (matchMedia("(hover: hover) and (pointer: fine)").matches && innerWidth >= 900)
       document.documentElement.style.setProperty("--demo-w", Math.round(Math.max(330, Math.min(420, (innerHeight - 190) * (420 / 760), innerWidth * 0.3))) + "px");
+  </script>
+  <script type="application/ld+json">
+[
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "momputer",
+    "url": "https://thisisily.github.io/momputer/",
+    "description": "A Windows widget that turns off what AI coding agents left running, frees up disk space, checks drives, memory, sound and Windows settings, and tidies folders. She always shows you first.",
+    "operatingSystem": "Windows 10, Windows 11 (64-bit)",
+    "applicationCategory": "UtilitiesApplication",
+    "downloadUrl": "https://github.com/Thisisily/momputer/releases/latest",
+    "image": "https://thisisily.github.io/momputer/og.png",
+    "isAccessibleForFree": true,
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD",
+      "description": "Free for personal use. Work at a company needs a commercial license."
+    },
+    "license": "https://github.com/Thisisily/momputer/blob/main/LICENSE",
+    "author": {
+      "@type": "Person",
+      "name": "Ilya Arbabi",
+      "url": "https://github.com/Thisisily"
+    },
+    "sameAs": [
+      "https://github.com/Thisisily/momputer"
+    ]
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareSourceCode",
+    "name": "momputer",
+    "codeRepository": "https://github.com/Thisisily/momputer",
+    "license": "https://github.com/Thisisily/momputer/blob/main/LICENSE",
+    "author": {
+      "@type": "Person",
+      "name": "Ilya Arbabi"
+    }
+  }
+]
   </script>
   <script defer src="https://stats.getmarsell.com/script.js" data-website-id="421db557-cc52-4e7e-899c-6db579e51209" data-performance="true"></script>
   <script defer src="https://stats.getmarsell.com/recorder.js" data-website-id="421db557-cc52-4e7e-899c-6db579e51209"></script>
@@ -524,6 +566,7 @@
       <li><a href="https://github.com/Thisisily/momputer/releases">Releases</a></li>
       <li><a href="https://github.com/Thisisily/momputer/tree/main/skills">Skills</a></li>
       <li><a href="https://github.com/Thisisily/momputer/blob/main/docs/in-detail.md">Every detail</a></li>
+      <li><a href="https://github.com/Thisisily/momputer/issues">Questions and bugs</a></li>
     </ul>
     <p class="small">Free for personal use under <a href="https://github.com/Thisisily/momputer/blob/main/LICENSE">PolyForm Noncommercial 1.0.0</a>. For work at a company, <a href="https://github.com/Thisisily/momputer/issues/new?template=commercial-license.yml">ask for a commercial license</a>.</p>
     <p class="small">Set in Geist and Doto (SIL Open Font License). Motion by GSAP, mom's desk by three.js.</p>

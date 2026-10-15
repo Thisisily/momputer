@@ -1,0 +1,40 @@
+# momputer
+
+> momputer is a Windows widget that turns off what AI coding agents (Claude Code, Codex and others) left running, frees up disk space, checks drives, memory, sound and Windows settings, and tidies folders. She always shows you first. Free for personal use on Windows 10 and 11.
+
+## Get it
+- [Download for Windows](https://github.com/Thisisily/momputer/releases/latest): the file ending in -setup.exe. Windows 10 and 11, 64-bit.
+- [Install steps](https://thisisily.github.io/momputer/#install): three steps, about a minute. momputer isn't code-signed yet, so Windows may show "Windows protected your PC": More info, then Run anyway.
+
+## What it does
+- Running: everything agents started (dev servers, watchers, headless browsers), which agent started it, and one button to stop what was left behind.
+- Upkeep: what can be deleted, and exactly what it is, before anything goes.
+- Checkup: drives, memory, graphics, sound, updates and Windows settings, with a fix for each problem.
+- Rooms: grades a messy folder and tidies it, with undo.
+- House rules: one set of rules every agent is given, and checked against.
+- A `mom` command for the terminal, and check-in hooks for Claude Code and Codex.
+
+## In detail
+- Running also covers Speed (why the PC feels slow right now, with a fix for each reason), Programs, Startup and Browsers (what is open, what starts with Windows, every browser extension), Agent health (every MCP server, hook and setting the agents have) and Homework (what each agent session changed, deleted, installed and pushed this week).
+- Upkeep covers agents' scratch folders, old build folders, developer and browser caches, old installers, apps and Steam games not opened in a year, duplicate and big unopened files, old driver versions and finished downloads. Old agent conversations are moved to another drive with a link, never deleted. Autopilot, off until switched on, clears the safe things once a week. "What I did" lists everything with Undo where it can be undone.
+- Checkup reads an SSD's own health report, memory running below its rated speed, sound devices an uninstalled app left behind, screens below their refresh rate, slow starts, what wakes the PC at night, a month of crashes, folders nothing backs up, and keys left in shell history or files git keeps (with a button to blank them). Fixes to settings are backed up and can be undone.
+- Rooms spots look-alike folders, screenshot piles, empty folders and misspelled names, and never moves projects, only tidies inside them.
+- House rules are written into Claude Code's, Codex's and Gemini's instructions in a marked block that can be taken out again.
+- BIG MODE turns the widget into a full window with the PC drawn on mom's desk, each part with a light.
+- The `mom` command: `mom leftovers`, `mom stop mine`, `mom trash`, `mom pc`, `mom tidy <folder>`, `mom undo`, `mom homework`; the read-only commands take --json.
+
+## Skills
+- [momputer-skills](https://github.com/Thisisily/momputer/tree/main/skills): eleven skills for Claude Code and Codex, each tidying one room of your digital life. They work without momputer, under the Apache License 2.0, free for any use.
+
+## Promises
+- Shows what goes and what stays before any clean-up; your own files go to the Recycle Bin.
+- Sends nothing about you or your PC. The one request it makes is a daily check with GitHub for a newer version, which a switch in Settings turns off.
+
+## License
+- [PolyForm Noncommercial 1.0.0](https://github.com/Thisisily/momputer/blob/main/LICENSE): free at home, for hobby projects, for students, nonprofits and research. Work at a company needs a commercial license ([ask on GitHub](https://github.com/Thisisily/momputer/issues/new?template=commercial-license.yml)).
+
+## More
+- [Source on GitHub](https://github.com/Thisisily/momputer)
+- [Every detail](https://github.com/Thisisily/momputer/blob/main/docs/in-detail.md)
+- [Questions and bugs](https://github.com/Thisisily/momputer/issues)
+- Made by [Ilya Arbabi](https://github.com/Thisisily).
