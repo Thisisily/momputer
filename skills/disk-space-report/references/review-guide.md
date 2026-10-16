@@ -39,17 +39,28 @@ Sizes are the space a file takes on the disk. Online-only cloud files count as z
 ```json
 {
   "headline": "C: is 96% full. Docker's disk image and 3 games untouched since last year are half of it.",
-  "highlights": [
-    "Docker's disk image is 64 GB; pruning inside it and compacting gives most of that back.",
-    "node_modules in 14 projects add up to 9 GB; six of those projects haven't changed in a year.",
-    "The Recycle Bin holds 12 GB."
+  "insights": [
+    {"title": "D: is a game shelf", "text": "147 of its 150 GB is Steam, and 4 of the 6 games haven't been played this year. Steam can move or uninstall them."},
+    {"title": "E:\\Downloads is a 2023 time capsule", "text": "91 GB that last changed in March 2023, mostly shows. Moving them to F: (413 GB free) gives E: its room back."},
+    {"title": "Claude Code's scratch is a third of your Temp", "text": "15 GB in your Temp folder from the last 2 weeks. The momputer app clears it safely."}
+  ],
+  "drives": {
+    "C": "Your working drive: apps, code and your agents' scratch.",
+    "D": "Games only.",
+    "F": "The archive: old backups and films. Plenty of room."
+  },
+  "places": [
+    {"path": "C:\\Users\\you\\AppData\\Local\\Temp", "note": "Mostly Claude Code's scratch from this week. Safe to clear in the app."},
+    {"path": "F:\\My Backups", "note": "Windows system images from 2020. Kept for a PC you no longer have?"}
   ],
   "focus": "C",
   "drop": ["docker-system-prune", "games"]
 }
 ```
 
-`headline` is what mom says at the top: one kind sentence, under 20 words, with digits for numbers. Each highlight names its drive (`C:`), so the page can put that drive's light beside it. `focus` is the drive letter the "Inside a drive" chart opens on; leave it out to open on the Windows drive, or the one the user last looked at.
+`headline` is what mom says at the top: one kind sentence, under 20 words, with digits for numbers. `insights` are mom's take: say what a scanner can't (what a place is for, who made it, a pattern over time, what's unusual) and what would help. Name drives (`C:`) so the page lights them. `highlights`, a list of plain sentences, still works and shows as insights without a title. `drives` puts one line under each drive's meter. `places` puts a note beside a folder in the "Inside a drive" chart and its list; the path must match the folder exactly (case doesn't matter). `focus` is the drive letter the chart opens on; leave it out to open on the Windows drive, or the one the user last looked at.
+
+Good insights come from the folder dates (`summarize.py --section tree` shows when each folder last changed) and the "last changed" tally (`--section ages`): a drive that stopped changing years ago, a folder that grows every week, a game library nobody opens.
 
 `drop` takes command ids (below) or list ids: `project-leftovers`, `virtual-disks`, `caches-by-hand`, `dev-kits`, `browser-caches`, `app-caches`, `games`, `system-files`, `driver-leftovers`, `old-installers`, `same-size`, `big-videos`, `disk-images`, `model-files`, `old-large`. Rebuilding after any change gives a new plan id, so an old approval can't apply to a changed plan.
 

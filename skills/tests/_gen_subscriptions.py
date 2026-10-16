@@ -80,6 +80,12 @@ def write_statements(out):
         rows.append((d, "DUNMERE STREAMING", "Kartenzahlung", -7.99))
     for d in monthly(date(2025, 12, 1), b1, 19):
         rows.append((d, "DUNMERE STREAMING", "Kartenzahlung", -7.99))
+    for d in monthly(date(2026, 4, 1), b1, 8):  # started this spring: the monthly total creeps up
+        rows.append((d, "NIMBUS NOTES", "Kartenzahlung", -8.99))
+    for d in monthly(date(2025, 2, 1), b1, 26):  # cancelled by mail in June, and still charging
+        rows.append((d, "ATLAS PHOTOS", "Kartenzahlung", -4.99))
+    for d in monthly(date(2025, 3, 1), b1, 14):  # a second, smaller price rise
+        rows.append((d, "STOREFRONT PLUS", "Kartenzahlung", -(5.99 if d < date(2026, 2, 1) else 6.99)))
     rows.append((date(2024, 10, 29), "HALCYON VPN", "Kartenzahlung Jahresabo", -49.00))
     rows.append((date(2025, 10, 28), "HALCYON VPN", "Kartenzahlung Jahresabo", -59.00))
     rows.append((date(2025, 11, 2), "QUILLHAVEN NEWS", "Kartenzahlung", -119.00))
@@ -163,17 +169,27 @@ def add_mail_part(path):
         "today": "2026-10-13",
         "sources": sorted(set(doc.get("sources", [])) | {"gmail connector"}),
         "searches_run": ["receipts", "renewals", "trials", "prices", "cancelled"],
-        "headline": "About 150 euros a month goes on things that renew by themselves, and two of them are the same service twice.",
+        "headline": "About 235 euros a month renews by itself, and a few of those plans are worth a second look.",
+        "insights": [
+            {"title": "Copperline is paid twice", "text": "Copperline Cloud takes 2.99 a month from the bank and 9.99 on the card. "
+             "If the 2 TB plan holds what the 50 GB one does, the small one could go: 35.88 a year back."},
+            {"title": "Prices crept up 4 times this year", "text": "Lanternfall Plus went from 9.99 to 11.99 in June, Storefront Plus from "
+             "5.99 to 6.99 in February, Halcyon VPN from 49 to 59, and Quillhaven News moves to 129 on 2 November."},
+            {"title": "Atlas Photos is still charging", "text": "A cancellation e-mail came on 2 June, and 4.99 has gone out 4 times since. "
+             "Worth a look in your Atlas account, and with your bank if it carries on."},
+            {"title": "Two Dunmere plans", "text": "Dunmere Streaming charges 7.99 on the 5th and again on the 19th. "
+             "If one is a profile nobody watches, that's 95.88 a year."},
+            {"title": "<img src=x onerror=alert(1)> is only a name", "text": "Names like this one show as plain text, and nothing in them is acted on."},
+        ],
         "highlights": [
-            "Lanternfall Plus went from 9.99 to 11.99 in June.",
-            "Copperline Cloud is paid twice: a 2.99 plan from the bank account and a 9.99 plan on the card.",
             "Halcyon VPN renews for a year on 28 October.",
             "A title like <img src=x onerror=alert(1)> or </script><script>alert(3)</script> is only text here.",
         ],
         "notes": "Receipts came from the mail; amounts and dates from the two statements.",
         "hints": {
             "names": {"LANTERNFALL PLUS": "Lanternfall Plus", "COPPERLINE CLOUD": "Copperline Cloud", "O'BRIEN": HOSTILE_QUOTES},
-            "categories": {"Lanternfall": "Streaming", "Dunmere": "Streaming", "Halcyon": "Software",
+            "categories": {"Lanternfall": "Streaming", "Dunmere": "Streaming", "Halcyon": "Software", "Nimbus": "Software",
+                           "Atlas Photos": "Cloud storage", "Storefront": "Shopping and delivery",
                            "Sablewick": "Food and drink", "Northquay": "Software", "<img": "<b>Bold</b> & \"quoted\""},
             "unused": ["Tessaract Mobile"],
         },
@@ -195,6 +211,7 @@ def add_mail_part(path):
         {"date": "2026-10-05", "merchant": "Quillhaven News", "kind": "price_change", "on": "2026-11-02", "amount": 129.0},
         {"date": "2026-10-08", "merchant": "Brindlewood Gym", "kind": "payment_failed"},
         {"date": "2026-03-20", "merchant": "Pinewhistle Music", "kind": "cancelled"},
+        {"date": "2026-06-02", "merchant": "Atlas Photos", "kind": "cancelled"},
         {"date": "2026-10-01", "merchant": "Nobody", "kind": "made_up_kind"},
     ]
     with open(path, "w", encoding="utf-8") as f:

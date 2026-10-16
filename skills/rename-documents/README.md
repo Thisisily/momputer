@@ -28,7 +28,7 @@ Then ask: "rename my scans so I can find them", "give the PDFs in Downloads prop
 - Every proposed name is checked by a script before a plan exists, and again when it is carried out: a plain file name, no reserved Windows names, no forbidden, invisible or direction-changing characters, no leading or trailing dot or space, the same extension, a sensible length.
 - A rename changes the name only. The file stays in its folder with its extension. Folders are never renamed. Code projects and program folders are never touched.
 - Renames only the ids the user approved for that exact plan, only inside the folders the user pointed at, never overwrites (a clash gets " (2)"), and keeps an undo log in `Documents\Tidy-up logs\`. A plan file changed after approval is refused.
-- The page shows names only, never what a document says.
+- The page explains what was found before the plan: how many names say nothing and where they come from, what kinds of paper they are, when they arrived, and what the agent noticed. It shows names and the kind of paper, never what a document says.
 
 ## Files
 

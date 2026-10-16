@@ -14,6 +14,7 @@ Python 3.8+, standard library only.
     python survey.py --out survey.json --drives C,D --max-seconds 300
 """
 import argparse
+import bisect
 import hashlib
 import heapq
 import json
@@ -54,6 +55,7 @@ GIANT_BYTES = 500 * 1024 ** 2
 BIG_FILE_BYTES = 1024 ** 3
 PEEK_MAX_FILES = 300
 EXAMPLES = 8                     # examples kept per naming issue
+YEARS_KEPT = 12                  # the "last changed" chart counts years one by one this far back
 
 TYPES = {
     "documents": "pdf doc docx odt rtf txt md pages xls xlsx xlsm ods csv numbers ppt pptx odp key epub mobi tex",
@@ -626,7 +628,7 @@ class Survey:
             env.get("LOCALAPPDATA"), env.get("APPDATA"), os.path.join(self.kf["Profile"], "AppData"),
         } if p]
         if args.root:  # an explicitly chosen folder may live under e.g. %TEMP%; keep only protections below it
-            self.protected = [p for p in self.protected if not under(norm(args.root), [norm(p)])]
+            self.protected = [p for p in self.protected if not under(norm(os.path.abspath(args.root)), [norm(p)])]
         self.protected_n = [norm(p) for p in self.protected]
         self.managed_n = [norm(p) for p in self.managed_games]
         self.programs_n = [norm(p["path"]) for p in self.programs]
@@ -638,6 +640,10 @@ class Survey:
         self.big = []
         self.naming = {k: {"kind": k, "label": lbl, "count": 0, "examples": []} for k, _, lbl in NAMING_RULES}
         self.skipped, self.errors = [], 0
+        # files by the year they last changed: one counter per file, from the listing
+        this_year = datetime.now().year
+        self.year0 = this_year - YEARS_KEPT + 1
+        self.year_starts = [time.mktime((y, 1, 1, 0, 0, 0, 0, 0, -1)) for y in range(self.year0, this_year + 1)]
 
     # -------------------------------------------------- areas to walk
     def plan_areas(self):
@@ -707,7 +713,7 @@ class Survey:
     def walk(self, area):
         root = area["path"]
         stats = {"files": 0, "bytes": 0, "dirs": 0, "by_type": {}, "age": [0, 0, 0, 0, 0], "age_bytes": [0, 0, 0, 0, 0],
-                 "loose_files": 0, "truncated": False, "children": {}}
+                 "loose_files": 0, "truncated": False, "children": {}, "years": {}, "loose_by_type": {}, "loose_age": [0, 0, 0, 0, 0]}
         area["stats"] = stats
         only_files = area["kind"] in ("profile-root", "drive-root")
         # Breadth-first, so a folder cut short by the budget still shows its whole top level.
@@ -777,6 +783,10 @@ class Survey:
                 b = 0 if age < 30 else 1 if age < 180 else 2 if age < 365 else 3 if age < 1095 else 4
                 stats["age"][b] += 1
                 stats["age_bytes"][b] += size
+                y = bisect.bisect_right(self.year_starts, mtime) - 1   # -1: before the first year kept
+                yt = stats["years"].setdefault(y, {}).setdefault(t, [0, 0])
+                yt[0] += 1
+                yt[1] += size
                 if top_child:
                     stats["children"][top_child] = stats["children"].get(top_child, 0) + size
                 hidden = bool(attrs & (A_HIDDEN | A_SYSTEM))
@@ -787,6 +797,10 @@ class Survey:
                     self.check_name(n, e.path)
                     if depth == 0 and area["loose"]:
                         stats["loose_files"] += 1
+                        lt = stats["loose_by_type"].setdefault(t, [0, 0])
+                        lt[0] += 1
+                        lt[1] += size
+                        stats["loose_age"][b] += 1
                         self.loose.append(rec)
                     if t == "installers" and area["key"] == "Downloads" and depth == 0:
                         self.installers.append(rec)
@@ -1184,7 +1198,8 @@ class Survey:
         for a in self.areas:
             if not self.budget.ok():
                 a["stats"] = {"files": 0, "bytes": 0, "dirs": 0, "by_type": {}, "age": [0] * 5, "age_bytes": [0] * 5,
-                              "loose_files": 0, "truncated": True, "children": {}}
+                              "loose_files": 0, "truncated": True, "children": {}, "years": {}, "loose_by_type": {},
+                              "loose_age": [0] * 5}
                 continue
             self.walk(a)
         # Things inside games/projects/protected aren't loose clutter
@@ -1215,6 +1230,12 @@ class Survey:
                           "by_type": {t: {"files": v[0], "bytes": v[1]} for t, v in s["by_type"].items()},
                           "age": {"files": s["age"], "bytes": s["age_bytes"],
                                   "buckets": ["< 1 month", "1-6 months", "6-12 months", "1-3 years", "> 3 years"]},
+                          # files and bytes by type, by the year they last changed ("older": before the first year kept)
+                          "years": {("older" if y < 0 else str(self.year0 + y)): {t: {"files": v[0], "bytes": v[1]} for t, v in h.items()}
+                                    for y, h in sorted(s["years"].items())},
+                          # the files lying loose (directly in the folder), by type and by the age buckets above
+                          "loose_by_type": {t: {"files": v[0], "bytes": v[1]} for t, v in s["loose_by_type"].items()},
+                          "loose_age": s["loose_age"],
                           "biggest_children": [{"name": k, "bytes": v} for k, v in kids]})
         return {
             "schema": SCHEMA,
@@ -1241,6 +1262,7 @@ class Survey:
                            for g in sorted(dup_groups, key=lambda g: -g["bytes"] * (len(g["files"]) - 1))][:2000],
             "installers": [slim(r) for r in sorted(self.installers, key=lambda r: -r["bytes"])][:1000],
             "big_files": [{"path": p, "bytes": s, "modified": iso(m)} for s, p, m in sorted(self.big, reverse=True)],
+            "years_from": self.year0,  # areas' "years" count each year from this one; "older" is everything before
             "projects": [{"path": p["path"], "area": p["area"], "marker": p["marker"][0]} for p in self.projects][:1000],
             "naming_issues": [v for v in self.naming.values() if v["count"]],
             "protected": self.protected + ["Launcher game libraries and every registered program's install folder"],

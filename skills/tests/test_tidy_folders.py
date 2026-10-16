@@ -183,7 +183,9 @@ try:
     check("the survey changed nothing and wrote one file", tree(root) == before and os.listdir(out) == ["survey.json"], os.listdir(out))
     evil = "</script><img src=x onerror=\"window.__pwned=1\"> ' ’ $(x) `y` ; &  "
     notes_json = os.path.join(out, "notes.json")
-    json.dump({"headline": "Headline " + evil, "highlights": ["One " + evil]}, open(notes_json, "w", encoding="utf-8"))
+    json.dump({"headline": "Headline " + evil, "highlights": ["One " + evil],
+               "insights": [{"title": "Title " + evil, "text": "Papers and screenshots " + evil}],
+               "places": [{"path": os.path.join(root, "Downloads"), "note": "Note " + evil}]}, open(notes_json, "w", encoding="utf-8"))
     r = run([PY, "-I", os.path.join(S, "build_page.py"), survey_json, "--notes", notes_json, "--out", page])
     check("the page builds", r.returncode == 0 and os.path.isfile(page) and os.path.isfile(plan_json), r.stderr or r.stdout)
     plan = json.load(open(plan_json, encoding="utf-8"))
@@ -211,6 +213,26 @@ try:
     html = open(page, encoding="utf-8").read()
     check("hostile text is escaped in the page", html.count("</script>") == 2 and "<img" not in html and " " not in html)
     check("no file contents in the survey, the plan or the page", not any(SECRET in open(p, encoding="utf-8").read() for p in (survey_json, plan_json, page)))
+    surveyed = json.load(open(survey_json, encoding="utf-8"))
+    areas = surveyed["areas"]
+    check("each folder's files add up the same by year, and its loose files by type and by age",
+          all(sum(v["files"] for h in a["years"].values() for v in h.values()) == a["files"]
+              and sum(v["files"] for v in a["loose_by_type"].values()) == a["loose_files"] == sum(a["loose_age"]) for a in areas)
+          and isinstance(surveyed.get("years_from"), int), [(a["key"], a["files"], a["loose_files"]) for a in areas])
+    start = html.index('<script id="tidy-data" type="application/json">') + len('<script id="tidy-data" type="application/json">')
+    data = json.loads(html[start:html.index("</script>", start)])
+    dash, facts = data["dash"], data["dash"]["facts"]
+    check("the page's numbers are worked out from the survey and the plan: what's out of place, loose, papers, copies, space",
+          facts["out_of_place"] == len(plan["actions"]) and facts["files"] == sum(a["files"] for a in areas)
+          and facts["loose"] == sum(a["loose_files"] for a in areas if a["key"] in ("Desktop", "Downloads") or a["kind"] in ("profile-root", "drive-root"))
+          and facts["papers_loose"] == sum(1 for a in plan["actions"] if a["group"] == "important")
+          and facts["copies"] == len(copies) and facts["free_bytes"] == sum(a["bytes"] for a in to_bin)
+          and sum(k["files"] for k in dash["kinds"]) == facts["files"]
+          and sum(sum(v) for v in dash["years"]["series"].values()) == facts["files"], facts)
+    downloads = next((p for p in dash["loose"] if p["name"] == "Downloads"), {})
+    check("mom's take and a note on a folder reach the page as text, the take lit by the kinds it names",
+          [i["title"][:5] for i in data["notes"]["insights"]] == ["Title", ""] and data["notes"]["insights"][0]["kinds"] == ["documents", "pictures"]
+          and downloads.get("note", "").startswith("Note </script>"), (data["notes"]["insights"], downloads))
 
     print("\n-- 2. dry run, apply, both ways back")
     apply_py = [PY, "-I", os.path.join(S, "apply_plan.py")]

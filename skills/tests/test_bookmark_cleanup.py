@@ -14,9 +14,9 @@ opened the way a double-click would open them.
 
 The skill's scripts are run with LOCALAPPDATA and the home folder pointing into the work
 folder, so they never look at a real browser's folders. No site is contacted: every address in
-the fixture is a .example name, a local address or not a web page, and the one run of the real
-link checker happens only after it has said it would ask nobody. Nothing outside the work
-folder is written.
+the fixture is a .example or .test name, a local address or not a web page, and the one run of
+the real link checker happens only after it has said it would ask nobody. Nothing outside the
+work folder is written.
 
 --keep leaves the work folder (bookmarks, reports, plans, new files, screenshots) for a look.
 Windows only. Python 3.8+, standard library only.
@@ -38,6 +38,19 @@ from _report_page import SIZES, NoBrowser, Pages, basics  # noqa: E402
 MARK = "made-by-test_bookmark_cleanup.txt"
 LQ, RQ, LS, RS, DOT = chr(0x201c), chr(0x201d), chr(0x2018), chr(0x2019), chr(0x2022)
 PAGE_LISTS = ["dupes", "folders", "stale", "bar", "big", "dead", "look"]  # the order the page writes them in its approval line
+# What the agent writes in notes.json. One insight carries markup, to show notes are text too.
+NOTES = {
+    "headline": "273 bookmarks, and two thirds of them sit in one Pile. 8 pages are saved twice: an easy start.",
+    "insights": [
+        {"title": "Pile is a research shelf from 2019 to 2022", "text": "180 of your 273 bookmarks sit loose in Pile. 60 are Copperline docs, none opened in the last year."},
+        {"title": "The Atlas trip is a time capsule", "text": "9 bookmarks saved in 3 weeks of April 2023, untouched since May 2023. 2 of its links are gone."},
+        {"title": "Nimbus project is what you use now", "text": "11 bookmarks since March 2025, all opened in the last month."},
+        {"title": "A note with markup <b onmouseover=alert(10)>stays text</b>", "text": "Even </script><script>alert(11)</script> in a note is only text."},
+    ],
+    "folders": [{"folder": "Atlas trip", "note": "Spring 2023 travel plans: saved in 3 weeks, untouched since May 2023."}],
+    "sites": {"docs.copperline.example": "60 pages of one manual, none opened in the last year."},
+}
+
 
 ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
 ap.add_argument("scratch")
@@ -172,9 +185,10 @@ def further_checks(W, plan_path):
     check("no hidden streams were made in the work folder", not hidden_streams(W), hidden_streams(W)[:3])
 
 
-def page_checks(b, page, plan, shots):
+def page_checks(b, page, plan, R, shots):
     """The report in a headless browser: every size, light and dark, then ticking and the approval line."""
     lists = plan["lists"]
+    D = R["dashboard"]
     everything = {k: [x["n"] for x in lists[k]] for k in PAGE_LISTS}
     suggested = {k: [x["n"] for x in lists[k] if x["default"]] for k in PAGE_LISTS}
     more = "Array.from(document.querySelectorAll('button.more')).filter(b => !b.classList.contains('hidden')).forEach(b => b.click())"
@@ -190,29 +204,74 @@ def page_checks(b, page, plan, shots):
         b.js(more)
         b.settle(0.5)
         basics(check, b, tag, scheme)
-        n = b.js("({tiles: document.querySelectorAll('.tile').length, cols: document.querySelectorAll('svg.cols rect.col').length,"
-                 " bars: document.querySelectorAll('svg.hbar').length, cards: document.querySelectorAll('[data-list]').length,"
+        n = b.js("({facts: document.querySelectorAll('#facts .fact').length, take: document.querySelectorAll('.insights .row').length,"
+                 " cols: document.querySelectorAll('#time .cols .col').length, bars: document.querySelectorAll('.bars .row').length,"
+                 " waffles: document.querySelectorAll('.waffle').length, tables: document.querySelectorAll('table.tbl').length,"
+                 " copies: document.querySelectorAll('#copies-table tbody tr').length, gone: document.querySelectorAll('#links-table tbody tr').length,"
+                 " hand: document.querySelectorAll('.hand .row').length, cards: document.querySelectorAll('[data-list]').length,"
                  " rows: Object.fromEntries(Array.from(document.querySelectorAll('[data-list]')).map(c => [c.dataset.list, c.querySelectorAll('.item').length])),"
                  " scripts: document.scripts.length, imgs: document.images.length, frames: document.querySelectorAll('iframe,object,embed').length,"
-                 " handlers: Array.from(document.querySelectorAll('main *')).filter(e => Array.from(e.attributes).some(a => a.name.startsWith('on'))).length})")
-        check(tag + ": everything drew, every row of every list", n["tiles"] == 6 and n["cols"] >= 6 and n["bars"] >= 12 and n["cards"] == 7
-              and n["rows"] == {k: len(lists[k]) for k in PAGE_LISTS}, n)
-        check(tag + ": hostile titles and addresses made no elements or handlers", n["scripts"] == 2 and n["imgs"] == 0 and n["frames"] == 0 and n["handlers"] == 0, n)
+                 " handlers: Array.from(document.querySelectorAll('body *')).filter(e => Array.from(e.attributes).some(a => a.name.startsWith('on'))).length})")
+        check(tag + ": the dashboard drew: facts, mom's take, years, folders and sites, use and links, copies, dead links",
+              n["facts"] == 5 and n["take"] == len(NOTES["insights"]) and n["cols"] == len(D["years"]) >= 8 and n["bars"] == len(D["areas"]) + len(D["sites"])
+              and n["waffles"] == 2 and n["tables"] == 2 and n["copies"] == len(D["copies"]) == R["totals"]["dup_groups"]
+              and n["gone"] == len(lists["dead"]) and n["hand"] == len(R["by_hand"]), n)
+        check(tag + ": the plan drew every row of every list", n["cards"] == 7 and n["rows"] == {k: len(lists[k]) for k in PAGE_LISTS}, n)
+        check(tag + ": hostile titles, addresses and notes made no elements or handlers", n["scripts"] == 2 and n["imgs"] == 0 and n["frames"] == 0 and n["handlers"] == 0, n)
+        lists_ok = b.js("Array.from(document.querySelectorAll('ul.items')).every(u => { const t = Array.from(u.parentElement.querySelectorAll('button')).map(b => b.textContent);"
+                        " return t.indexOf('Tick all') >= 0 && t.indexOf('Untick all') >= 0; }) && document.querySelectorAll('ul.items').length === 7")
+        check(tag + ": every tickable list has its own Tick all and Untick all beside it", lists_ok)
         links = b.js("Array.from(document.querySelectorAll('a[href]')).map(a => { const u = new URL(a.href); "
                      "return [u.protocol, u.username + u.password, a.rel, a.getAttribute('href').slice(0, 12)]; })")
-        check(tag + ": every link is plain http(s), no password, rel=noopener noreferrer", len(links) > 150 and all(
-            x[0] in ("http:", "https:") and x[1] == "" and x[2] == "noopener noreferrer" for x in links), [x for x in links if x[0] not in ("http:", "https:")][:5])
+        check(tag + ": every link is plain https, no password, rel=noopener noreferrer", len(links) > 150 and all(
+            x[0] == "https:" and x[1] == "" and x[2] == "noopener noreferrer" for x in links), [x for x in links if x[0] != "https:"][:5])
         text = b.js("document.body.innerText")
         for needle in ("<img src=x onerror=alert(1)>", "</script><script>alert(2)</script>", "$(calc) `whoami` ; rm -rf & echo",
                        "</A><DT><A HREF=\"javascript:alert(3)\">injected</A>", "javascript:(function(){document.body.style", "JaVaScRiPt:alert(4)",
                        "data:text/html,<script>alert(6)</script>", "file:///C:/Users/someone/secret.txt", "https://quote.example/\"onmouseover=\"alert(7)",
-                       "https://tag.example/<script>alert(8)</script>", LQ + "curly" + RQ + " " + LS + "quotes" + RS, "https://" + DOT * 3 + "@vault.example/login"):
+                       "https://tag.example/<script>alert(8)</script>", LQ + "curly" + RQ + " " + LS + "quotes" + RS, "https://" + DOT * 3 + "@vault.example/login",
+                       "<b onmouseover=alert(10)>stays text</b>", "</script><script>alert(11)</script>"):
             check(tag + ": shown as text: " + needle[:34], needle in text)
         check(tag + ": the password is nowhere on the page", "hunter2" not in text and "hunter2" not in b.js("document.documentElement.outerHTML"))
+        check(tag + ": mom says the agent's headline, and the notes sit beside their folder and site",
+              b.js("document.getElementById('headline').textContent") == NOTES["headline"] and NOTES["folders"][0]["note"] in text
+              and NOTES["sites"]["docs.copperline.example"] in text)
         notlinks = b.js("Array.from(document.querySelectorAll('[data-list=look] .item')).filter(li => li.querySelector('a')).length")
         check(tag + ": nothing in 'not web pages' is a link", notlinks == 0, notlinks)
+        http_links = b.js("Array.from(document.querySelectorAll('.addr')).filter(d => d.textContent.indexOf('http://') === 0 && d.querySelector('a')).length")
+        check(tag + ": a plain http address is shown as text, not a link", http_links == 0, http_links)
+        if width == 390:
+            tiny = b.js("Array.from(document.querySelectorAll('body *')).filter(e => e.children.length === 0 && e.textContent.trim() "
+                        "&& e.getClientRects().length && parseFloat(getComputedStyle(e).fontSize) < 11).length")
+            check(tag + ": text stays readable (nothing under 11 px)", tiny == 0, tiny)
         if shots:
             b.shot(os.path.join(shots, "bookmarks-%s.png" % tag))
+
+    # ---- the dashboard answers clicks: years by use, search, the folds
+    b.open(page, 1280, 900, "light")
+    legend = "Array.from(document.querySelectorAll('#time .chart-legend b')).map(x => x.textContent)"
+    by_folder = b.js(legend)
+    b.js("document.querySelector('.subtab[data-by=use]').click()")
+    b.settle(0.6)
+    by_use = b.js(legend)
+    check("the years chart switches to 'by use' and back", by_folder[:2] == [D["by_area"][0]["name"], D["by_area"][1]["name"]]
+          and by_use == ["Opened in the last year", "Opened before that", "Never opened"] and b.js("document.querySelectorAll('#time .cols .col').length") == len(D["years"]),
+          (by_folder, by_use))
+    b.js("document.querySelector('.subtab[data-by=area]').click()")
+    b.settle(0.6)
+    b.js("(() => { const q = document.getElementById('q'); q.value = 'atlas trip'; q.dispatchEvent(new Event('input')); })()")
+    b.settle(0.6)
+    found = b.js("({items: Array.from(document.querySelectorAll('.item:not(.nomatch)')).map(li => li.dataset.q),"
+                 " stale: document.querySelectorAll('[data-list=stale] .item').length})")
+    in_atlas = sum(1 for k in PAGE_LISTS for x in lists[k] if x.get("where") == "Atlas trip")
+    check("search finds bookmarks by title, address or folder, in lists not drawn yet too", in_atlas >= 9 and len(found["items"]) == in_atlas
+          and all("atlas trip" in q for q in found["items"]) and found["stale"] == len(lists["stale"]), (in_atlas, found))
+    b.js("(() => { const q = document.getElementById('q'); q.focus(); q.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})); })()")
+    b.settle(0.3)
+    check("Esc clears the search", b.js("document.getElementById('q').value") == "" and b.js("document.querySelectorAll('.nomatch').length") == 0)
+    b.js("document.querySelector('details.method summary').click()")
+    b.settle(0.6)
+    check("'How the checks work' opens", b.js("document.querySelector('details.method').open && document.querySelectorAll('#method li').length >= 5"))
 
     # ---- ticking and the approval line (phone width, light)
     b.open(page, 390, 844, "light")
@@ -292,7 +351,7 @@ try:
     got = json.loads(r.stdout) if r.returncode == 0 else {}
     doc = json.load(open(bm, encoding="utf-8"))
     nodes = doc["nodes"]
-    check("the Edge profile was read from a copy", r.returncode == 0 and got["bookmarks"] == sum(1 for n in nodes if n["type"] == "url") == 246 and got["records_last_opened"], r.stderr[:300] + r.stdout[:300])
+    check("the Edge profile was read from a copy", r.returncode == 0 and got["bookmarks"] == sum(1 for n in nodes if n["type"] == "url") == 273 and got["records_last_opened"], r.stderr[:300] + r.stdout[:300])
     check("the browser's files are untouched and nothing was added beside them", hashes(IN) == before_in)
     check("the scratch copy was deleted again", sorted(os.listdir(WORK)) == ["bookmarks.json"], os.listdir(WORK))
     check("the output prints no titles or addresses", "example" not in r.stdout and "hunter2" not in r.stdout)
@@ -370,8 +429,13 @@ try:
           "%d not web pages or with a password" % len(L["look"]) in r.stdout)
     by_id = {n["id"]: n for n in nodes}
     check("the embedded data has no raw <, > or &", not re.search("[<>&" + chr(0x2028) + chr(0x2029) + "]", blob))
-    check("the template never uses innerHTML or friends", not re.search(r"innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function", html))
-    check("the page loads nothing from the network", not re.search(r"<link|<img|<iframe|src=|@import|url\(|fetch\(|XMLHttpRequest|sendBeacon|WebSocket", html.replace(blob, "")))
+    check("the page never uses innerHTML or friends (the kit's code and the page's own)",
+          not re.search(r"innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function", html.replace(blob, "")))
+    check("the brand kit is inlined: Geist, Geist Mono and Doto as data, and mom",
+          html.count("data:font/woff2;base64,") == 3 and 'id="mom"' in html and "/*@kit-css*/" in html and "/*@kit-js*/" in html and html.index("<title>") < 2000)
+    offline = re.sub(r'url\("data:font/woff2;base64,[A-Za-z0-9+/=]+"\)|url\(#[\w-]+\)', "", html.replace(blob, ""))  # the fonts, and mom's own gradients
+    check("the page loads nothing from the network", not re.search(r"<link|<img|<iframe|src=|@import|url\(|fetch\(|XMLHttpRequest|sendBeacon|WebSocket", offline)
+          and "https://" not in offline and "http://" not in offline.replace("http://www.w3.org/2000/svg", ""))
     dup = {x["title"]: x for x in L["dupes"]}
     check("extra copies: exact and near, eight in all", len(L["dupes"]) == 8 and totals["dup_groups"] == 7, [x["title"] for x in L["dupes"]])
     check("near copies: http/https, www, slash, tracking tags", "http and https" in dup["Osprey list (from a newsletter)"]["why"] and
@@ -425,9 +489,11 @@ try:
 
     class Pretend:
         """Stands in for the internet: .example names are given public addresses here, in the test only."""
-        gone = {"site-3.example", "site-8.example"}
+        gone = {"site-3.example", "site-8.example", "atlas-rail.example"}
         answers = {"site-1.example": (404, None), "site-2.example": (410, None), "site-4.example": (403, None), "site-5.example": (500, None),
-                   "site-6.example": (302, "http://192.168.1.1/admin"), "site-7.example": (405, None), "bar-1.example": (301, "https://bar-2.example/")}
+                   "site-6.example": (302, "http://192.168.1.1/admin"), "site-7.example": (405, None), "bar-1.example": (301, "https://bar-2.example/"),
+                   "atlas-hotels.example": (301, "https://atlas-stays.example/"), "ferries.example": (301, "https://ferry-times.example/"),
+                   "museum-tickets.example": (403, None)}
 
         def resolver(self, host, port):
             if host in self.gone:
@@ -457,16 +523,49 @@ try:
     st = collections.Counter(v["status"] for v in results.values())
     check("pretend check: router, localhost, file:, bookmarklets and passwords were never asked", all(
         results[str(n["id"])]["status"] == "skipped" for n in nodes if n["type"] == "url" and re.match(r"(?i)\s*(javascript|file|data|chrome|vbscript):|https?://(192\.168|localhost|user:|good\.example)", n["url"])), st)
-    r = py(os.path.join(S, "build_report.py"), bm, "--links", links, "--out", page, "--today", "2026-10-13")
+    notes = os.path.join(WORK, "notes.json")
+    json.dump(NOTES, open(notes, "w", encoding="utf-8"))
+    r = py(os.path.join(S, "build_report.py"), bm, "--links", links, "--notes", notes, "--out", page, "--today", "2026-10-13")
+    check("report built with links and the agent's notes", r.returncode == 0, r.stderr[-400:])
     html, blob, R = data_of(page)
     plan = json.load(open(plan_path, encoding="utf-8"))
     L = R["lists"]
-    check("dead links: only a clear 404 or 410, or a domain that is gone", sorted(x["title"] for x in L["dead"]) == ["Single 1", "Single 2", "Single 3", "Single 8"]
-          and all(x["default"] for x in L["dead"]), [(x["title"], x["why"]) for x in L["dead"]])
+    check("dead links: only a clear 404 or 410, or a domain that is gone", sorted(x["title"] for x in L["dead"]) ==
+          ["Atlas trip: night train", "Atlas trip: rail pass", "Single 1", "Single 2", "Single 3", "Single 8"]
+          and all(x["default"] for x in L["dead"]) and {x["site"] for x in L["dead"]} == {"atlas-rail.example", "site-1.example", "site-2.example", "site-3.example", "site-8.example"},
+          [(x["title"], x["why"]) for x in L["dead"]])
     hand = {x["title"]: x["why"] for x in R["by_hand"]}
     check("403, 500, a timeout and a redirect to a router are 'check by hand', not dead", hand == {
-        "Single 4": "refuses automatic checks", "Single 5": "the site has a problem of its own (500)",
+        "Single 4": "refuses automatic checks", "Single 5": "the site has a problem of its own (500)", "Museum tickets": "refuses automatic checks",
         "Single 6": "it redirects somewhere that isn't requested (a private or local address)", "Single 9": "no answer in time"}, hand)
+    H = R["dashboard"]["health"]
+    check("the health of the links is counted: working, moved, gone, didn't answer, not asked",
+          H["dead"] == 6 and H["unreachable"] == 5 and H["moved"] == 4 and H["ok"] + H["moved"] + H["dead"] + H["unreachable"] + H["skipped"] == totals["bookmarks"], H)
+    check("the notes are on the page as data, cut to size, with no raw < or > in it", R["notes"]["headline"] == NOTES["headline"] and
+          [x["title"] for x in R["notes"]["insights"]] == [x["title"] for x in NOTES["insights"]] and R["notes"]["folders"] == {"atlas trip": NOTES["folders"][0]["note"]}
+          and "<b onmouseover" not in html and not re.search("[<>&]", blob))
+    r = py(os.path.join(S, "build_report.py"), bm, "--links", links, "--out", os.path.join(WORK, "no-notes.html"), "--plan", os.path.join(WORK, "no-notes-plan.json"),
+           "--today", "2026-10-13")
+    check("notes never change the plan: the same report id with or without them",
+          r.returncode == 0 and json.load(open(os.path.join(WORK, "no-notes-plan.json"), encoding="utf-8"))["report_id"] == R["report_id"], r.stderr[-300:])
+    check("without notes, mom still says something kind with digits", data_of(os.path.join(WORK, "no-notes.html"))[2]["notes"]["headline"].startswith("273 bookmarks in 16 folders."))
+    before = sorted(os.listdir(WORK))
+    r = py(os.path.join(S, "build_report.py"), bm, "--links", links, "--summary", "--today", "2026-10-13")
+    shape = json.loads(r.stdout) if r.returncode == 0 else {}
+    check("--summary gives the agent the shape: folders, sites, years and links, with counts and dates", r.returncode == 0 and shape["bookmarks"] == 273
+          and shape["biggest_folders"][0]["folder"] == "Pile" and shape["top_sites"][0] == {"site": "docs.copperline.example", "bookmarks": 60, "saved": "2019 to 2023",
+                                                                                             "mostly_in": "Pile", "opened_in_the_last_year": 0}
+          and next(f for f in shape["biggest_folders"] if f["folder"] == "Atlas trip")["last_opened"] == "2023-05-21"
+          and shape["links"]["gone"] == 6 and shape["saved_each_year"]["2026"] == 6, r.stdout[:600] + r.stderr[-300:])
+    check("...and never a bookmark's title or address, and it writes nothing", not re.search(r"://|hunter2|vault|alert|onerror|whoami|Osprey|Single \d", r.stdout)
+          and sorted(os.listdir(WORK)) == before, re.findall(r".{30}(?:://|alert|Single \d).{10}", r.stdout)[:3])
+    for bad, why in (("[1, 2]", "one object"), ("{not json", "isn't readable JSON")):
+        bad_path = os.path.join(WORK, "bad-notes.json")
+        with open(bad_path, "w", encoding="utf-8") as f:
+            f.write(bad)
+        r = py(os.path.join(S, "build_report.py"), bm, "--notes", bad_path, "--out", os.path.join(WORK, "bad-notes.html"), "--plan", os.path.join(WORK, "bad-plan.json"))
+        check("notes.json that isn't an object is refused in a sentence, and nothing is written: %s" % bad, r.returncode != 0 and why in r.stderr
+              and "Traceback" not in r.stderr and not os.path.exists(os.path.join(WORK, "bad-notes.html")), r.stderr[-300:])
     check("a site that refuses HEAD but answers GET is fine", "Single 7" not in hand and "Single 7" not in [x["title"] for x in L["dead"]])
     check("what wasn't asked is counted by reason", dict(R["unchecked"]).get("a private or local address", 0) >= 1 and dict(R["unchecked"]).get("not a web page", 0) >= 5, R["unchecked"])
 
@@ -602,7 +701,7 @@ try:
             if shots:
                 os.makedirs(shots)
             try:
-                page_checks(browser, page, plan, shots)
+                page_checks(browser, page, plan, R, shots)
                 exported_file_checks(browser, [tidy, removed_file, same])
             finally:
                 browser.close()

@@ -149,12 +149,24 @@ try:
     check("the old installers, the big video and what's untouched for a year are listed",
           len(lists.get("old_installers") or []) == 2 and lists.get("big_videos") and lists.get("old_large"),
           {k: len(v) for k, v in lists.items()})
+    ages = survey.get("ages") or {}
+    two_years = str(time.localtime(YEARS_AGO).tm_year)
+    check("it counts space by the year files last changed, per drive (the old video's year holds its 1.2 GB)",
+          len(ages) == 1 and list(ages.values())[0].get(two_years, 0) >= 1200 * MB, ages)
+    tree_dates = [k.get("m") for d in survey.get("drives") or [] for k in (d.get("tree") or {}).get("c", [])]
+    check("each folder in the chart says when anything in it last changed", tree_dates and all(tree_dates), tree_dates)
     r = py(os.path.join(S, "summarize.py"), survey_path)
     check("summarize.py reads it", r.returncode == 0 and r.stdout.strip(), r.stderr[-300:])
+    r = py(os.path.join(S, "summarize.py"), survey_path, "--section", "ages")
+    check("summarize.py shows the last-changed tally", r.returncode == 0 and two_years in r.stdout, r.stdout[-300:] + r.stderr[-300:])
 
     # ---------------------------------------------------------------- 3. the page and the plan
     print("\n-- 3. the page and the plan")
     notes = save({"headline": "C: has room. " + HOSTILE_NOTE, "highlights": ["C:\\ holds the made-up npm cache.", HOSTILE_NOTE],
+                  "insights": [{"title": "Videos is the biggest thing here", "text": "1.2 GB from 2 years ago. " + HOSTILE_NOTE},
+                               {"title": HOSTILE_NOTE, "text": "x" * 2000}, "a plain sentence works too", 42],
+                  "drives": {"c:": "The made-up drive. " + HOSTILE_NOTE, "Q": "not a drive here"},
+                  "places": [{"path": os.path.join(PC, "Videos"), "note": "Holiday films. " + HOSTILE_NOTE}, {"path": "", "note": "no path"}],
                   "drop": ["pip-cache-purge"], "focus": "c:"}, os.path.join(OUT, "notes.json"))
     page, plan_path = os.path.join(OUT, "disk-space.html"), os.path.join(OUT, "diskspace-plan.json")
     r = py(BUILD, survey_path, "--notes", notes, "--out", page)
@@ -186,6 +198,15 @@ try:
     check("nothing on the page loads from outside", "https://" not in html.replace("https://www.w3.org", "") and "http://" not in html.replace("http://www.w3.org", ""))
     data = json.loads(html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0])
     check("the page opens on the drive notes.json names", data["notes"]["focus"] == "C", data["notes"].get("focus"))
+    ins = data["notes"]["insights"]
+    check("mom's take keeps the insights as text, cut to size, then the old highlights",
+          len(ins) == 5 and ins[0]["title"] == "Videos is the biggest thing here" and len(ins[1]["text"]) <= 600
+          and ins[2] == {"title": "", "text": "a plain sentence works too"} and any(HOSTILE_NOTE in i["text"] for i in ins), ins)
+    check("a line for the drive it has, none for a drive it doesn't", set(data["notes"]["drives"]) <= {"C", "T"} and data["notes"]["drives"],
+          data["notes"]["drives"])
+    check("notes on places keep their path and note; one with no path is dropped",
+          [p["note"] for p in data["notes"]["places"]] == ["Holiday films. " + HOSTILE_NOTE], data["notes"]["places"])
+    check("the last-changed tally reaches the page", data["survey"].get("ages") == ages)
     r = py(BUILD, survey_path, "--notes", save({"drop": ["rm-rf"]}, os.path.join(OUT, "bad-notes.json")), "--out", os.path.join(OUT, "bad.html"))
     check("an id notes.json can't drop is refused, and nothing is written", r.returncode != 0 and not os.path.exists(os.path.join(OUT, "bad.html")), r.stderr[-300:])
 

@@ -1,6 +1,6 @@
 # desktop-icons
 
-An Agent Skill that tidies a cluttered Windows desktop the careful way. The agent surveys the user's own Desktop folder (wherever it really is, OneDrive included) and the Public Desktop without changing anything. It reads each shortcut file, never runs one, and finds shortcuts whose target is gone, several shortcuts to the same program, shortcuts to things already on the taskbar or in the Start menu, shortcuts that run a command, loose documents, screenshots, installers and folders and how long they have sat there, and how many icons there are against what fits on one screen. It builds one interactive page with charts. The user ticks what they want (every list has Tick all and Untick all), copies an approval line back, and only those items change. Shortcuts go to the Recycle Bin, loose files move into folders, every step is logged, and a fixed `revert.ps1` next to the log moves everything back.
+An Agent Skill that tidies a cluttered Windows desktop the careful way. The agent surveys the user's own Desktop folder (wherever it really is, OneDrive included) and the Public Desktop without changing anything. It reads each shortcut file, never runs one, and finds shortcuts whose target is gone, several shortcuts to the same program, shortcuts to things already on the taskbar or in the Start menu, shortcuts that run a command, loose documents, screenshots, installers and folders and how long they have sat there, and how many icons there are against what fits on one screen. It builds one page in momputer's look that explains the desktop first (what kind of things are on it, when they arrived, where the shortcuts lead, what fits on one screen) and then shows the plan. The user ticks what they want (every list has Tick all and Untick all), copies an approval line back, and only those items change. Shortcuts go to the Recycle Bin, loose files move into folders, every step is logged, and a fixed `revert.ps1` next to the log moves everything back.
 
 ## Needs
 
@@ -42,7 +42,7 @@ Then ask: "clean up my desktop", "which of my desktop shortcuts are broken?", "m
 | `scripts/apply_plan.py` | Dry run, apply, undo: the command the agent runs. Limits the run to the Desktop |
 | `scripts/safe_apply.py` | The file-moving engine and all its guard rails, shared unchanged by every skill here that moves files |
 | `scripts/revert.ps1` | Fixed revert script, copied next to each undo log |
-| `assets/desktop-plan-template.html` | The self-contained page (no network, light and dark) |
+| `assets/desktop-plan-template.html` | The self-contained page, built on the collection's page kit (no network, light and dark) |
 | `references/review-guide.md` | Survey fields, how a shortcut is judged, `notes.json` format, judgement calls |
 
 ## License

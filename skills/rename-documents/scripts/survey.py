@@ -90,6 +90,12 @@ MAKERS = [
 ]
 
 
+# A name that says what the file is, ending like a second copy of it: "Lanternfall lease (2).pdf",
+# "Copperline quote - Copy.odt". Counted for the page; such a file is never listed or renamed for it.
+# (One or two digits only: "Accounts (2023)" is a year, not a copy.)
+COPY_LIKE = re.compile(r"( \(\d{1,2}\)| - copy( \(\d{1,2}\))?|_copy\d*)$", re.I)
+
+
 # A bank account written the international way: a country code, two check digits, then groups of
 # four. (Only blanked when it is mostly digits, so "UK22 YEAR PLAN 2024" stays.)
 IBAN_RX = re.compile(r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,4})?\b")
@@ -357,7 +363,7 @@ def survey(args):
     seen = set()
     for want in asked:
         real, why = real_folder(want, guard)
-        entry = {"path": real or want, "skipped": why, "documents": 0, "listed": 0, "left": []}
+        entry = {"path": real or want, "skipped": why, "documents": 0, "listed": 0, "copies": 0, "left": []}
         folders.append(entry)
         if why or safe_apply.norm(real) in seen:
             continue
@@ -408,6 +414,8 @@ def survey(args):
                     continue
                 entry["documents"] += 1
                 odd = names.says_nothing(e.name)
+                if not odd and COPY_LIKE.search(os.path.splitext(e.name)[0].strip()):
+                    entry["copies"] += 1
                 if not odd and not args.all:
                     continue
                 if len(items) >= args.max_files:
@@ -449,7 +457,8 @@ def survey(args):
         "rules": {k: {x: v[x] for x in ("label", "example", "how")} for k, v in names.RULES.items()},
         "folders": folders,
         "counts": {"listed": len(items), "say_nothing": sum(1 for it in items if it["why_key"] != "named"),
-                   "documents": sum(f["documents"] for f in folders), "by_why": by_why, "by_ext": by_ext,
+                   "documents": sum(f["documents"] for f in folders), "copies": sum(f["copies"] for f in folders),
+                   "by_why": by_why, "by_ext": by_ext,
                    "peeked": peeks[0], "flagged": sum(1 for it in items if it.get("flag")),
                    "something_read": sum(1 for it in items if (it.get("peek") or {}).get("text") or (it.get("peek") or {}).get("title"))},
         "items": items,

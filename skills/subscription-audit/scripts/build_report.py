@@ -9,6 +9,12 @@ what may be done about each, so an approval such as
 maps back to exact items (check it with approved.py). The report id is a fingerprint of
 everything in the plan.
 
+Besides the plan, the page explains the spending: what each month cost by kind of thing, what
+the plans in force came to a year ago and now, where the money goes, every price change, two
+plans for one thing, a plan still charging after a cancellation e-mail, and what comes next.
+Those figures are worked out here; the page only draws them. The agent's own reading of them
+goes in as "insights" (mom's take): text only, cut to size.
+
 The page keeps four things about a charge: who charged, how much, when, and how often.
 Anything that looks like a card or account number is cut to its last four digits again
 here, IBANs are removed, and balances are never read. Merchant names, e-mail subjects and
@@ -57,6 +63,9 @@ LONG_MONTHLY = 6           # paid monthly this many times: a yearly plan may be 
 STALE_DAYS = 45            # the newest charge is older than this: say so
 NAME_MAX = 48
 HISTORY_MAX = 24
+KINDS_SHOWN = 6            # kinds of thing that get a light of their own on the page; more and the smallest share one
+REST = "Everything else"
+INSIGHTS_MAX = 8
 
 NOISE = set("""pos card kaart karte carte payment payments purchase betaling zahlung lastschrift sepa direct debit dd
 recurring www http https com net org co uk de nl fr es it eu io app inc ltd llc gmbh bv ag sa sarl plc corp the to via
@@ -577,7 +586,7 @@ def build(doc, today=None, days=None):
     items, stopped = [], []
     for s in streams + pending:
         p, cs, ns = s["period"], s["cs"], s.get("notices", [])
-        flags, anchor = [], None
+        flags, anchor, kept_on = [], None, None
         if cs:
             last, first = cs[-1], cs[0]
             amounts = [c["amount"] for c in cs]
@@ -597,6 +606,14 @@ def build(doc, today=None, days=None):
             known_to = min(max(ends[b] for c in cs for b in c.get("batches", {c["batch"]})), today)
             cancelled = next((n for n in ns if n["kind"] == "cancelled" and n["d"] and n["d"] >= last["d"] - timedelta(days=3)), None)
             status = "cancelled" if cancelled else ("stopped" if (known_to - last["d"]).days > p[3] + grace else "active")
+            # a cancellation e-mail, and charges that kept coming after it: one more round can be a notice
+            # period, two (or a yearly plan renewing) is worth a look
+            told = [n for n in ns if n["kind"] == "cancelled" and n["d"]]
+            if not cancelled and told:
+                n = max(told, key=lambda n: n["d"])
+                after = sum(1 for c in cs if c["d"] > n["d"] + timedelta(days=3))
+                if after >= (1 if p[1] >= LONG_DAYS else 2):
+                    kept_on = {"kind": "charged_after_cancel", "level": "red", "on": n["d"].isoformat(), "charges": after}
         else:
             n0 = s["pending"]
             amount, nxt, name, norms, odd, one_off = n0["amount"], n0["on"], n0["shown"], n0["norms"], n0["odd"], False
@@ -604,10 +621,13 @@ def build(doc, today=None, days=None):
             status = "pending"
         name = clip(name, 60 if odd else NAME_MAX)
         yearly = round(amount * p[4], 2)
+        s["cat"], s["name"] = category_of(name, norms, hints), name
         if status in ("stopped", "cancelled"):
-            stopped.append({"name": name, "amount": amount, "currency": s["currency"], "period": p[0],
+            stopped.append({"name": name, "amount": amount, "currency": s["currency"], "period": p[0], "category": s["cat"],
                             "last": last["d"].isoformat(), "count": len(cs), "why": status})
             continue
+        if kept_on:
+            flags.append(kept_on)
 
         runs = runs_of(cs) if cs else []
         if s["steady"] and len(runs) >= 2 and not one_off:
@@ -656,7 +676,7 @@ def build(doc, today=None, days=None):
                 offers.insert(3, "yearly")
         accounts = sorted({c["account"] for c in cs if c["account"]})
         items.append({"name": name, "key": s["key"], "family": norms[0] if norms else "", "anchor": anchor,
-                      "category": category_of(name, norms, hints), "period": p[0], "per_year": p[4],
+                      "category": s["cat"], "period": p[0], "per_year": p[4],
                       "amount": amount, "currency": s["currency"], "yearly": yearly, "monthly": round(yearly / 12, 2),
                       "first": first["d"].isoformat() if first else "", "last": last["d"].isoformat() if last else "",
                       "count": len(cs), "paid": round(sum(c["amount"] for c in cs), 2), "steady": s["steady"],
@@ -670,6 +690,7 @@ def build(doc, today=None, days=None):
         return {"name": j["name"], "amount": j["amount"], "currency": j["currency"], "period": j["period"]}
 
     live = [i for i in items if i["status"] == "active"]
+    pairs = []  # which plans are one thing bought more than once, for the page to show together
     for i in live:
         if i["family"] in STORES or i["key"].lstrip("=").split(" ")[0] in STORES:
             continue
@@ -677,9 +698,12 @@ def build(doc, today=None, days=None):
                  and (j["key"] == i["key"] or (j["family"] == i["family"] and len(i["family"]) >= 4 and i["family"] not in GENERIC))]
         if twins:
             i["flags"].insert(0, {"kind": "two_plans", "level": "red", "with": [other(j) for j in twins[:4]]})
+            pairs.append([i] + twins)
     for group in as_list(hints.get("same_service")):
         low = [g.strip().lower() for g in as_list(group) if isinstance(g, str)]
         hit = [i for i in live if i["name"].lower() in low]
+        if len(hit) > 1:
+            pairs.append(hit)
         for i in hit:
             if len(hit) > 1 and not any(f["kind"] == "two_plans" for f in i["flags"]):
                 i["flags"].insert(0, {"kind": "two_plans", "level": "red", "with": [other(j) for j in hit if j is not i][:4]})
@@ -724,6 +748,7 @@ def build(doc, today=None, days=None):
     while m <= date(asof.year, asof.month, 1):
         month_rows.append([m.strftime("%Y-%m"), months.get(m.strftime("%Y-%m"), 0)])
         m = add_months(m, 1)
+    told = story(items, live, streams, main, asof, cats, pairs)
 
     start = today - timedelta(days=today.weekday())  # the Monday of this week
     end = start + timedelta(days=HORIZON_DAYS - 1)
@@ -765,6 +790,7 @@ def build(doc, today=None, days=None):
         "sources": [clip(s, 40) for s in as_list(doc.get("sources")) if isinstance(s, str)][:6],
         "headline": clip(doc.get("headline"), 300),
         "highlights": [clip(h, 300) for h in as_list(doc.get("highlights")) if isinstance(h, str)][:8],
+        "insights": agent_insights(doc),
         "agent_notes": clip(doc.get("notes"), 600),
         "currency": main,
         "totals": {"main": per_cur.get(main, {"currency": main, "yearly": 0, "monthly": 0, "count": 0}),
@@ -772,11 +798,18 @@ def build(doc, today=None, days=None):
                    "due30": {"amount": round(sum(e["amount"] for e in soon), 2), "count": len(soon)},
                    "rises": count("price_rise") + count("price_notice"), "trials": count("trial"),
                    "two_plans": count("two_plans"), "renews_soon": count("renews_soon"),
+                   "after_cancel": count("charged_after_cancel"),
+                   "rises_extra": told["rises_extra"], "paid": told["paid"],
                    "look": sum(1 for i in items if any(f["level"] == "red" for f in i["flags"])),
                    "stopped": len(stopped), "charges": len(charges), "skipped": skipped + bad_notices,
                    "recurring": sum(len(s["cs"]) for s in streams)},
         "categories": sorted(cats.values(), key=lambda c: -c[1]),
         "months": month_rows,
+        "kinds": told["kinds"],
+        "month_kinds": told["month_kinds"],
+        "creep": told["creep"],
+        "changes": told["changes"],
+        "overlaps": told["overlaps"],
         "calendar": {"start": start.isoformat(), "days": HORIZON_DAYS, "events": events},
         "items": items,
         "stopped": sorted(stopped, key=lambda s: s["last"], reverse=True)[:40],
@@ -788,6 +821,126 @@ def build(doc, today=None, days=None):
     check_safe(report)
     report["report_id"] = plan_id(items)
     return report
+
+
+def agent_insights(doc):
+    """Mom's take as the agent wrote it, text only and cut to size, then the older one-line highlights."""
+    out = []
+    for it in as_list(doc.get("insights")):
+        if isinstance(it, dict) and isinstance(it.get("text"), str) and clip(it["text"], 600):
+            title = it.get("title") if isinstance(it.get("title"), str) else ""
+            out.append({"title": clip(title, 90), "text": clip(it["text"], 600)})
+        elif isinstance(it, str) and clip(it, 600):
+            out.append({"title": "", "text": clip(it, 600)})
+    for h in as_list(doc.get("highlights")):
+        if isinstance(h, str) and clip(h, 300):
+            out.append({"title": "", "text": clip(h, 300)})
+    return out[:INSIGHTS_MAX]
+
+
+def month_start(d):
+    return date(d.year, d.month, 1)
+
+
+def story(items, live, streams, main, asof, cats, pairs):
+    """What the page shows besides the plan, worked out here so the page only has to draw it.
+
+    Kinds of thing ranked by what they cost a year; what each month cost, by kind; what the plans in
+    force came to a year ago and now; every price change; plans that are one thing bought twice.
+    All in the main currency: nothing is converted.
+    """
+    by_n = {i["n"]: i for i in items}
+    ranked = sorted(cats.values(), key=lambda c: (-c[1], c[0]))
+    named = [c[0] for c in ranked] if len(ranked) <= KINDS_SHOWN else [c[0] for c in ranked[:KINDS_SHOWN - 1]]
+    kinds = [{"name": c[0], "yearly": c[1], "count": c[2], "rest": False} for c in ranked if c[0] in named]
+    rest = [c for c in ranked if c[0] not in named]
+    if rest:
+        kinds.append({"name": REST, "yearly": round(sum(c[1] for c in rest), 2), "count": sum(c[2] for c in rest),
+                      "rest": True, "of": [c[0] for c in rest]})
+
+    # what each full month cost, by kind (the month under way is told apart: it isn't over)
+    mine = [s for s in streams if s["currency"] == main and s["cs"]]
+    cur = month_start(asof)
+    first = min((c["d"] for s in mine for c in s["cs"]), default=asof)
+    labels, m = [], max(add_months(cur, -12), month_start(first))
+    while m < cur:
+        labels.append(m)
+        m = add_months(m, 1)
+    labels = labels or [cur]
+    keys = [x.strftime("%Y-%m") for x in labels]
+    at = {k: j for j, k in enumerate(keys)}
+    per, big, so_far = {}, {}, 0.0
+    for s in mine:
+        kind = s.get("cat") if s.get("cat") in named else REST
+        for c in s["cs"]:
+            k = c["d"].strftime("%Y-%m")
+            if k not in at:
+                so_far += c["amount"] if month_start(c["d"]) == cur else 0
+                continue
+            per.setdefault(kind, [0.0] * len(keys))[at[k]] += c["amount"]
+            if c["amount"] > big.get(k, (0,))[0]:
+                big[k] = (c["amount"], s.get("name", ""), s["period"][1] >= LONG_DAYS)
+    series = [{"name": n, "rest": n == REST, "values": [round(v, 2) for v in per[n]]} for n in named + [REST] if n in per]
+    sums = [round(sum(sr["values"][j] for sr in series), 2) for j in range(len(keys))]
+    dearest = None
+    if len(keys) >= 3 and any(sums):
+        j = max(range(len(keys)), key=lambda j: (sums[j], -j))
+        b = big.get(keys[j])
+        dearest = {"month": keys[j], "amount": sums[j], "name": b[1] if b and b[2] else "", "charge": b[0] if b and b[2] else None}
+    month_kinds = {"labels": keys, "series": series, "dearest": dearest,
+                   "so_far": None if cur in labels else {"month": cur.strftime("%Y-%m"), "amount": round(so_far, 2), "to": asof.isoformat()}}
+
+    # what the plans in force came to then and now, at the prices of the day: quiet growth shows here
+    def rate(month):
+        end = add_months(month, 1) - timedelta(days=1)
+        total = 0.0
+        for s in mine:
+            before = [c for c in s["cs"] if c["d"] <= end]
+            if before and before[-1]["d"] + timedelta(days=s["period"][1] + min(30, max(10, s["period"][1] * 0.25))) >= month:
+                total += before[-1]["amount"] * s["period"][4] / 12
+        return round(total, 2)
+
+    creep = None
+    then = next((x for x in labels if x >= first), None)
+    if then is not None and (cur.year - then.year) * 12 + cur.month - then.month >= 6:
+        end = (add_months(then, 1) - timedelta(days=1)).isoformat()
+        creep = {"month": then.strftime("%Y-%m"), "then": rate(then), "now": round(sum(c[1] for c in cats.values()) / 12, 2),
+                 "started": sum(1 for i in live if i["currency"] == main and i["first"] > end)}
+
+    # every price change, oldest first, and what it adds (or saves) in a year
+    changes = []
+    for i in items:
+        for f in i["flags"]:
+            if f["kind"] in ("price_rise", "price_drop"):
+                changes.append({"n": i["n"], "name": i["name"], "currency": i["currency"], "from": f["from"], "to": f["to"],
+                                "on": f["since"], "kind": "rise" if f["kind"] == "price_rise" else "drop"})
+            elif f["kind"] == "price_notice" and i["amount"] and abs(f["to"] - i["amount"]) >= 0.005:
+                changes.append({"n": i["n"], "name": i["name"], "currency": i["currency"], "from": i["amount"], "to": f["to"],
+                                "on": f["on"], "kind": "notice"})
+    for ch in changes:
+        ch["pct"] = round((ch["to"] / ch["from"] - 1) * 100)
+        ch["extra"] = round((ch["to"] - ch["from"]) * by_n[ch["n"]]["per_year"], 2)
+    changes.sort(key=lambda c: (c["on"] or "9999-12-31", c["n"]))
+
+    # plans that are one thing bought more than once, each group once
+    sets = []
+    for g in pairs:
+        ns = {x["n"] for x in g}
+        for s2 in [s2 for s2 in sets if s2 & ns]:
+            ns |= s2
+            sets.remove(s2)
+        sets.append(ns)
+    overlaps = []
+    for ns in sorted(sets, key=min):
+        g = [by_n[n] for n in sorted(ns)]
+        same = len({x["currency"] for x in g}) == 1
+        overlaps.append({"ns": sorted(ns), "currency": g[0]["currency"] if same else "",
+                         "yearly": round(sum(x["yearly"] for x in g), 2) if same else None})
+
+    ours = [i for i in live if i["currency"] == main]
+    return {"kinds": kinds, "month_kinds": month_kinds, "creep": creep, "changes": changes, "overlaps": overlaps,
+            "rises_extra": round(sum(c["extra"] for c in changes if c["currency"] == main and c["extra"] > 0), 2),
+            "paid": {"amount": round(sum(i["paid"] for i in ours), 2), "since": min((i["first"] for i in ours if i["first"]), default="")}}
 
 
 def check_safe(report):

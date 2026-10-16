@@ -107,12 +107,15 @@ def basics(check, pages, tag, scheme):
     p = pages.problems()
     check(tag + ": no script errors", not p["exceptions"] and not p["console_errors"], p)
     check(tag + ": no alert() ran", not p["dialogs"], p["dialogs"])
-    check(tag + ": no network requests", len(p["requests"]) == 1 and p["requests"][0].startswith("file:///"), p["requests"])
+    # the page itself, plus the fonts a kit page carries inside it as data: addresses (not the network)
+    reqs = [r for r in p["requests"] if not r.startswith("data:")]
+    check(tag + ": no network requests", len(reqs) == 1 and reqs[0].startswith("file:///"), p["requests"])
     m = pages.js("({sw: document.documentElement.scrollWidth, iw: window.innerWidth, bw: document.body.scrollWidth})")
     check(tag + ": no horizontal scroll", m["sw"] <= m["iw"] and m["bw"] <= m["iw"], m)
     wide = pages.js("""Array.from(document.querySelectorAll('main *')).filter(e => { const r = e.getBoundingClientRect();
-        return r.width > 0 && (r.right > window.innerWidth + 0.5 || r.left < -0.5) && !e.closest('.scroll-x') && !e.closest('svg'); })
+        return r.width > 0 && (r.right > window.innerWidth + 0.5 || r.left < -0.5) && !e.closest('.scroll-x') && !e.closest('.tbl-wrap') && !e.closest('svg'); })
         .slice(0, 5).map(e => e.tagName + '.' + e.className)""")
     check(tag + ": nothing sticks out of the page", not wide, wide)
     bg = pages.js("getComputedStyle(document.body).backgroundColor")
-    check(tag + ": %s background" % scheme, bg == ("rgb(0, 0, 0)" if scheme == "dark" else "rgb(245, 245, 243)"), bg)
+    # dark is pure black; light is the old pages' paper or the kit's grey
+    check(tag + ": %s background" % scheme, bg == "rgb(0, 0, 0)" if scheme == "dark" else bg in ("rgb(245, 245, 243)", "rgb(236, 236, 236)"), bg)

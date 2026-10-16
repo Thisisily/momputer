@@ -10,8 +10,8 @@ writes a pretend browser tree, as if <folder>/local were %LOCALAPPDATA%:
 
 and exported.html, a bookmarks file as Firefox would export it.
 
-Everything is invented and every site is a .example name, a local address or not a web page at
-all, so nothing here leads anywhere. Some titles and addresses are hostile on purpose. The same
+Everything is invented and every site is a .example or .test name, a local address or not a web
+page at all, so nothing here leads anywhere. Some titles and addresses are hostile on purpose. The same
 files come out every time.
 Python 3.8+, standard library only.
 """
@@ -94,6 +94,35 @@ def write_bookmarks(out):
         url("Mail: inbox", "https://mail-app.example/#/inbox", (2024, 1, 1), (2026, 10, 12)),
         url("Mail: settings", "https://mail-app.example/#/settings", (2024, 1, 2), (2026, 7, 7)),
     ]
+    # Three folders that tell a story on the page: a trip saved in three weeks and never opened since (a time
+    # capsule, two of its links now gone), the project in use right now, and an idea from 2021 that went quiet.
+    atlas = [url("Atlas trip: rail pass", "https://atlas-rail.example/pass", (2023, 4, 2), None),
+             url("Atlas trip: night train", "https://atlas-rail.example/night-train", (2023, 4, 2), (2023, 5, 20)),
+             url("Harbour hotel", "https://atlas-hotels.example/harbour", (2023, 4, 4), (2023, 5, 18)),
+             url("Old town guesthouse", "https://atlas-hotels.example/old-town", (2023, 4, 4), None),
+             url("Ferry times", "https://ferries.example/atlas", (2023, 4, 9), (2023, 5, 21)),
+             url("Museum tickets", "https://museum-tickets.example/atlas", (2023, 4, 11), None),
+             url("Packing list", "https://lists.example/packing", (2023, 4, 15), (2023, 5, 16)),
+             url("Atlas phrasebook", "https://phrasebook.example/atlas", (2023, 4, 16), None),
+             url("Coastal walks", "https://walks.example/atlas-coast", (2023, 4, 20), None)]
+    nimbus = [url("Nimbus board", "https://nimbus.example/board", (2025, 3, 3), (2026, 10, 12)),
+              url("Nimbus roadmap", "https://nimbus.example/roadmap", (2025, 3, 4), (2026, 10, 9)),
+              url("Nimbus API reference", "https://docs.nimbus.example/api", (2025, 6, 1), (2026, 10, 8)),
+              url("Nimbus style guide", "https://docs.nimbus.example/style", (2025, 6, 2), (2026, 9, 30)),
+              url("Release checklist", "https://docs.nimbus.example/release", (2025, 11, 5), (2026, 10, 1)),
+              url("Nimbus status", "https://status.nimbus.example/", (2026, 1, 10), (2026, 10, 11)),
+              url("Design review notes", "https://nimbus.example/reviews/12", (2026, 2, 14), (2026, 9, 1)),
+              url("Storefront test shop", "https://shop.storefront.test/admin", (2026, 4, 2), (2026, 10, 10)),
+              url("Payments sandbox", "https://payments.copperline.example/sandbox", (2026, 5, 5), (2026, 10, 2)),
+              url("Nimbus metrics", "https://nimbus.example/metrics", (2026, 7, 7), (2026, 10, 12)),
+              url("Launch plan", "https://nimbus.example/launch", (2026, 8, 8), (2026, 10, 5))]
+    storefront = [url("Storefront: pricing calculator", "https://storefront.test/pricing", (2021, 9, 1), (2022, 3, 1)),
+                  url("Storefront: shipping rates", "https://storefront.test/shipping", (2021, 9, 2), (2022, 2, 1)),
+                  url("Copperline payments", "https://payments.copperline.example/", (2021, 9, 5), (2022, 1, 10)),
+                  url("Product photo tips", "https://photo-tips.example/products", (2021, 10, 1), None),
+                  url("Small shop newsletter", "https://smallshop.example/newsletter", (2021, 10, 3), None),
+                  url("Packaging supplier", "https://packaging.example/boxes", (2022, 1, 12), (2022, 4, 4)),
+                  url("Market stall permit", "https://permits.example/market", (2022, 2, 2), None)]
     odd = [url(t, "https://odd-%d.example/page" % i, (2021, 2, 1 + i), None) for i, t in enumerate(HOSTILE_TITLES)]
     odd += [url(HOSTILE_TITLES[1], "https://twice.example/", (2022, 2, 2), (2026, 2, 2)), url(HOSTILE_TITLES[0], "https://twice.example", (2023, 2, 2), None)]
     odd += [
@@ -119,6 +148,9 @@ def write_bookmarks(out):
         folder("Pile", pile),
         folder("Reading", reading),
         folder("Odd ones", odd),
+        folder("Atlas trip", atlas, (2023, 4, 2)),
+        folder("Nimbus project", nimbus, (2025, 3, 3)),
+        folder("Storefront ideas", storefront, (2021, 9, 1)),
         url("Local server", "http://localhost:8080/", (2025, 5, 5), (2026, 10, 1)),
         url("A file", "file:///C:/Users/someone/secret.txt", (2020, 5, 5), None),
         url("Browser settings", "chrome://settings/", (2020, 5, 6), (2026, 2, 2)),

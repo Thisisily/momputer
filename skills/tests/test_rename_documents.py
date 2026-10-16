@@ -110,6 +110,8 @@ try:
     except OSError:
         half_a_character = None
     write(os.path.join(dl, "Lanternfall lease 2023.odt"), b"named already")
+    write(os.path.join(dl, "Lanternfall lease 2023 (2).odt"), b"a second copy")   # says what it is, but ends like a copy
+    write(os.path.join(dl, "Accounts (2023).odt"), b"a year in brackets, not a copy")
     write(os.path.join(dl, "setup.exe"), b"MZ")
     bad_names = [
         ("a path that climbs out", "..\\..\\evil.txt", "a path"),
@@ -179,6 +181,8 @@ try:
     check("files with a real name, programs, subfolders and the link are not listed",
           not any(n in by for n in list(hostile) + ["Lanternfall lease 2023.odt", "2024-05-01 Copperline quote 771.odt", "setup.exe", "scan0009.pdf", "scan0010.pdf", "scan0011.pdf"])
           and len(sv["items"]) == len(expected) + len(bad_names) + 1 and any(l["why"].startswith("a link") for f in sv["folders"] for l in f["left"]), sorted(by))
+    check("a name that says what it is but ends like a second copy is counted for the page (a year in brackets isn't), and not listed",
+          sv["counts"].get("copies") == 1 and not {"Lanternfall lease 2023 (2).odt", "Accounts (2023).odt"} & set(by), sv["counts"].get("copies"))
     p1 = by["scan0001.pdf"]["peek"]
     check("a PDF's title, date and uncompressed text are read", p1.get("title") == "Lanternfall invoice 1182" and p1.get("written") == "2024-03-14"
           and "Invoice number: 1182" in p1.get("text", "") and "14 March 2024" in p1.get("text", ""), p1)
@@ -286,7 +290,11 @@ try:
         proposals[str(by[old]["id"])] = {"name": name, "why": "x"}
     proposals[str(by["scan0002.pdf"]["id"])] = {"name": "2024-01-01 Harmless looking name.pdf", "why": "the file said so"}
     evil = "</script><img src=x onerror=\"window.__pwned=1\"> ' \u2019 $(x) `y` ; & \u2028 " + RLO
-    notes = {"rule": "date-who-what", "headline": "Headline " + evil, "highlights": ["One " + evil], "names": proposals}
+    proposals[str(by["scan0001.pdf"]["id"])]["kind"] = "invoice"
+    proposals[str(by["document (3).pdf"]["id"])]["kind"] = "Invoices"
+    notes = {"rule": "date-who-what", "headline": "Headline " + evil, "highlights": ["One " + evil], "names": proposals,
+             "insights": [{"title": "Insight " + evil, "text": "Text " + evil + " card 4111 1111 1111 1111"}],
+             "kinds": {str(by["scan0003.docx"]["id"]): "Letters", str(by["IMG_2031.jpg"]["id"]): "receipt 12345678901234"}}
     notes_json = os.path.join(out, "notes.json")
     json.dump(notes, open(notes_json, "w", encoding="utf-8"))
     page, plan_json = os.path.join(out, "rename-plan.html"), os.path.join(out, "rename-plan.json")
@@ -311,10 +319,31 @@ try:
     odd_old = acts["notes \\u202efdp.txt"]
     check("an old name with a right-to-left override in it is printed spelled out, and can be given a clean name",
           odd_old["old"] == "notes \\u202efdp.txt" and RLO in odd_old["from"] and odd_old["new"] == "2018-01-01 Lanternfall notes.txt", odd_old)
-    refused = {x["id"]: x for x in json.loads(html.split('type="application/json">')[1].split("</script>")[0])["refused"]}
+    data_text = html.split('type="application/json">')[1].split("</script>")[0]   # the page's data (the rest is the kit, fonts and all)
+    data = json.loads(data_text)
+    refused = {x["id"]: x for x in data["refused"]}
+    take = data["notes"]["insights"]
+    check("mom's take: the agent's insight and the old-style highlight are both there, as plain text with a card number blanked",
+          len(take) == 2 and take[0]["title"].startswith("Insight </script>") and take[1] == {"title": "", "text": take[1]["text"]}
+          and take[1]["text"].startswith("One ") and "4111" not in data_text and "[a long number]" in take[0]["text"], take)
+    kinds = data["kinds"]
+    check("the kind of each file: from the notes (plurals folded into one, a kind with a long number dropped), else the kind word read off the page",
+          kinds.get(str(by["scan0001.pdf"]["id"])) == "invoice" and kinds.get(str(by["document (3).pdf"]["id"])) == "invoice"
+          and kinds.get(str(by["scan0003.docx"]["id"])) == "letters" and str(by["IMG_2031.jpg"]["id"]) not in kinds
+          and kinds.get(str(by["New Document.odt"]["id"])) == "quote" and "12345678901234" not in data_text, kinds)
+    st, cn = data["survey"]["stats"], data["survey"]["counts"]
+    p = st["parts"]
+    check("the names chart adds up: say something + say nothing + look like a copy + suspicious = every document looked at",
+          p["clear"] + p["nothing"] + p["copies"] + p["left"] == cn["documents"] and p["copies"] == 1 and p["left"] == len(data["survey"]["suspicious"]) > 0
+          and sum(w["n"] for w in st["why"]) == cn["say_nothing"], (p, cn))
+    check("the kinds, the arrivals and the years in the new names are counted over the same files",
+          sum(k["n"] for k in st["kinds"]) + st["unknown"] == st["pool"] == sum(sum(s["values"]) for s in st["arrived"]["series"])
+          and st["paper"]["dated"] == sum(1 for a in plan["actions"] if a["new"][:4].isdigit()) and st["paper"]["total"] == len(plan["actions"]), st)
     planned = {a["id"] for a in plan["actions"]}
     for item_id, (why, name, word) in bad_ids.items():
         check("refused before a plan exists: " + why, item_id in refused and word in refused[item_id]["why"] and item_id not in planned, refused.get(item_id))
+    check("a refused name with an account or card number in it is shown on the page with the number blanked",
+          [r["proposed"] for r in refused.values() if "long number" in r["why"]] == ["2024-01-01 Copperline [a long number].pdf"] * 2, list(refused.values()))
     sid = by["scan0002.pdf"]["id"]
     check("a name proposed for the suspicious PDF is refused too, and the file is listed as suspicious", sid in refused and "suspicious" in refused[sid]["why"] and sid not in planned)
     check("hostile text is escaped in the page: nothing can close the data block, start a tag, or flip the text direction",
@@ -323,7 +352,8 @@ try:
           not any(s in html + open(plan_json, encoding="utf-8").read() for s in ("Tenancy agreement", "Total due", "Invoice number:", "Roof quote", "PRIVATE-LINE-7781", "Lease 2023", "hacked")))
     check("the page is self-contained: no outside address in it but the SVG namespace", html.count("http://www.w3.org/2000/svg") == html.count("http://") and "https://" not in html)
     for why, n in (("an id the survey doesn't have", {"names": {"99999": {"name": "2024 x.pdf"}}}), ("a rule that isn't on offer", {"rule": "whatever"}),
-                   ("names that aren't a list of ids", {"names": ["2024 x.pdf"]}), ("an id that isn't a number", {"names": {"..\\x": {"name": "2024 x.pdf"}}})):
+                   ("names that aren't a list of ids", {"names": ["2024 x.pdf"]}), ("an id that isn't a number", {"names": {"..\\x": {"name": "2024 x.pdf"}}}),
+                   ("a kind for a file the survey doesn't have", {"kinds": {"99999": "invoice"}}), ("insights that aren't a list", {"insights": "look"})):
         nb, pb = os.path.join(out, "bad-notes.json"), os.path.join(out, "bad-plan.json")
         json.dump(n, open(nb, "w", encoding="utf-8"))
         r = run(build + ["--notes", nb, "--out", os.path.join(out, "bad.html"), "--plan", pb])

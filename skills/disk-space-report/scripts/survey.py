@@ -14,6 +14,7 @@ Python 3.8+, standard library only.
     python survey.py --out survey.json --root "<folder>" --apparent-size    # test mode
 """
 import argparse
+import bisect
 import heapq
 import json
 import os
@@ -43,6 +44,7 @@ TAG_CLOUD = 0x9000001A      # cloud-files placeholder (OneDrive). Every other re
 BIG_FILE = 100 * MB         # files this big are remembered for the "biggest files" list
 MEDIA_MIN = 500 * MB        # videos, disk images and model files from this size are listed
 INSTALLER_AGE_DAYS = 30     # a month-old installer has done its job
+YEARS_KEPT = 12             # the "last changed" chart counts years one by one this far back
 KEEP_DEPTH = 6              # folder levels kept for the "what fills the drive" chart
 READ_AHEAD = 24             # subfolder listings read in the background per folder being walked
 TREE_FANOUT = 14
@@ -362,6 +364,11 @@ class Survey(object):
         self.findings, self.agg, self.projects, self.skipped, self.not_measured = [], {}, [], [], []
         self.big, self.old_installers, self.big_videos, self.disk_images = [], [], [], []
         self.model_files, self.old_files, self.stale_folders = [], [], []
+        # space by the year files were last changed, per drive: one counter per file, from the listing
+        this_year = datetime.now().year
+        self.year0 = this_year - YEARS_KEPT + 1
+        self.year_starts = [time.mktime((y, 1, 1, 0, 0, 0, 0, 0, -1)) for y in range(self.year0, this_year + 1)]
+        self.ages = {}
         if args.root:
             root = os.path.abspath(args.root)
             self.drives, self.other_drives = [{"root": root, "label": "Test folder", "fs": "", "test": True}], []
@@ -458,6 +465,8 @@ class Survey(object):
                 F.markers = m
         watch = F.depth == 0 or F.dl >= 0       # small files matter here: system files at a drive's top, installers
         special, apparent = self.special, self.apparent
+        starts, ages = self.year_starts, self.ages.setdefault(F.key[:1].upper(), {})
+        future = self.now + DAY                   # a date past tomorrow is a wrong clock, not a change
         own = files = cloud = 0
         newest = 0.0
         subs = []
@@ -493,8 +502,12 @@ class Survey(object):
                 size = on_disk_size(LONG + base + name, size)
             own += size
             files += 1
-            if m > newest:
-                newest = m
+            when = 0 if m > future else m
+            if size:
+                y = bisect.bisect_right(starts, when) - 1   # -1: before the first year kept (or no date)
+                ages[y] = ages.get(y, 0) + size
+            if when > newest:
+                newest = when
             if size >= BIG_FILE or watch:
                 self.file_hit(F, name, size, m, base)
         F.own = F.bytes = own
@@ -645,6 +658,8 @@ class Survey(object):
         self.finish(C, P)
         if C.depth <= KEEP_DEPTH and C.bytes >= self.keep_min and P.kids is not None:
             node = {"n": C.name, "b": C.bytes, "f": C.files}
+            if C.newest:
+                node["m"] = iso(C.newest)[:10]      # the newest change anywhere inside it
             if C.own:
                 node["o"] = C.own
             if C.kids:
@@ -902,6 +917,9 @@ class Survey(object):
             "project_count": len(self.projects),
             "lists": lists,
             "big_files": [{"path": p, "bytes": s, "modified": iso(m), "in": r} for s, p, m, r, _ in big[:150]],
+            # bytes by the year files were last changed; "older" holds everything before the first year
+            "ages": {d: {("older" if y < 0 else str(self.year0 + y)): b for y, b in sorted(h.items())}
+                     for d, h in self.ages.items() if h},
             "not_measured": self.not_measured,
             "skipped": self.skipped[:100],
             "skipped_count": self.errors,

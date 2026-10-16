@@ -48,8 +48,8 @@ def main(argv=None):
             jobs.append(("test_%s" % name, ["test_%s.py" % name, scratch] + extra))
             for part in parts:
                 jobs.append(("test_%s_%s" % (name, part), ["test_%s_%s.py" % (name, part), scratch] + keep))
-    # three that only read what was gathered and write a report: one test each, end to end
-    for name in ("calendar_fixer", "drive_audit", "disk_space_report"):
+    # those that only read what was gathered and write a report: one test each, end to end
+    for name in ("calendar_fixer", "drive_audit", "disk_space_report", "backup_checkup", "inbox_cleanup"):
         if os.path.isdir(os.path.join(SKILLS, name.replace("_", "-"))):
             jobs.append(("test_%s" % name, ["test_%s.py" % name, scratch] + extra))
     results = []

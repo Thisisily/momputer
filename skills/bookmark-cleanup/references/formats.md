@@ -7,6 +7,7 @@
 - bookmarks.json format
 - The dead-link check in detail
 - links.json format
+- The summary, and notes.json
 - Importing the new file
 - Replacing the old bookmarks instead of adding to them
 
@@ -108,6 +109,44 @@ Without `--person-agreed` it prints how many pages and sites it would ask, reque
 ```
 
 Keys of `results` are bookmark ids from `bookmarks.json`. It holds no addresses and no page content.
+
+## The summary, and notes.json
+
+`build_report.py <bookmarks.json> [--links links.json] --summary` prints the shape of the collection and writes nothing. It holds folder and site names, counts and dates, never a bookmark's title or address:
+
+```json
+{
+  "bookmarks": 273, "folders": 16, "extra_copies": 8, "empty_folders": 3, "added_this_year": 6,
+  "records_last_opened": true, "never_opened": 170,
+  "links": {"checked_on": "2026-10-13", "working": 243, "moved": 4, "gone": 6, "did_not_answer": 5, "not_asked": 15},
+  "saved_each_year": {"2021": 72, "2022": 49, "2023": 49},
+  "biggest_folders": [{"folder": "Atlas trip", "inside": "", "bookmarks": 9, "saved": "2023", "first_added": "2023-04-02",
+                       "last_added": "2023-04-20", "last_opened": "2023-05-21", "opened_in_the_last_year": 0, "never_opened": 5,
+                       "extra_copies": 0, "dead": 2}],
+  "top_sites": [{"site": "docs.copperline.example", "bookmarks": 60, "saved": "2019 to 2023", "mostly_in": "Pile", "opened_in_the_last_year": 0}],
+  "plan": {"dupes": 8, "folders": 4, "stale": 174, "bar": 12, "big": 1, "dead": 6, "look": 10}
+}
+```
+
+A "folder" here is a top-level folder, or a folder on the bookmarks bar, with everything inside it; bookmarks loose at the top level count as "Other bookmarks". `links` is `"not checked"` without `--links`; the use fields are missing when the source doesn't record when a bookmark was opened.
+
+`notes.json` is what you write from it. Every field is optional; each is shown as plain text and cut to size (headline 300 characters, insight title 90 and text 600, notes 300). Notes never change the plan or its id.
+
+```json
+{
+  "headline": "273 bookmarks, and two thirds sit in one Pile from 2019 to 2022. 8 pages are saved twice: an easy start.",
+  "insights": [
+    {"title": "The Atlas trip is a time capsule", "text": "9 bookmarks saved in 3 weeks of April 2023, opened until late May and never since. 2 of its links are gone. Keep it as a memory, or tick it into Old bookmarks."},
+    {"title": "Nimbus project is what you use now", "text": "11 bookmarks since March 2025, all opened in the last month. It may deserve a place on the bar."}
+  ],
+  "folders": [{"folder": "Atlas trip", "note": "Spring 2023 travel plans: saved in 3 weeks, untouched since May 2023."}],
+  "sites": [{"site": "docs.copperline.example", "note": "60 pages of one manual: one link to its front page would do."}]
+}
+```
+
+- `insights`: 3 to 6. Write what a bookmark manager can't: what the collection says about the person's interests over the years, folders that became time capsules, what they use now, what's worth keeping, what would help. Kind, specific, digits for numbers. A folder named in an insight gets its light on the page when it is one of the five biggest.
+- `folders` and `sites` match the summary's `folder` and `site` names (case doesn't matter). The note replaces the line the page would write under that folder or site.
+- Up to 6 insights and 40 notes of each kind are used; the rest are left out.
 
 ## Importing the new file
 

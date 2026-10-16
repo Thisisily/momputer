@@ -102,8 +102,8 @@ Set `"complete": false`. Duplicates, stale files and outside sharing are then fo
   "today": "2026-10-13",
   "sources": ["drive connector", "browser"],
   "complete": true,
-  "headline": "Four of your files are open to anyone with the link.",
-  "highlights": ["Three copies of one recording take 12 GB between them."],
+  "headline": "4 of your files are open to anyone with the link.",
+  "insights": [{"title": "One recording, kept 3 times", "text": "Offsite recording takes 4.2 GB, and 2 more copies take 8.4 GB. The copy your team uses stays, and the other 2 can go to the Trash."}],
   "notes": "Sharing came from the connector; storage numbers from Drive's storage page.",
   "storage": {"used_bytes": 12455405158, "total_bytes": 16106127360},
   "files": [
@@ -111,7 +111,8 @@ Set `"complete": false`. Duplicates, stale files and outside sharing are then fo
      "mime": "application/vnd.google-apps.spreadsheet", "size": 87040,
      "mine": true, "created": "2024-01-10", "modified": "2026-10-07", "opened": "2026-10-07",
      "trashed": false, "checksum": "",
-     "sharing": {"anyone": "writer", "domains": {"example.com": 3}}},
+     "sharing": {"anyone": "writer", "domains": {"example.com": 3}},
+     "note": "The team's live budget: shared on purpose, editing by link maybe not."},
     {"id": "1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543", "name": "Offsite recording.mp4",
      "mime": "video/mp4", "size": 4509715660, "mine": false, "owner": "Mira Okafor",
      "modified": "2025-05-11", "opened": "2025-06-02"}
@@ -137,5 +138,6 @@ Set `"complete": false`. Duplicates, stale files and outside sharing are then fo
 - `domain`: the user's own organization's domain. Leave it out for a personal account (gmail.com and the like): the report then lists every share instead of "outside".
 - `counts`, `by_type`, `by_owner`: only for a Drive too large to list. `type` there can be one of the types above or your own short label.
 - `storage`: bytes used and the total, as Drive's storage page shows them (shared with Gmail and Photos).
-- `headline` and `highlights` are yours: one sentence and up to six short findings, written after you've looked at the numbers.
+- `headline`, `insights` and `note` are yours, written after you've looked at the numbers (SKILL.md, "What you write"). `headline` is one sentence for mom's card. `insights` is up to six `{"title", "text"}` for Mom's take: what a file list can't say, with digits, each ending with what to do. A file's `note` is one line on what it seems to be for, judged by its name and place, never by opening it.
+- `highlights` (up to six short findings) still works: the page shows them as Mom's take when there are no `insights`.
 - The report masks `account`, and never shows more than names, types, sizes, owners' names, dates and counts of people.

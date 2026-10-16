@@ -292,6 +292,19 @@ p {
   margin-top: 2px;
 }
 
+/* a unit beside the big number ("%", "GB") in plain type: the dot font's signs read badly */
+.big-unit {
+  align-self: flex-end;
+  margin: 0 2px 4px -2px;
+  color: var(--ink-2);
+  font-size: 22px;
+  font-weight: 650;
+}
+
+.big-unit:empty {
+  display: none;
+}
+
 .big-label {
   margin-top: 8px;
   color: var(--ink-2);
@@ -300,6 +313,7 @@ p {
 
 .line {
   max-width: 40ch;
+  overflow-wrap: anywhere;
   margin: 10px 0 0;
   font-size: 25px;
   font-weight: 620;
@@ -848,8 +862,10 @@ section.block {
 
 .row .row-note {
   grid-column: 2 / -1;
+  min-width: 0;
   color: var(--ink-2);
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .row.lit {
@@ -957,6 +973,431 @@ details.fold[open] > summary .chev {
 
 .subtab .dim {
   font-weight: 500;
+}
+
+/* ------------------------------------------------------------------ charts */
+
+/* A chart in a card: its heading says the question it answers, the aside a total. */
+.chart-block + .chart-block {
+  margin-top: 26px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 14px;
+  margin-bottom: 14px;
+}
+
+.chart-head h3 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.chart-head .aside {
+  color: var(--ink-3);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart {
+  min-width: 0;
+}
+
+.chart-caption {
+  max-width: 60ch;
+  margin-top: 12px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 12px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+/* Columns of dots (Kit.columns) */
+.cols,
+.cols-labels {
+  display: grid;
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+  gap: 4px;
+}
+
+.col {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  border-radius: 10px;
+  transition: background-color 140ms ease;
+}
+
+.col:hover {
+  background: var(--card-2);
+}
+
+.col i {
+  display: block;
+  width: clamp(4px, 55%, 9px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--led-off);
+}
+
+.col i.on {
+  background: var(--c, var(--ink));
+}
+
+.cols-labels span:not(.w) {
+  visibility: hidden;
+}
+
+/* a label wider than its column spreads out evenly both ways; the end labels lean inward so they
+   never stick out of the card */
+.cols-labels span:first-child {
+  justify-content: flex-start;
+}
+
+.cols-labels span:last-child {
+  justify-content: flex-end;
+}
+
+.cols-labels span {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  overflow: visible;
+  padding-top: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Dots sized by value on a grid (Kit.heat) */
+.heat {
+  display: grid;
+  grid-template-columns: auto repeat(var(--cols), minmax(0, 1fr));
+  align-items: center;
+  gap: 3px;
+}
+
+.heat i {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  max-height: 22px;
+}
+
+.heat i::before {
+  content: "";
+  width: calc(var(--s) * 100%);
+  max-width: calc(var(--s) * 16px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--led-off);
+}
+
+.heat i.on::before {
+  background: var(--c, var(--ink));
+}
+
+.heat-l {
+  padding-right: 8px;
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.heat-x {
+  overflow: visible;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A hundred dots (Kit.waffle) */
+.waffle-wrap {
+  display: grid;
+  grid-template-columns: minmax(130px, 180px) minmax(0, 1fr);
+  gap: 18px 30px;
+  align-items: center;
+}
+
+.waffle {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 5px;
+}
+
+.waffle i {
+  display: block;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--led-off);
+}
+
+.waffle i.on {
+  background: var(--c, var(--ink));
+}
+
+.waffle-key .row {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  padding: 9px 0;
+}
+
+/* Ranked rows with a meter each (Kit.bars): name, meter, numbers on one line */
+/* fixed number columns, so every row's meter starts and ends in the same place */
+.bars .row {
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 1.1fr) 6em 7em;
+  column-gap: 18px;
+  padding: 12px 0;
+}
+
+.bars .row .name {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 14.5px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.bars .row .num2 {
+  white-space: normal;
+}
+
+.bars .row .meter {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+.bars .row .num {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.bars .row .num2 {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.bars .row .row-note {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+/* A sortable table (Kit.table) */
+.tbl-wrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.tbl th {
+  padding: 0;
+  border-bottom: 1px solid var(--line-2);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.tbl th button {
+  width: 100%;
+  padding: 10px 10px 10px 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: inherit;
+}
+
+.tbl th button:hover {
+  color: var(--ink);
+}
+
+.tbl th[aria-sort="ascending"] button,
+.tbl th[aria-sort="descending"] button {
+  color: var(--ink);
+}
+
+.tbl th[aria-sort="ascending"] button::after {
+  content: " \2191";
+}
+
+.tbl th[aria-sort="descending"] button::after {
+  content: " \2193";
+}
+
+.tbl td {
+  overflow-wrap: anywhere;
+  padding: 11px 10px 11px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.tbl tr:last-child td {
+  border-bottom: 0;
+}
+
+.tbl .n {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tbl td.mono {
+  font: 13px/1.45 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.tbl-foot:not(:empty) {
+  padding: 12px 0 4px;
+}
+
+/* A few figures (Kit.facts): one row, no cards of their own */
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 0;
+}
+
+.fact {
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 2px 20px;
+  border-left: 1px solid var(--line);
+}
+
+.fact:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.fact-v {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.fact-v .dots {
+  font-size: 34px;
+}
+
+.fact-v .u {
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.fact-l {
+  margin-top: 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+/* Mom's take (Kit.insights) */
+.insights .row {
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: start;
+  padding: 16px 0;
+}
+
+.ins-leds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-top: 8px;
+}
+
+.ins-body {
+  min-width: 0;
+  max-width: 64ch;
+  overflow-wrap: anywhere;
+}
+
+.ins-body b {
+  display: block;
+  font-size: 15.5px;
+  font-weight: 650;
+}
+
+.ins-body p {
+  margin-top: 3px;
+  color: var(--ink-2);
+  font-size: 14.5px;
+}
+
+.ins-body b + p {
+  margin-top: 4px;
+}
+
+.link-btn.more {
+  margin-top: 2px;
+}
+
+@media (max-width: 720px) {
+  .cols-labels span.w:not(.s) {
+    visibility: hidden;
+  }
+
+  .bars .row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .bars .row .num2 {
+    white-space: nowrap;
+  }
+
+  .bars .row .meter {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    margin-top: 8px;
+  }
+
+  .bars .row .num {
+    grid-column: 2;
+  }
+
+  .bars .row .num2 {
+    grid-column: 3;
+  }
+
+  .bars .row .row-note {
+    grid-column: 1 / -1;
+  }
+
+  .waffle-wrap {
+    grid-template-columns: 1fr;
+  }
+
+  .waffle {
+    max-width: 240px;
+  }
+
+  .fact {
+    flex-basis: 45%;
+    padding: 2px 14px;
+  }
+
+  .fact:nth-child(odd) {
+    padding-left: 0;
+    border-left: 0;
+  }
 }
 
 /* ------------------------------------------------------------------ tooltip, toast, dock */

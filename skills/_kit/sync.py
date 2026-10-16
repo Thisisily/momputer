@@ -3,6 +3,7 @@
 
     python -I sync.py            # writes the kit into each page that has its markers
     python -I sync.py --check    # changes nothing; exits 1 if a page's copy is out of date
+    python -I sync.py --only inbox-cleanup    # only that skill's pages (work on one page at a time)
 
 A page uses the kit by holding these markers (the text between each pair is replaced):
 
@@ -44,10 +45,10 @@ def parts():
     return {"css": css.replace("\r\n", "\n"), "js": read("kit.js").replace("\r\n", "\n"), "mom": mom.replace("\r\n", "\n")}
 
 
-def pages():
+def pages(only=None):
     for skill in sorted(os.listdir(SKILLS)):
         assets = os.path.join(SKILLS, skill, "assets")
-        if skill.startswith(("_", ".")) or not os.path.isdir(assets):
+        if skill.startswith(("_", ".")) or not os.path.isdir(assets) or (only and skill != only):
             continue
         for name in sorted(os.listdir(assets)):
             if name.endswith(".html"):
@@ -69,9 +70,13 @@ def fill(text, p):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     check = "--check" in argv
+    only = argv[argv.index("--only") + 1] if "--only" in argv and argv.index("--only") + 1 < len(argv) else None
+    if only and not os.path.isdir(os.path.join(SKILLS, only)):
+        print("no skill called %s" % only)
+        return 2
     p = parts()
     stale, used = [], 0
-    for path in pages():
+    for path in pages(only):
         with open(path, encoding="utf-8", newline="") as f:
             text = f.read()
         if "/*@kit-css*/" not in text:

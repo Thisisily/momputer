@@ -53,9 +53,13 @@ def py(*args):
     return run([PY, "-I"] + list(args))
 
 
-def page_checks(b, page, plan, shots):
+def page_checks(b, page, plan, R, shots):
     """The report in a headless browser: every size, light and dark, then ticking and the approval line."""
     actions = plan["actions"]
+
+    def by_name(name):
+        return next(i["n"] for i in plan["items"] if i["name"] == name)
+
     offered = {a: [i["n"] for i in plan["items"] if a in i["offers"]] for a in actions}
     suggest = {a: [i["n"] for i in plan["items"] if a in i["suggest"]] for a in actions}
 
@@ -68,13 +72,20 @@ def page_checks(b, page, plan, shots):
         b.js("try { localStorage.clear() } catch (e) {}")
         b.open(page, width, height, scheme)
         basics(check, b, tag, scheme)
-        n = b.js("({items: document.querySelectorAll('.sub-item').length, tiles: document.querySelectorAll('.tile').length,"
-                 " cols: document.querySelectorAll('svg.cols rect.col').length, bars: document.querySelectorAll('svg.hbar').length,"
+        n = b.js("({items: document.querySelectorAll('#items > li.item').length, facts: document.querySelectorAll('#facts .fact').length,"
+                 " insights: document.querySelectorAll('#take .insights .row').length, cols: document.querySelectorAll('#months .col').length,"
+                 " waffle: document.querySelectorAll('#where .waffle i').length, bars: document.querySelectorAll('#where .bars .row').length,"
+                 " table: document.querySelectorAll('#table tbody tr').length, look: document.querySelectorAll('#look .row').length,"
                  " days: document.querySelectorAll('.cal .day').length, sparks: document.querySelectorAll('svg.spark').length,"
+                 " mom: !!document.querySelector('#mom svg'), big: document.getElementById('big-num').textContent,"
                  " scripts: document.scripts.length, imgs: document.images.length, frames: document.querySelectorAll('iframe,object,embed').length,"
                  " links: Array.from(document.querySelectorAll('a[href]')).map(a => a.href)})")
-        check(tag + ": everything drew", n["items"] == len(plan["items"]) and n["tiles"] == 6 and n["cols"] == 13 and n["bars"] >= 5
-              and n["days"] == 56 and n["sparks"] >= 10, n)
+        check(tag + ": everything drew: mom, the facts, mom's take, the charts, the table, what's worth a look, the calendar, the plan",
+              n["items"] == len(plan["items"]) and n["facts"] == 5 and n["insights"] == len(R["insights"]) and n["cols"] == len(R["month_kinds"]["labels"])
+              and n["waffle"] == 100 and n["bars"] >= 5 and n["table"] == len(plan["items"]) and n["look"] >= 8 and n["days"] == 56 and n["sparks"] >= 10
+              and n["mom"] and n["big"].strip(), n)
+        lists = b.js("Array.from(document.querySelectorAll('ul.items')).map(u => Array.from(u.parentElement.querySelectorAll('button')).map(x => x.textContent))")
+        check(tag + ": every tickable list has its own Tick all and Untick all", lists and all("Tick all" in t and "Untick all" in t for t in lists), lists)
         check(tag + ": hostile names made no elements", n["scripts"] == 2 and n["imgs"] == 0 and n["frames"] == 0, n)
         check(tag + ": every link is a fixed Gmail search", n["links"] and all(
             re.fullmatch(r"https://mail\.google\.com/mail/u/0/#search/newer_than%3A400d%20[A-Za-z0-9%().'\-]+", u) for u in n["links"]), n["links"])
@@ -90,12 +101,12 @@ def page_checks(b, page, plan, shots):
     first = b.copy()
     check("first load ticks only the suggestions", first == line(suggest), (first, line(suggest)))
     b.js("document.getElementById('untick-all').click()")
-    none = b.js("document.querySelectorAll('.chip input:checked').length")
+    none = b.js("document.querySelectorAll('#items input.tick:checked').length")
     check("Untick all clears every tick", none == 0, none)
     got = b.copy()
     check("approval with nothing ticked", got == line({}), got)
     b.js("document.getElementById('tick-all').click()")
-    boxes = b.js("({on: document.querySelectorAll('.chip input:checked').length, all: document.querySelectorAll('.chip input').length})")
+    boxes = b.js("({on: document.querySelectorAll('#items input.tick:checked').length, all: document.querySelectorAll('#items input.tick').length})")
     check("Tick all ticks every box", boxes["on"] == boxes["all"] == sum(len(v) for v in offered.values()), boxes)
     got = b.copy()
     check("approval with everything ticked", got == line(offered), got)
@@ -107,7 +118,7 @@ def page_checks(b, page, plan, shots):
         got = b.copy()
         check("Tick all for '%s' brings it back" % a, (" %s=%s" % (a, ranges(offered[a]))) in got and "=none" not in got, got)
     b.js("document.getElementById('untick-all').click()")
-    b.js("""(() => { const boxes = Array.from(document.querySelectorAll('.sub-item')).map(li => li.querySelectorAll('.chip input'));
+    b.js("""(() => { const boxes = Array.from(document.querySelectorAll('#items > li.item')).map(li => li.querySelectorAll('input.tick'));
         boxes[0][0].click(); boxes[3][0].click(); boxes[3][1].click(); boxes[4][3].click(); boxes[6][4].click(); boxes[7][3].click(); })()""")
     b.js("document.getElementById('toggle-notes').click(); document.getElementById('notes').value = 'keep  number 2\\n it is <b>shared</b>';")
     got = b.copy()
@@ -126,6 +137,17 @@ def page_checks(b, page, plan, shots):
     check("ticks are remembered after a reload", again.split("\n")[0] == want.split("\n")[0], again)
     b.js("document.getElementById('tick-suggested').click()")
     check("Tick suggested only goes back to the suggestions", b.copy() == first, first)
+    # finding a subscription hides the rest of every list, and clearing it brings them back
+    b.js("(() => { const q = document.getElementById('q'); q.value = 'lanternfall'; q.dispatchEvent(new Event('input')); })()")
+    b.settle(0.5)
+    found = b.js("({items: Array.from(document.querySelectorAll('#items > li.item')).filter(li => li.offsetParent).map(li => li.querySelector('.title').textContent),"
+                 " rows: Array.from(document.querySelectorAll('#table tbody tr')).filter(tr => tr.offsetParent).length})")
+    check("search finds Lanternfall Plus in the plan and the table, and nothing else", found["items"] == ["%d. Lanternfall Plus" % by_name("Lanternfall Plus")]
+          and found["rows"] == 1, found)
+    b.js("(() => { const q = document.getElementById('q'); q.value = ''; q.dispatchEvent(new Event('input')); })()")
+    b.settle(0.5)
+    back = b.js("Array.from(document.querySelectorAll('#items > li.item')).filter(li => li.offsetParent).length")
+    check("clearing the search shows every subscription again", back == len(plan["items"]), back)
     p = b.problems()
     check("no script errors while clicking", not p["exceptions"] and not p["console_errors"], p)
 
@@ -244,8 +266,12 @@ try:
     blob = html[a:html.index("</script>", a)]
     R = json.loads(blob)
     check("the embedded data has no raw <, > or &", not re.search("[<>&" + chr(0x2028) + chr(0x2029) + "]", blob))
-    check("the template never uses innerHTML or friends", not re.search(r"innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function", html))
-    check("the page loads nothing from the network", not re.search(r"<link|<img|<iframe|src=|@import|url\(|fetch\(|XMLHttpRequest|sendBeacon|WebSocket", html.replace(blob, "")))
+    check("the template never uses innerHTML or friends (the kit's code included)", not re.search(r"innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function", html))
+    # the only url( on the page: the kit's fonts as data: addresses, and mom's own drawing pointing inside itself
+    own = re.sub(r'url\("data:font/woff2;base64,[A-Za-z0-9+/=]+"\)|url\(#[A-Za-z0-9_-]+\)', "", html.replace(blob, ""))
+    check("the page loads nothing from the network", not re.search(r"<link|<img|<iframe|src=|@import|url\(|fetch\(|XMLHttpRequest|sendBeacon|WebSocket|https?://(?!www\.w3\.org/2000/svg|mail\.google\.com/mail/u/0/#search/)", own))
+    check("the brand kit is inlined: its fonts as data, its CSS and script, and mom",
+          html.count("data:font/woff2;base64,") >= 3 and 'id="mom"' in html and "/*@kit-css*/" in html and "/*@kit-js*/" in html and "<!--@mom-->" in html)
     check("Lanternfall Plus: monthly, price rise 9.99 to 11.99, receipts not counted twice",
           len(by.get("Lanternfall Plus", [])) == 1 and by["Lanternfall Plus"][0]["period"] == "monthly" and by["Lanternfall Plus"][0]["amount"] == 11.99
           and "price_rise" in flags("Lanternfall Plus") and [i for i in R["items"] if i["name"] == "Lanternfall Plus"][0]["count"] == 25, by.get("Lanternfall Plus"))
@@ -282,6 +308,39 @@ try:
     check("no merchant name is in a link or a search", all(re.fullmatch(r"newer_than:400d .*", s["query"]) and mail_searches.SAFE_QUERY.fullmatch(s["query"]) for s in R["searches"])
           and not any(k in blob for k in ('"url"', '"href"', '"link"')))
     check("the report id is a fingerprint of the plan", plan["report_id"] == R["report_id"] and re.fullmatch(r"[0-9a-f]{10}", plan["report_id"]) is not None)
+
+    # what the page explains besides the plan, worked out by the builder
+    print("\n-- 3b. the dashboard's figures")
+    check("Atlas Photos: a cancellation e-mail, and 4 charges since: still counted, marked, and a check suggested",
+          by.get("Atlas Photos", [{}])[0].get("status") == "active" and [f for f in by["Atlas Photos"][0]["flags"] if f["kind"] == "charged_after_cancel"]
+          == [{"kind": "charged_after_cancel", "level": "red", "on": "2026-06-02", "charges": 4}] and by["Atlas Photos"][0]["suggest"] == ["check"], by.get("Atlas Photos"))
+    ins = R["insights"]
+    check("mom's take: the agent's insights as text, then the older highlights without a title",
+          len(ins) == 7 and ins[0]["title"] == "Copperline is paid twice" and ins[4]["title"].startswith("<img src=x onerror=alert(1)>")
+          and ins[5] == {"title": "", "text": "Halcyon VPN renews for a year on 28 October."} and "</script><script>alert(3)</script>" in ins[6]["text"], ins)
+    mk = R["month_kinds"]
+    months_paid = dict(R["months"])
+    check("month by month: the 12 full months before this one, by kind, adding up to what was paid", mk["labels"][0] == "2025-10" and mk["labels"][-1] == "2026-09"
+          and len(mk["labels"]) == 12 and all(abs(sum(s["values"][j] for s in mk["series"]) - months_paid[k]) < 0.02 for j, k in enumerate(mk["labels"]))
+          and mk["so_far"]["month"] == "2026-10" and abs(mk["so_far"]["amount"] - months_paid["2026-10"]) < 0.02, (mk["labels"], mk["so_far"]))
+    check("...and it knows which month cost the most, and why (Quillhaven's yearly plan)", mk["dearest"] and mk["dearest"]["month"] == "2025-11"
+          and mk["dearest"]["name"] == "Quillhaven News" and mk["dearest"]["charge"] == 119.0, mk["dearest"])
+    kinds = R["kinds"]
+    check("where it goes: at most 6 kinds, the smallest ones together, adding up to the year", len(kinds) == 6 and kinds[-1]["rest"]
+          and not any(k["rest"] for k in kinds[:-1]) and abs(sum(k["yearly"] for k in kinds) - R["totals"]["main"]["yearly"]) < 0.05
+          and "<b>Bold</b> & \"quoted\"" in kinds[-1]["of"] and [s["name"] for s in mk["series"]] == [k["name"] for k in kinds], kinds)
+    cr = R["creep"]
+    check("has it crept up: what the plans in force came to in Oct 2025, and now", cr and cr["month"] == "2025-10" and cr["now"] == R["totals"]["main"]["monthly"]
+          and 150 < cr["then"] < cr["now"] and cr["started"] >= 5, cr)
+    ch = R["changes"]
+    check("every price change, oldest first: Halcyon, Storefront, Lanternfall, then Quillhaven's announced price",
+          [(c["name"], c["kind"]) for c in ch] == [("Halcyon Vpn", "rise"), ("Storefront Plus", "rise"), ("Lanternfall Plus", "rise"), ("Quillhaven News", "notice")]
+          and [c["extra"] for c in ch] == [10.0, 12.0, 24.0, 10.0] and R["totals"]["rises_extra"] == 56.0, ch)
+    names_of = {i["n"]: i["name"] for i in R["items"]}
+    check("one thing paid twice: Copperline's two plans and Dunmere's two, each group once",
+          sorted(sorted(names_of[n] for n in o["ns"]) for o in R["overlaps"]) == [["Copperline Cloud"] * 2, ["Dunmere Streaming"] * 2]
+          and all(o["yearly"] for o in R["overlaps"]), R["overlaps"])
+    check("what the current plans were paid in all, and since when", R["totals"]["paid"]["amount"] > 4000 and R["totals"]["paid"]["since"] == "2024-10-01", R["totals"]["paid"])
 
     # refusing unsafe searches
     bad = json.load(open(charges, encoding="utf-8"))
@@ -341,7 +400,7 @@ try:
             if shots:
                 os.makedirs(shots)
             try:
-                page_checks(browser, page, plan, shots)
+                page_checks(browser, page, plan, R, shots)
             finally:
                 browser.close()
 

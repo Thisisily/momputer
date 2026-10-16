@@ -304,6 +304,19 @@ p {
   margin-top: 2px;
 }
 
+/* a unit beside the big number ("%", "GB") in plain type: the dot font's signs read badly */
+.big-unit {
+  align-self: flex-end;
+  margin: 0 2px 4px -2px;
+  color: var(--ink-2);
+  font-size: 22px;
+  font-weight: 650;
+}
+
+.big-unit:empty {
+  display: none;
+}
+
 .big-label {
   margin-top: 8px;
   color: var(--ink-2);
@@ -312,6 +325,7 @@ p {
 
 .line {
   max-width: 40ch;
+  overflow-wrap: anywhere;
   margin: 10px 0 0;
   font-size: 25px;
   font-weight: 620;
@@ -860,8 +874,10 @@ section.block {
 
 .row .row-note {
   grid-column: 2 / -1;
+  min-width: 0;
   color: var(--ink-2);
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .row.lit {
@@ -969,6 +985,431 @@ details.fold[open] > summary .chev {
 
 .subtab .dim {
   font-weight: 500;
+}
+
+/* ------------------------------------------------------------------ charts */
+
+/* A chart in a card: its heading says the question it answers, the aside a total. */
+.chart-block + .chart-block {
+  margin-top: 26px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 14px;
+  margin-bottom: 14px;
+}
+
+.chart-head h3 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.chart-head .aside {
+  color: var(--ink-3);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart {
+  min-width: 0;
+}
+
+.chart-caption {
+  max-width: 60ch;
+  margin-top: 12px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 12px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+/* Columns of dots (Kit.columns) */
+.cols,
+.cols-labels {
+  display: grid;
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+  gap: 4px;
+}
+
+.col {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  border-radius: 10px;
+  transition: background-color 140ms ease;
+}
+
+.col:hover {
+  background: var(--card-2);
+}
+
+.col i {
+  display: block;
+  width: clamp(4px, 55%, 9px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--led-off);
+}
+
+.col i.on {
+  background: var(--c, var(--ink));
+}
+
+.cols-labels span:not(.w) {
+  visibility: hidden;
+}
+
+/* a label wider than its column spreads out evenly both ways; the end labels lean inward so they
+   never stick out of the card */
+.cols-labels span:first-child {
+  justify-content: flex-start;
+}
+
+.cols-labels span:last-child {
+  justify-content: flex-end;
+}
+
+.cols-labels span {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  overflow: visible;
+  padding-top: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Dots sized by value on a grid (Kit.heat) */
+.heat {
+  display: grid;
+  grid-template-columns: auto repeat(var(--cols), minmax(0, 1fr));
+  align-items: center;
+  gap: 3px;
+}
+
+.heat i {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  max-height: 22px;
+}
+
+.heat i::before {
+  content: "";
+  width: calc(var(--s) * 100%);
+  max-width: calc(var(--s) * 16px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--led-off);
+}
+
+.heat i.on::before {
+  background: var(--c, var(--ink));
+}
+
+.heat-l {
+  padding-right: 8px;
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.heat-x {
+  overflow: visible;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A hundred dots (Kit.waffle) */
+.waffle-wrap {
+  display: grid;
+  grid-template-columns: minmax(130px, 180px) minmax(0, 1fr);
+  gap: 18px 30px;
+  align-items: center;
+}
+
+.waffle {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 5px;
+}
+
+.waffle i {
+  display: block;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--led-off);
+}
+
+.waffle i.on {
+  background: var(--c, var(--ink));
+}
+
+.waffle-key .row {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  padding: 9px 0;
+}
+
+/* Ranked rows with a meter each (Kit.bars): name, meter, numbers on one line */
+/* fixed number columns, so every row's meter starts and ends in the same place */
+.bars .row {
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 1.1fr) 6em 7em;
+  column-gap: 18px;
+  padding: 12px 0;
+}
+
+.bars .row .name {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 14.5px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.bars .row .num2 {
+  white-space: normal;
+}
+
+.bars .row .meter {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+.bars .row .num {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.bars .row .num2 {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.bars .row .row-note {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+/* A sortable table (Kit.table) */
+.tbl-wrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.tbl th {
+  padding: 0;
+  border-bottom: 1px solid var(--line-2);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.tbl th button {
+  width: 100%;
+  padding: 10px 10px 10px 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: inherit;
+}
+
+.tbl th button:hover {
+  color: var(--ink);
+}
+
+.tbl th[aria-sort="ascending"] button,
+.tbl th[aria-sort="descending"] button {
+  color: var(--ink);
+}
+
+.tbl th[aria-sort="ascending"] button::after {
+  content: " \2191";
+}
+
+.tbl th[aria-sort="descending"] button::after {
+  content: " \2193";
+}
+
+.tbl td {
+  overflow-wrap: anywhere;
+  padding: 11px 10px 11px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.tbl tr:last-child td {
+  border-bottom: 0;
+}
+
+.tbl .n {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.tbl td.mono {
+  font: 13px/1.45 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.tbl-foot:not(:empty) {
+  padding: 12px 0 4px;
+}
+
+/* A few figures (Kit.facts): one row, no cards of their own */
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 0;
+}
+
+.fact {
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 2px 20px;
+  border-left: 1px solid var(--line);
+}
+
+.fact:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.fact-v {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.fact-v .dots {
+  font-size: 34px;
+}
+
+.fact-v .u {
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.fact-l {
+  margin-top: 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+/* Mom's take (Kit.insights) */
+.insights .row {
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: start;
+  padding: 16px 0;
+}
+
+.ins-leds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding-top: 8px;
+}
+
+.ins-body {
+  min-width: 0;
+  max-width: 64ch;
+  overflow-wrap: anywhere;
+}
+
+.ins-body b {
+  display: block;
+  font-size: 15.5px;
+  font-weight: 650;
+}
+
+.ins-body p {
+  margin-top: 3px;
+  color: var(--ink-2);
+  font-size: 14.5px;
+}
+
+.ins-body b + p {
+  margin-top: 4px;
+}
+
+.link-btn.more {
+  margin-top: 2px;
+}
+
+@media (max-width: 720px) {
+  .cols-labels span.w:not(.s) {
+    visibility: hidden;
+  }
+
+  .bars .row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .bars .row .num2 {
+    white-space: nowrap;
+  }
+
+  .bars .row .meter {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    margin-top: 8px;
+  }
+
+  .bars .row .num {
+    grid-column: 2;
+  }
+
+  .bars .row .num2 {
+    grid-column: 3;
+  }
+
+  .bars .row .row-note {
+    grid-column: 1 / -1;
+  }
+
+  .waffle-wrap {
+    grid-template-columns: 1fr;
+  }
+
+  .waffle {
+    max-width: 240px;
+  }
+
+  .fact {
+    flex-basis: 45%;
+    padding: 2px 14px;
+  }
+
+  .fact:nth-child(odd) {
+    padding-left: 0;
+    border-left: 0;
+  }
 }
 
 /* ------------------------------------------------------------------ tooltip, toast, dock */
@@ -1189,12 +1630,11 @@ details.fold[open] > summary .chev {
 .gauge-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; color: var(--ink-2); font-size: 14px; font-variant-numeric: tabular-nums; }
 .gauge-foot strong { color: var(--ink); font-weight: 650; }
 .gauge-foot .hot { color: var(--red); font-weight: 600; }
+.gauge-say { max-width: 60ch; overflow-wrap: anywhere; margin-top: 8px; color: var(--ink-2); font-size: 14px; }
 .gauge-top { margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-3); font-size: 13px; }
 .gauge:hover .link-btn { text-decoration-color: var(--ink); }
 .badge { display: inline-flex; align-items: center; height: 22px; margin-left: 8px; padding: 0 9px; border-radius: 11px; background: var(--card-2); color: var(--ink-2); font-size: 12px; font-weight: 600; white-space: nowrap; vertical-align: 1px; }
-#highlights .row { grid-template-columns: 30px minmax(0, 1fr); align-items: start; padding: 15px 0; }
-.hl-leds { display: flex; flex-wrap: wrap; gap: 5px; padding-top: 8px; }
-.hl-text { max-width: 54ch; font-size: 15px; line-height: 1.5; }
+.ages-facts { margin-bottom: 26px; }
 /* ------------------------------------------------------------------ inside a drive */
 .explorer { display: grid; grid-template-columns: minmax(0, 1.75fr) minmax(250px, 1fr); gap: 14px 30px; }
 .explorer > .subtabs, .explorer > .crumbs { grid-column: 1 / -1; }
@@ -1224,6 +1664,7 @@ details.fold[open] > summary .chev {
 .ranked .row.go { cursor: zoom-in; }
 .ranked .row .name { font-size: 14px; }
 .ranked .row .meter { grid-column: 1 / -1; margin-top: 8px; }
+.ranked .row .row-note { grid-column: 1 / -1; margin-top: 2px; }
 /* ------------------------------------------------------------------ what fills them */
 .kind { border-bottom: 1px solid var(--line); }
 .kind:last-child { border-bottom: 0; }
@@ -1355,7 +1796,7 @@ details.fold[open] > summary .chev {
 </svg>
 <!--@end--></div>
     <div class="readout">
-      <div class="big"><span class="dots big-num" id="big-num">0</span><span class="led" id="big-led"></span></div>
+      <div class="big"><span class="dots big-num" id="big-num">0</span><span class="big-unit" id="big-unit"></span><span class="led" id="big-led"></span></div>
       <div class="big-label" id="big-label"></div>
       <h1 class="line" id="headline"></h1>
     </div>
@@ -1370,6 +1811,7 @@ details.fold[open] > summary .chev {
       <nav class="secnav" id="secnav" aria-label="Sections">
         <button type="button" data-target="drives">Drives</button>
         <button type="button" data-target="inside">Inside a drive</button>
+        <button type="button" data-target="ages">Last changed</button>
         <button type="button" data-target="kinds">What fills them</button>
         <button type="button" data-target="plan">The plan</button>
         <button type="button" data-target="files">Biggest files</button>
@@ -1386,8 +1828,8 @@ details.fold[open] > summary .chev {
     <section class="block" id="drives">
       <div class="section-head"><h2>Your drives</h2><span class="aside" id="drives-sub"></span></div>
       <div class="group gauges" id="strip"></div>
-      <div class="section-head hidden" id="hl-head"><h2>Worth knowing</h2></div>
-      <ul class="group rows hidden" id="highlights"></ul>
+      <div class="section-head hidden" id="take-head"><h2>Mom's take</h2><span class="aside">What a drive scanner can't tell you</span></div>
+      <div id="take"></div>
     </section>
 
     <section class="block" id="inside">
@@ -1401,6 +1843,11 @@ details.fold[open] > summary .chev {
         </div>
         <div class="ranked"><div class="section-head"><h3>Biggest in here</h3></div><ul class="rows" id="ranked"></ul></div>
       </div>
+    </section>
+
+    <section class="block hidden" id="ages">
+      <div class="section-head"><h2>Last changed</h2><span class="aside" id="ages-sub"></span></div>
+      <div class="group pad" id="ages-card"></div>
     </section>
 
     <section class="block" id="kinds">
@@ -1498,7 +1945,7 @@ var Kit = (function () {
     }
     return n;
   }
-  /** el("div", {class: "x", text: "..."}, child, ...): never innerHTML. */
+  /** el("div", {class: "x", text: "..."}, child, ...): text goes in as text, never parsed as markup. */
   function el(tag, attrs) { return fill(document.createElement(tag), attrs, arguments, 2); }
   function svg(tag, attrs) { return fill(document.createElementNS(SVGNS, tag), attrs, arguments, 2); }
 
@@ -1508,7 +1955,7 @@ var Kit = (function () {
     var u = ["B", "KB", "MB", "GB", "TB", "PB"], i = 0;
     n = Math.max(0, n);
     while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-    var d = digits != null ? digits : (n < 10 && i ? 1 : 0);
+    var d = typeof digits === "number" ? digits : (n < 10 && i ? 1 : 0);   // a formatter may be handed a row as its second argument
     return (i ? n.toFixed(d) : Math.round(n)) + " " + u[i];
   }
   /** The number and its unit apart, for a readout: ["94", "GB"]. */
@@ -1745,7 +2192,11 @@ var Kit = (function () {
     var secs = links.map(function (l) { return document.getElementById(l.getAttribute("data-target")); });
     function onScroll() {
       var y = window.scrollY + 120, best = null;
-      secs.forEach(function (s, i) { if (s && s.offsetTop <= y) best = links[i]; });
+      secs.forEach(function (s, i) { if (s && s.offsetTop <= y && s.offsetParent !== null) best = links[i]; });
+      // at the very bottom a short last section can't reach the top: light the last one shown
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) {
+        for (var i = secs.length - 1; i >= 0; i--) if (secs[i] && secs[i].offsetParent !== null) { best = links[i]; break; }
+      }
       mark(best);
     }
     var raf = null;
@@ -1811,6 +2262,183 @@ var Kit = (function () {
     return { node: node, set: set };
   }
 
+  // ---- charts: dots, like the widget's meters. They take plain numbers and labels, build
+  //      nodes with textContent only, and give every mark a tooltip. Colours are CSS values
+  //      (a page's --cN lights, or ink); text stays ink, never the colour.
+
+  /** A light: a small dot in a colour (ink-3 when none is given). */
+  function led(color) {
+    return el("span", { "class": color ? "led c" : "led", style: color ? { "--c": color } : null, "aria-hidden": "true" });
+  }
+  /** Shares of n whole dots for values, by largest remainder (so they always add up to n). */
+  function share(values, n) {
+    var sum = 0;
+    values.forEach(function (v) { sum += Math.max(0, v || 0); });
+    if (!sum || n <= 0) return values.map(function () { return 0; });
+    var exact = values.map(function (v) { return n * Math.max(0, v || 0) / sum; });
+    var out = exact.map(Math.floor), left = n - out.reduce(function (a, b) { return a + b; }, 0);
+    exact.map(function (x, i) { return [x - out[i], i]; }).sort(function (a, b) { return b[0] - a[0]; })
+      .forEach(function (r) { if (left > 0) { out[r[1]]++; left--; } });
+    return out;
+  }
+  /** "Show all 40" for a list cut short, so nothing is hidden without a sign. */
+  function moreButton(hiddenNodes, noun) {
+    var b = el("button", { "class": "link-btn more", type: "button", text: "Show " + count(hiddenNodes.length) + " more" + (noun ? " " + noun : "") });
+    b.addEventListener("click", function () { hiddenNodes.forEach(function (n) { n.classList.remove("hidden"); }); b.remove(); });
+    return b;
+  }
+  /** A legend: each series' light and name, with an optional value. */
+  function legend(items) {
+    return el("div", { "class": "chart-legend" }, items.map(function (it) {
+      return el("span", { "class": "who" }, led(it.color), el("b", { text: it.name }), it.value != null ? " " + it.value : null);
+    }));
+  }
+  /** Columns of dots over time. labels: ["2019", ...]; series: [{ name, color, values }] stacked bottom
+      up in that order. opts: { rows (dots tall, 12), fmt (value to text), label (what it shows, for
+      screen readers), caption }. Gives back the chart element. */
+  function columns(labels, series, opts) {
+    opts = opts || {};
+    var rows = opts.rows || 12, fmt = opts.fmt || String;
+    var totals = labels.map(function (_, i) { return series.reduce(function (a, s) { return a + (s.values[i] || 0); }, 0); });
+    var max = Math.max.apply(null, totals.concat([0])) || 1;
+    var grid = el("div", { "class": "cols", style: { "--n": labels.length }, role: "img", "aria-label": opts.label || "Chart" });
+    labels.forEach(function (lab, i) {
+      var lit = totals[i] > 0 ? Math.max(1, Math.round(rows * totals[i] / max)) : 0;
+      var parts = share(series.map(function (s) { return s.values[i] || 0; }), lit);
+      var col = el("div", { "class": "col" });
+      var dots = [];
+      for (var k = 0; k < rows - lit; k++) dots.push(el("i"));
+      for (var j = series.length - 1; j >= 0; j--) for (var m = 0; m < parts[j]; m++) dots.push(el("i", { "class": "on", style: { "--c": series[j].color || "var(--ink)" } }));
+      dots.forEach(function (d) { col.appendChild(d); });
+      col.addEventListener("pointermove", function (e) {
+        tip(e, String(lab), series.length > 1 ? series.filter(function (s) { return s.values[i]; }).map(function (s) { return s.name + ": " + fmt(s.values[i]); }).concat(["Together: " + fmt(totals[i])]) : [fmt(totals[i])]);
+      });
+      col.addEventListener("pointerleave", untip);
+      grid.appendChild(col);
+    });
+    // every nth label, fewer on a phone (class "s"), so they never run into each other
+    var every = Math.max(1, Math.ceil(labels.length / 12)), small = Math.max(every, Math.ceil(labels.length / 5));
+    var labs = el("div", { "class": "cols-labels", style: { "--n": labels.length }, "aria-hidden": "true" },
+      labels.map(function (lab, i) {
+        var w = i % every === 0, sm = i % small === 0;
+        return el("span", { "class": (w ? "w" : "") + (sm ? " s" : ""), text: w || sm ? String(lab) : "" });
+      }));
+    return el("div", { "class": "chart" }, grid, labs,
+      series.length > 1 ? legend(series.map(function (s) { return { name: s.name, color: s.color }; })) : null,
+      opts.caption ? el("p", { "class": "chart-caption", text: opts.caption }) : null);
+  }
+  /** A grid of dots sized by value, such as weekday by hour. values[r][c]; rowLabels and colLabels
+      are short text. opts: { color, fmt, label, every (show every nth column label) }. */
+  function heat(rowLabels, colLabels, values, opts) {
+    opts = opts || {};
+    var fmt = opts.fmt || String, max = 0;
+    values.forEach(function (r) { r.forEach(function (v) { if (v > max) max = v; }); });
+    var grid = el("div", { "class": "heat", style: { "--cols": colLabels.length }, role: "img", "aria-label": opts.label || "Chart" });
+    rowLabels.forEach(function (rl, r) {
+      grid.appendChild(el("span", { "class": "heat-l", text: rl }));
+      colLabels.forEach(function (cl, c) {
+        var v = (values[r] || [])[c] || 0;
+        var cell = el("i", { "class": v ? "on" : null, style: { "--s": v ? (0.3 + 0.7 * Math.sqrt(v / (max || 1))).toFixed(2) : "0.3", "--c": opts.color || "var(--ink)" } });
+        cell.addEventListener("pointermove", function (e) { tip(e, rl + " " + cl, [fmt(v)]); });
+        cell.addEventListener("pointerleave", untip);
+        grid.appendChild(cell);
+      });
+    });
+    var every = opts.every || Math.max(1, Math.ceil(colLabels.length / 8));
+    grid.appendChild(el("span", { "class": "heat-l" }));
+    colLabels.forEach(function (cl, c) { grid.appendChild(el("span", { "class": "heat-x", text: c % every === 0 ? cl : "" })); });
+    return el("div", { "class": "chart" }, grid, opts.caption ? el("p", { "class": "chart-caption", text: opts.caption }) : null);
+  }
+  /** A hundred dots split between parts: [{ name, v, color }]. With its legend beside it. */
+  function waffle(parts, opts) {
+    opts = opts || {};
+    var fmt = opts.fmt || String, total = 0;
+    parts.forEach(function (p) { total += p.v || 0; });
+    var counts = share(parts.map(function (p) { return p.v; }), 100);
+    var grid = el("div", { "class": "waffle", role: "img", "aria-label": opts.label || "Chart" });
+    parts.forEach(function (p, i) {
+      for (var k = 0; k < counts[i]; k++) {
+        var d = el("i", { "class": "on", style: { "--c": p.color || "var(--ink)" } });
+        d.addEventListener("pointermove", function (e) { tip(e, p.name, [fmt(p.v) + " · " + pct(p.v, total)]); });
+        d.addEventListener("pointerleave", untip);
+        grid.appendChild(d);
+      }
+    });
+    for (var r = grid.children.length; r < 100; r++) grid.appendChild(el("i"));
+    var key = el("ul", { "class": "rows waffle-key" }, parts.map(function (p) {
+      return el("li", { "class": "row" }, led(p.color), el("span", { "class": "name", text: p.name }), el("span", { "class": "num", text: fmt(p.v) }), el("span", { "class": "num2", text: pct(p.v, total) }));
+    }));
+    return el("div", { "class": "chart waffle-wrap" }, grid, key);
+  }
+  /** A ranked list with a meter on each row: [{ name, sub, v, v2, color }]. opts: { fmt, fmt2, limit, n, max }. */
+  function bars(rowsIn, opts) {
+    opts = opts || {};
+    var fmt = opts.fmt || String, limit = opts.limit || 10, max = opts.max || 0;
+    rowsIn.forEach(function (r) { if (r.v > max) max = r.v; });
+    var ul = el("ul", { "class": "rows bars" }), cut = [];
+    rowsIn.forEach(function (r, i) {
+      var m = meter(max ? r.v / max : 0, { n: opts.n || 40 });
+      m.node.style.setProperty("--c", r.color || "var(--ink)");
+      var li = el("li", { "class": "row" + (i >= limit ? " hidden" : ""), "data-q": opts.searchable ? String(r.name + " " + (r.sub || "")).toLowerCase() : null },
+        el("span", { "class": "name", text: r.name }), m.node, el("span", { "class": "num", text: fmt(r.v) }),
+        el("span", { "class": "num2", text: r.v2 != null ? (opts.fmt2 || String)(r.v2) : "" }),
+        r.sub ? el("span", { "class": "row-note", text: r.sub }) : null);
+      if (i >= limit) cut.push(li);
+      ul.appendChild(li);
+    });
+    if (cut.length) ul.appendChild(el("li", { "class": "more-line" }, moreButton(cut, opts.noun)));
+    return ul;
+  }
+  /** A table you can sort by any column. cols: [{ key, label, num, mono, fmt, led }]; rows: objects.
+      opts: { limit, sort: key, desc, q: row -> search text, noun }. */
+  function table(cols, rowsIn, opts) {
+    opts = opts || {};
+    var limit = opts.limit || 25, sortKey = opts.sort || null, desc = opts.desc !== false;
+    var body = el("tbody"), head = el("tr"), cut = [], foot = el("div", { "class": "tbl-foot" });
+    function cell(c, r) {
+      var v = r[c.key], text = c.fmt ? c.fmt(v, r) : (v == null ? "–" : String(v));
+      return el("td", { "class": (c.num ? "n" : "") + (c.mono ? " mono" : "") }, c.led ? led(c.led(r)) : null, c.led ? " " : null, text);
+    }
+    function paint() {
+      body.textContent = ""; foot.textContent = ""; cut = [];
+      var rs = rowsIn.slice();
+      if (sortKey) rs.sort(function (a, b) {
+        var x = a[sortKey], y = b[sortKey];
+        var o = typeof x === "number" && typeof y === "number" ? x - y : String(x == null ? "" : x).localeCompare(String(y == null ? "" : y));
+        return desc ? -o : o;
+      });
+      rs.forEach(function (r, i) {
+        var tr = el("tr", { "class": i >= limit ? "hidden" : null, "data-q": opts.q ? String(opts.q(r)).toLowerCase() : null }, cols.map(function (c) { return cell(c, r); }));
+        if (i >= limit) cut.push(tr);
+        body.appendChild(tr);
+      });
+      if (cut.length) foot.appendChild(moreButton(cut, opts.noun));
+      Array.prototype.forEach.call(head.children, function (th, j) { th.setAttribute("aria-sort", cols[j].key === sortKey ? (desc ? "descending" : "ascending") : "none"); });
+    }
+    cols.forEach(function (c) {
+      var b = el("button", { type: "button", text: c.label });
+      b.addEventListener("click", function () { if (sortKey === c.key) desc = !desc; else { sortKey = c.key; desc = !!c.num; } paint(); });
+      head.appendChild(el("th", { "class": c.num ? "n" : null, scope: "col" }, b));
+    });
+    paint();
+    return el("div", { "class": "tbl-wrap" }, el("table", { "class": "tbl" }, el("thead", null, head), body), foot);
+  }
+  /** A few figures in a row, each a dot-matrix number over its label: [{ value, unit, label }]. */
+  function facts(items) {
+    return el("div", { "class": "facts" }, items.map(function (f) {
+      return el("div", { "class": "fact" }, el("div", { "class": "fact-v" }, el("span", { "class": "dots", text: String(f.value) }), f.unit ? el("span", { "class": "u", text: f.unit }) : null),
+        el("div", { "class": "fact-l", text: f.label }));
+    }));
+  }
+  /** Mom's take: what the agent noticed, each with the lights of what it's about. [{ title, text, colors }]. */
+  function insights(list) {
+    return el("ul", { "class": "group rows insights" }, list.map(function (it) {
+      var lights = (it.colors || []).length ? it.colors.map(led) : [led(null)];
+      return el("li", { "class": "row" }, el("span", { "class": "ins-leds" }, lights),
+        el("div", { "class": "ins-body" }, it.title ? el("b", { text: it.title }) : null, el("p", { text: it.text })));
+    }));
+  }
+
   /** Mom blinks once, a moment after the page opens. */
   function blink(mom) {
     if (!mom) return;
@@ -1832,7 +2460,8 @@ var Kit = (function () {
     $: $, el: el, svg: svg, icon: icon, bytes: bytes, bytesParts: bytesParts, count: count, pct: pct, plural: plural,
     store: store, motion: motion, animate: animate, tween: tween, countUp: countUp, reveal: reveal, whenShown: whenShown,
     smooth: smooth, swap: swap, tip: tip, untip: untip, toast: toast, copy: copy, flash: flash, theme: theme, key: key,
-    spy: spy, meter: meter, stack: stack, blink: blink, start: start
+    spy: spy, meter: meter, stack: stack, led: led, share: share, legend: legend, columns: columns, heat: heat,
+    waffle: waffle, bars: bars, table: table, facts: facts, insights: insights, blink: blink, start: start
   };
 })();
 
@@ -1856,7 +2485,10 @@ var Kit = (function () {
   function nameOf(d) { return d.test ? "Test folder" : String(d.root || "").slice(0, 2); }
   var colour = {}, byLetter = {};
   drives.forEach(function (d, i) { colour[letterOf(d)] = i < SLOTS.length ? "var(" + SLOTS[i] + ")" : "var(--ink-3)"; byLetter[letterOf(d)] = d; });
-  function hue(L) { return colour[L] || "var(--ink-3)"; }
+  // in the one-folder test the folder is "T", whatever drive letter its paths start with
+  var TEST = drives.length === 1 && !!drives[0].test;
+  function canon(L) { return TEST ? "T" : L; }
+  function hue(L) { return colour[canon(L)] || "var(--ink-3)"; }
   function pathDrive(p) {
     if (drives.length === 1 && drives[0].test) return "T";
     var s = p ? String(p) : PROFILE;
@@ -1868,10 +2500,11 @@ var Kit = (function () {
     if (PROFILE && p.toLowerCase().indexOf(PROFILE.toLowerCase() + "\\") === 0) return "~" + p.slice(PROFILE.length);
     return p;
   }
-  function led(L) { return el("span", { "class": L && colour[L] ? "led c" : "led", style: L && colour[L] ? { "--c": hue(L) } : null, "aria-hidden": "true" }); }
+  function led(L) { var c = L && colour[canon(L)]; return el("span", { "class": c ? "led c" : "led", style: c ? { "--c": c } : null, "aria-hidden": "true" }); }
   /** A drive by name with its light, and what goes with it ("C: 3.4 GB"). */
   function who(L, extra) {
-    return el("span", { "class": "who" }, led(L), el("b", { text: byLetter[L] ? nameOf(byLetter[L]) : L + ":" }), extra ? " " + extra : null);
+    var d = byLetter[canon(L)];
+    return el("span", { "class": "who" }, led(L), el("b", { text: d ? nameOf(d) : L + ":" }), extra ? " " + extra : null);
   }
   function copyBtn(text, what) {
     var b = el("button", { "class": "mini", type: "button", title: "Copy " + what, "aria-label": "Copy " + what }, Kit.icon("copy"));
@@ -1902,7 +2535,7 @@ var Kit = (function () {
     $("big-led").className = "led red";
   } else if (fullest) {
     bigN = Math.round(100 * fullest.used / fullest.total);
-    bigFmt = function (v) { return Math.round(v) + "%"; };
+    $("big-unit").textContent = "%";
     $("big-label").textContent = (fullest.test ? "of the test folder's disk" : "full: " + nameOf(fullest) + ", the fullest") + " · everything has room";
     $("big-led").className = "led green";
   }
@@ -1927,6 +2560,11 @@ var Kit = (function () {
     n.__s = Math.min(s, n.b || 0);
     return n.__s;
   }
+  // mom's line about a drive (the test folder's sits under its real drive letter)
+  function says(d) {
+    var lines = N.drives || {};
+    return lines[letterOf(d)] || (d.test ? lines[String(d.root || "").charAt(0).toUpperCase()] || "" : "");
+  }
   drives.forEach(function (d) {
     var L = letterOf(d), share = d.used / d.total, hot = d.free / d.total < 0.1;
     var m = Kit.meter(share, { n: 60, warn: hot });
@@ -1936,6 +2574,7 @@ var Kit = (function () {
       "aria-label": nameOf(d) + ": " + pct(d.used, d.total) + " full, " + bytes(d.free) + " free. Look inside" },
       el("div", { "class": "gauge-head" }, who(L), d.label && d.label !== nameOf(d) ? el("span", { "class": "label", text: d.label }) : null,
         el("span", { "class": "gauge-pct" }, pctNode, el("span", { "class": "u", text: "%" }))),
+      says(d) ? el("p", { "class": "gauge-say", text: says(d) }) : null,
       m.node,
       el("div", { "class": "gauge-foot" },
         el("span", null, el("strong", { text: bytes(d.free) }), " free of " + bytes(d.total), hot ? el("span", { "class": "hot", text: " · nearly full" }) : null,
@@ -1959,13 +2598,49 @@ var Kit = (function () {
   });
   if (!drives.length) $("strip").appendChild(el("div", { "class": "empty", text: "No local drive was surveyed." }));
 
-  // worth knowing: the agent's short findings, each with the lights of the drives it names
-  (N.highlights || []).forEach(function (h) {
-    var seen = {}, leds = [];
-    String(h).replace(/(^|[^A-Za-z])([A-Z]):(?=[\\\s,.;)]|$)/g, function (m, pre, L) { if (byLetter[L] && !seen[L]) { seen[L] = 1; leds.push(led(L)); } return m; });
-    $("highlights").appendChild(el("li", { "class": "row" }, el("span", { "class": "hl-leds" }, leds.length ? leds : led("")), el("span", { "class": "hl-text", text: h })));
-  });
-  if ((N.highlights || []).length) { $("hl-head").classList.remove("hidden"); $("highlights").classList.remove("hidden"); }
+  // mom's take: what the agent noticed that a scanner can't, each with the lights of the drives it names
+  function lettersIn(t) {
+    var seen = {}, out = [];
+    String(t).replace(/(^|[^A-Za-z])([A-Z]):(?=[\\\s,.;)]|$)/g, function (m, pre, L) { if (byLetter[L] && !seen[L]) { seen[L] = 1; out.push(L); } return m; });
+    return out;
+  }
+  var take = (N.insights || []).map(function (it) { return { title: it.title, text: it.text, colors: lettersIn(it.title + " " + it.text).map(hue) }; });
+  if (take.length) { $("take").appendChild(Kit.insights(take)); $("take-head").classList.remove("hidden"); }
+
+  // ---- last changed: space by the year files were last changed, each drive in its colour
+  (function () {
+    var ages = S.ages || {}, keys = Object.keys(ages);
+    if (!keys.length || !drives.length) return;
+    var years = {}, older = false;
+    keys.forEach(function (k) { Object.keys(ages[k]).forEach(function (y) { if (y === "older") older = true; else years[y] = 1; }); });
+    var ys = Object.keys(years).sort();
+    if (!ys.length) return;
+    var first = +ys[0], last = +ys[ys.length - 1], cols = older ? ["older"] : [];
+    for (var y = first; y <= last; y++) cols.push(String(y));
+    // the test folder is one "drive" whose tally sits under its real letter
+    var rowsBy = drives.length === 1 && drives[0].test ? { T: ages[keys[0]] } : ages;
+    var series = drives.map(function (d) { var L = letterOf(d), h = rowsBy[L] || {}; return { name: nameOf(d), color: hue(L), values: cols.map(function (c) { return h[c] || 0; }) }; })
+      .filter(function (s) { return s.values.some(function (v) { return v > 0; }); });
+    if (!series.length) return;
+    var total = 0, thisYear = 0, recent = 0;
+    series.forEach(function (s) { s.values.forEach(function (v, i) { total += v; if (cols[i] === String(last)) thisYear += v; if (cols[i] !== "older" && +cols[i] >= last - 2) recent += v; }); });
+    var old3 = total - recent;
+    var labels = cols.map(function (c) { return c === "older" ? "Before " + first : c; });
+    var card = $("ages-card");
+    function share(x) { return total ? Math.round(100 * x / total) : 0; }
+    card.appendChild(Kit.facts([
+      { value: share(thisYear), unit: "%", label: "changed in " + last },
+      { value: share(recent - thisYear), unit: "%", label: "last changed " + (last - 2) + " to " + (last - 1) },
+      { value: share(old3), unit: "%", label: "untouched since before " + (last - 2) }
+    ]));
+    card.firstChild.classList.add("ages-facts");
+    card.appendChild(Kit.columns(labels, series, { rows: 12, fmt: bytes, label: "Space by the year files were last changed",
+      caption: old3 >= total * 0.01
+        ? bytes(old3) + " of the " + bytes(total) + " counted hasn't been changed since before " + (last - 2) + ". Old isn't wrong: photos and backups are meant to sit still. It's where to look first when a drive is full."
+        : "Almost everything here changed in the last 3 years." }));
+    $("ages-sub").textContent = b.truncated ? "Of the files counted before the time limit" : "Every file counted, by the year it last changed";
+    $("ages").classList.remove("hidden");
+  })();
 
   // ---- inside a drive: a treemap that zooms. Dots in the drive's colour show the usual suspects.
   var mapBox = $("map"), rankList = $("ranked"), crumbs = $("crumbs"), tabs = $("tabs");
@@ -1991,11 +2666,25 @@ var Kit = (function () {
     }
     return path;
   }
+  // what mom knows about particular folders, from the agent's notes
+  function normPath(p) { return String(p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase(); }
+  var placeNotes = {};
+  (N.places || []).forEach(function (pl) { placeNotes[normPath(pl.path)] = pl.note; });
+  function here() {
+    var d = byLetter[currentL], p = String(d && d.root || "").replace(/\\+$/, "");
+    for (var i = 1; i < trail.length; i++) p += "\\" + trail[i].n;
+    return p;
+  }
+  function day(iso) {
+    var t = iso ? new Date(String(iso) + "T12:00:00") : null;
+    return t && !isNaN(t) ? t.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "";
+  }
   function parts(node) {
-    var kids = node.c || [], sum = 0, out = [];
+    var kids = node.c || [], sum = 0, out = [], base = here();
     kids.forEach(function (k) {
       sum += k.b;
-      out.push({ name: k.n, v: k.b, node: k.c && k.c.length ? k : null, est: !!k.est, partial: !!k.p, share: k.b ? suspectsIn(k) / k.b : 0, rule: k.r });
+      out.push({ name: k.n, v: k.b, node: k.c && k.c.length ? k : null, est: !!k.est, partial: !!k.p, share: k.b ? suspectsIn(k) / k.b : 0, rule: k.r,
+        m: k.m, note: placeNotes[normPath(base + "\\" + k.n)] || "" });
     });
     var own = node.o || 0;
     if (own > 0) out.push({ name: trail.length === 1 ? "Files at the top of the drive (page file, hibernation file)" : "Files directly in this folder", v: own, plain: true, share: 0 });
@@ -2044,7 +2733,9 @@ var Kit = (function () {
   }
   function tipFor(e, it, node) {
     var d = byLetter[currentL];
-    Kit.tip(e, it.name, [bytes(it.v) + " · " + pct(it.v, node.b) + " of this folder" + (d ? " · " + pct(it.v, d.used) + " of " + nameOf(d) : ""),
+    Kit.tip(e, it.name, [it.note ? "Mom: " + it.note : "",
+      bytes(it.v) + " · " + pct(it.v, node.b) + " of this folder" + (d ? " · " + pct(it.v, d.used) + " of " + nameOf(d) : ""),
+      it.m ? "Last changed " + day(it.m) : "",
       it.est ? "Worked out from what's left over, not measured" : it.plain ? "" : it.share > 0.02 ? Math.round(100 * it.share) + "% of it is the usual suspects" : "",
       it.node ? "Click to open" : it.partial ? "Only partly counted" : ""]);
   }
@@ -2099,6 +2790,7 @@ var Kit = (function () {
         el("span", { "class": "name", text: it.name + (it.partial ? " (partly counted)" : "") }),
         el("span", { "class": "num", text: bytes(it.v) }),
         el("span", { "class": "num2", text: pct(it.v, node.b) }),
+        it.note ? el("span", { "class": "row-note", text: it.note }) : null,
         m.node);
       row.addEventListener("pointerenter", function () { lightUp(i, true); });
       row.addEventListener("pointerleave", function () { lightUp(i, false); });
@@ -2425,6 +3117,11 @@ var Kit = (function () {
 
   drawBig();
   update();
+  // a section with nothing to show is hidden, and so is its button
+  Array.prototype.forEach.call(document.querySelectorAll("#secnav [data-target]"), function (bt) {
+    var sec = $(bt.getAttribute("data-target"));
+    if (sec && sec.classList.contains("hidden")) bt.classList.add("hidden");
+  });
   Kit.spy($("secnav"));
   Kit.start();
   Kit.blink($("mom"));

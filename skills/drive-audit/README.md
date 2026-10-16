@@ -1,6 +1,6 @@
 # drive-audit
 
-An Agent Skill that reviews a Google Drive without changing anything and without opening a single file, and turns it into one private report page. The page has charts of what fills the storage by type, by owner and by the year files were last touched, and lists of what is open to anyone with the link, what is shared outside the organization or with personal addresses, duplicates, untitled and empty files, files untouched for over a year, the biggest files and what sits in the Trash, plus searches to reuse. The user ticks the fixes they approve (every list has Tick all and Untick all) and copies an approval line back. The agent then does only those.
+An Agent Skill that reviews a Google Drive without changing anything and without opening a single file, and turns it into one private report page. The page explains the Drive first: what the agent noticed that a file list can't say, charts of what fills the storage by type, by owner and by the year files were last touched, how far each file reaches and where outside shares go, and lists of what is open to anyone with the link, what is shared outside the organization or with personal addresses, duplicates, untitled and empty files, files untouched for over a year, the biggest files and what sits in the Trash, plus searches to reuse. The user ticks the fixes they approve (every list has Tick all and Untick all) and copies an approval line back. The agent then does only those.
 
 ## Needs
 

@@ -10,14 +10,17 @@ deleting anything:
   open     one of Windows' own tools, opened for the person to use
   list     things for the person to deal with by hand, or to hand to the tidy-folders skill
 
-notes.json is optional and is how the agent adds judgement:
+notes.json is optional and is how the agent adds judgement, what a drive scanner can't tell:
 
     {
       "headline": "C: is 96% full; Docker's disk image and 3 old games are half of it.",
-      "highlights": ["...", "..."],
+      "insights": [{"title": "D: is a game shelf", "text": "..."}],   # mom's take, 3 to 6
+      "drives": {"C": "Your working drive: apps, code and Claude's scratch."},   # one line per drive
+      "places": [{"path": "C:\\\\Users\\\\you\\\\AppData\\\\Local\\\\Temp", "note": "Mostly Claude Code's scratch from this week."}],
       "drop": ["docker-system-prune", "games"],     # command ids or list ids to leave out of the plan
       "focus": "C:"                                  # optional: the drive the page opens on
     }
+"highlights" (a list of plain sentences) still works and shows as insights without a title.
 
 Python 3.8+, standard library only.
 """
@@ -259,7 +262,7 @@ def default_headline(survey):
 def page_view(survey):
     """The parts of the survey the page shows, with the long lists cut to what a person will read."""
     keep = ("generated", "options", "budget", "profile", "drives", "categories", "rules", "project_count",
-            "not_measured", "skipped_count")
+            "not_measured", "skipped_count", "ages")
     view = {k: survey.get(k) for k in keep}
     per_rule, findings = {}, []
     for f in survey.get("findings") or []:
@@ -271,6 +274,35 @@ def page_view(survey):
     view["big_files"] = (survey.get("big_files") or [])[:60]
     view["skipped"] = (survey.get("skipped") or [])[:30]
     return view
+
+
+def text(v, limit):
+    """A note from the agent, as plain text of a sane length (the page shows it with textContent)."""
+    return " ".join(str(v or "").split())[:limit]
+
+
+def agent_notes(notes, survey):
+    """What the agent wrote: mom's take, a line for each drive, notes on places. Text only, cut to size."""
+    out = []
+    for it in (notes.get("insights") or [])[:8]:
+        if isinstance(it, dict) and text(it.get("text"), 600):
+            out.append({"title": text(it.get("title"), 90), "text": text(it.get("text"), 600)})
+        elif isinstance(it, str) and text(it, 600):
+            out.append({"title": "", "text": text(it, 600)})
+    for h in (notes.get("highlights") or [])[:8]:
+        if len(out) < 8 and text(h, 600):
+            out.append({"title": "", "text": text(h, 600)})
+    letters = {str(d.get("root") or "")[:1].upper() for d in survey.get("drives") or []}
+    drives = {}
+    for k, v in (notes.get("drives") or {}).items() if isinstance(notes.get("drives"), dict) else []:
+        k = str(k).strip().rstrip(":").upper()[:1]
+        if k and (k in letters or k == "T") and text(v, 200):
+            drives[k] = text(v, 200)
+    places = []
+    for it in (notes.get("places") or [])[:40]:
+        if isinstance(it, dict) and text(it.get("path"), 400) and text(it.get("note"), 300):
+            places.append({"path": text(it.get("path"), 400), "note": text(it.get("note"), 300)})
+    return out, drives, places
 
 
 def embed(obj):
@@ -314,9 +346,10 @@ def main(argv=None):
     view = page_view(survey)
     view["category_drives"] = cat_split
     focus = str(notes.get("focus") or "").strip().upper()[:1]
+    insights, drive_lines, places = agent_notes(notes, survey)
     data = {"plan_id": pid, "actions": actions, "survey": view,
-            "notes": {"headline": str(notes.get("headline") or default_headline(survey)),
-                      "highlights": [str(h) for h in notes.get("highlights") or []],
+            "notes": {"headline": text(notes.get("headline") or default_headline(survey), 300),
+                      "insights": insights, "drives": drive_lines, "places": places,
                       "focus": focus if focus.isalpha() else ""}}
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(html.replace(PLACEHOLDER, embed(data)))

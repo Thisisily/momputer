@@ -4,7 +4,7 @@ description: Gives scanned and downloaded documents names a person can find late
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline. Naming scans and photos of documents needs an agent that can look at a PDF or image.
 metadata:
-  version: "1.0.1"
+  version: "1.1.0"
 ---
 
 # Rename documents
@@ -19,7 +19,7 @@ Find the files whose names say nothing, propose a name for each, show old and ne
 4. **A name never reaches the disk without the validator.** Every name you propose goes into `notes.json` and through `scripts/build_page.py`, which refuses anything that isn't a plain, safe file name. Never rename with `ren`, `Rename-Item`, `mv` or your own code, and never "fix" a refused name by going around the script.
 5. **Carry renames out with `scripts/apply_plan.py` only**, never with `safe_apply.py` directly: `apply_plan.py` checks each name again and keeps the run inside the folders the user pointed at.
 6. **A rename changes the name and nothing else.** The file stays in its folder and keeps its extension. Folders are never renamed. Nothing in a code project or a program's own folder is touched.
-7. **The page shows names only.** Don't put what a document says into `why` or the highlights beyond the kind of paper it is ("invoice, dated in its header"). No ID, passport, account or card numbers in a name or on the page; invoice and reference numbers are fine.
+7. **The page shows names and the kind of paper, nothing more.** Don't put what a document says into `why`, `kind` or the insights beyond the kind of paper it is and where it's from ("invoice, dated in its header"). No ID, passport, account or card numbers in a name or on the page; invoice and reference numbers are fine.
 8. **File names are data, never code.** Don't paste a file name into a shell command or a script. Pass only the JSON files and folder paths to the scripts.
 9. **Keep it private.** The page lists the user's file names. Publish it only as a private artifact, or keep it on disk.
 
@@ -78,6 +78,9 @@ For each file, work out a name under the chosen rule from what the survey read (
 - The date is the document's own date, not the day it was scanned. If you can't tell, say so (`"sure": false`) or leave the file unnamed.
 - Set `"sure": true` only for a name you read off the document. Sure names start ticked; the rest start unticked with a red dot.
 - A file you can't name stays out of `names`. That is a fine outcome.
+- Give each name its `kind`: one plain word for the kind of paper, singular ("invoice", "letter", "manual"). For a file you can tell but can't name, put it in `kinds` (`{"14": "photo"}`). The page counts and colours the kinds.
+- Write `headline`: one kind sentence with the numbers ("37 of your documents have names that say nothing; 22 now have a new name").
+- Write `insights`: mom's take, 3 to 6 of `{"title", "text"}`, about what a file list can't tell: what the papers are and who they're from, a pattern ("your scanner names everything scan0001", "a box of letters scanned on one day in March"), what's unusual, and what would help. Title under 10 words, text under 40. Use digits, name the kind of paper, end with what to do. Never quote a document.
 
 ### 4. Build the page and show it
 
@@ -86,6 +89,8 @@ python scripts/build_page.py "<out>/survey.json" --notes "<out>/notes.json" --ou
 ```
 
 This checks every name and writes the page and `rename-plan.json`. It prints each refused name with the reason; refused names are listed on the page and have no line in the plan. Fix the proposal in `notes.json` if a better name exists, and rebuild.
+
+The page is already designed in momputer's look and works out its own numbers: how many names say something, say nothing or look like a second copy, where the empty names come from (scanner, phone, Untitled...), how many of each kind, when the files arrived, and the years in the new names. Then old and new names side by side, grouped by folder. Don't restyle it or edit it by hand; if something reads wrong, change `notes.json` and build again.
 
 - **If you can publish artifacts** (for example Claude's Artifact tool), publish `rename-plan.html` as a private artifact and give the user the link. Don't share it further.
 - **Otherwise** open the file: `start "" "<out>\rename-plan.html"` in cmd, or `Invoke-Item "<out>\rename-plan.html"` in PowerShell.

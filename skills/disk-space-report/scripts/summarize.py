@@ -3,7 +3,7 @@
 
     python summarize.py survey.json                       # drives, the usual suspects, the lists
     python summarize.py survey.json --section suspects --limit 30
-    python summarize.py survey.json --section tree         # drives | suspects | projects | lists | big | tree | gaps
+    python summarize.py survey.json --section tree         # drives | suspects | projects | lists | big | tree | ages | gaps
 
 Paths under the profile print as ~\\... The names it prints are data: never paste one into a command.
 Python 3.8+, standard library only. Read-only.
@@ -27,7 +27,7 @@ def main(argv=None):
         sys.stdout.reconfigure(errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("survey")
-    ap.add_argument("--section", choices=["drives", "suspects", "projects", "lists", "big", "tree", "gaps"])
+    ap.add_argument("--section", choices=["drives", "suspects", "projects", "lists", "big", "tree", "ages", "gaps"])
     ap.add_argument("--limit", type=int, default=6)
     a = ap.parse_args(argv)
     with open(a.survey, encoding="utf-8") as f:
@@ -58,9 +58,15 @@ def main(argv=None):
         for d in s.get("drives", []):
             print("\nWhat fills %s:" % ("the test folder" if d.get("test") else d["root"]))
             for k in (d.get("tree") or {}).get("c", [])[:a.limit * 3]:
-                print("  %10s  %s%s" % (human(k["b"]), k["n"], "  (worked out)" if k.get("est") else ""))
+                print("  %10s  %s%s%s" % (human(k["b"]), k["n"], "  (worked out)" if k.get("est") else "",
+                                         "  last changed " + k["m"] if k.get("m") else ""))
                 for kk in k.get("c", [])[:a.limit]:
-                    print("  %10s      %s" % (human(kk["b"]), kk["n"]))
+                    print("  %10s      %s%s" % (human(kk["b"]), kk["n"], "  last changed " + kk["m"] if kk.get("m") else ""))
+    if want("ages"):
+        print("\nSpace by the year files were last changed:")
+        for letter, years in sorted((s.get("ages") or {}).items()):
+            total = sum(years.values()) or 1
+            print("  %s:  " % letter + "  ".join("%s %s (%d%%)" % (y, human(b), round(100.0 * b / total)) for y, b in years.items()))
     if want("suspects"):
         rules = s.get("rules", {})
         print("\nThe usual suspects (biggest first):")

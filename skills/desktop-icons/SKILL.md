@@ -4,7 +4,7 @@ description: Tidies a cluttered Windows desktop. Surveys the user's own Desktop 
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline.
 metadata:
-  version: "1.0.1"
+  version: "1.1.0"
 ---
 
 # Desktop icons
@@ -50,8 +50,9 @@ It takes a second or two and prints one summary line. `--root "<folder>"` is a t
 
 Print a digest with `python scripts/summarize.py "<out>/survey.json"` rather than opening the JSON whole. [references/review-guide.md](references/review-guide.md) has the survey's fields, how a shortcut is judged and the judgement calls. Then write `<out>/notes.json`:
 
-- `headline`: one sentence with the biggest finding ("87 icons on a desktop that fits about 250; 9 of the shortcuts lead nowhere.").
-- `highlights`: 3 to 6 short findings (a shortcut that runs a command, a program that looks installed twice, 2 GB of installers sitting on the desktop).
+- `headline`: one kind sentence with the biggest finding ("87 icons on a desktop that fits about 250; 9 of the shortcuts lead nowhere."). It sits on mom's card next to the icon count.
+- `insights`: 3 to 6 `{"title", "text"}` for "Mom's take", the part of the page a plain tidy-up tool can't write. Habits ("4 screenshots a month land here: Windows can save them to Pictures\Screenshots instead"), what's never used (shortcuts to programs that are also pinned, installers for programs already installed, files untouched since 2022), what's unusual (a shortcut named like a PDF that starts cmd.exe), and what to do about each. Name the thing, use digits ("6", not "six"), keep it kind: the desktop is how they work, never a mess to be told off for. Short sentence-case titles. [references/review-guide.md](references/review-guide.md) has examples.
+- `highlights`: the older form of `insights`, plain lines with no title; shown only when there are no `insights`.
 - `layout`: `"library"` (the default: loose files go to `Documents\From the Desktop`, `Pictures\Screenshots`, `Downloads\From the Desktop` and so on) or `"desktop"` (they go into a few folders on the Desktop itself: Documents, Pictures, Installers and archives...). Ask the user which they'd rather have if they haven't said. People who work from their desktop usually want the second.
 - `drop`: suggestion ids that are wrong.
 - `retarget`: a better destination for a move, inside the user's own folders.
@@ -63,7 +64,9 @@ Print a digest with `python scripts/summarize.py "<out>/survey.json"` rather tha
 python scripts/build_page.py "<out>/survey.json" --notes "<out>/notes.json" --out "<out>/desktop-plan.html"
 ```
 
-This writes the page and `desktop-plan.json` (the numbered actions and the plan id) next to it. If it stops with a message about a source or a destination, fix `notes.json`; don't work around it.
+This writes the page and `desktop-plan.json` (the numbered actions and the plan id) next to it. If it stops with a message about a source, a destination or the shape of `insights`, fix `notes.json`; don't work around it.
+
+The page explains the desktop before it asks for anything: mom's card (the icon count and your headline), the screen drawn with a dot for each icon (red ones lead nowhere, rings don't fit), your insights, what kind of things sit there and the year each arrived, where the shortcuts lead, then the plan, where the ticked things go, a sortable list of everything, what's left for the user, and what was left alone. The builder works out every number on it; quote those numbers, not your own counts.
 
 - **If you can publish artifacts** (for example Claude's Artifact tool), publish `desktop-plan.html` as a private artifact and give the user the link. Don't share it further.
 - **Otherwise** open the file: `start "" "<out>\desktop-plan.html"` in cmd, or `Invoke-Item "<out>\desktop-plan.html"` in PowerShell.
@@ -134,5 +137,5 @@ Things sent to the Recycle Bin are listed as MANUAL: the user restores those fro
 - `scripts/apply_plan.py`: dry run, apply, undo. The command you run. It limits the run to the Desktop and hands the work to `safe_apply.py`.
 - `scripts/safe_apply.py`: the file-moving engine every skill in this collection shares. Don't edit it.
 - `scripts/revert.ps1`: the fixed revert script copied next to each undo log.
-- `assets/desktop-plan-template.html`: the page. Self-contained, works offline, light and dark.
-- [references/review-guide.md](references/review-guide.md): the survey's fields, the notes.json format, judgement calls.
+- `assets/desktop-plan-template.html`: the page, built on the collection's page kit (momputer's look, mom included). Self-contained, works offline, light and dark.
+- [references/review-guide.md](references/review-guide.md): the survey's fields, the notes.json format, writing mom's take, judgement calls.

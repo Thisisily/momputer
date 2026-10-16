@@ -73,6 +73,18 @@ def main(argv=None):
             flags += " program-folder(left alone)" if ar.get("program_like") else ""
             print("  %-45s %10s %8d files %6d loose%s" % (sh(ar["path"])[:45], human(ar["bytes"]), ar["files"],
                                                          ar.get("loose_files", 0), flags))
+            if ar.get("loose_files"):
+                kinds = sorted(((t, v["files"]) for t, v in (ar.get("loose_by_type") or {}).items()), key=lambda kv: -kv[1])
+                print("      loose: %s; %d over a year old" % (", ".join("%d %s" % (n, t) for t, n in kinds[:5]),
+                                                            sum((ar.get("loose_age") or [0] * 5)[3:5])))
+        years = {}
+        for ar in s.get("areas", []):
+            for y, h in (ar.get("years") or {}).items():
+                years[y] = years.get(y, 0) + sum(v["files"] for v in h.values())
+        if years:
+            print("Files by the year they last changed: " + ", ".join(
+                "%s %d" % ("before %s" % s.get("years_from", "") if y == "older" else y, n)
+                for y, n in sorted(years.items(), key=lambda kv: (kv[0] != "older", kv[0]))))
     if a.section in (None, "games"):
         g = s.get("games", {})
         print("\nLaunchers:")

@@ -1,6 +1,6 @@
 # calendar-fixer
 
-An Agent Skill that reviews six weeks of a Google Calendar (two back, four ahead) without changing anything and turns it into one private report page. The page has charts of hours in meetings per day and per week, and lists of double bookings, back-to-back runs, meetings outside working hours, invitations never answered, stale repeating meetings, meetings with no video link or place, duplicates, events at odd hours and days with no free two hours. The user ticks the fixes they approve (every list has Tick all and Untick all) and copies an approval line back. The agent then does only those.
+An Agent Skill that reviews six weeks of a Google Calendar (two back, four ahead) without changing anything and turns it into one private report page. The page explains the calendar first: hours in meetings per week by kind (1:1s, small groups, big meetings, people from outside), busy times by weekday and hour, the room left to think, whose meetings take the time, what each repeating meeting costs a year, and a few insights the agent writes. Then it lists double bookings, back-to-back runs, meetings outside working hours, invitations never answered, stale repeating meetings, meetings with no video link or place, duplicates, events at odd hours and days with no free two hours. The user ticks the fixes they approve (every list has Tick all and Untick all) and copies an approval line back. The agent then does only those.
 
 ## Needs
 
@@ -40,7 +40,7 @@ Then ask: "fix my calendar", "where am I double booked?", "how much of my week i
 | `references/gathering.md` | Calendars, fields, browser steps, the counted form for very busy calendars, the `calendar.json` format |
 | `scripts/build_report.py` | Builds `calendar-report.html` and `calendar-plan.json` from `calendar.json` |
 | `scripts/check_approval.py` | Checks an approval line against the plan and prints exactly what was approved |
-| `assets/calendar-report-template.html` | The self-contained page (light and dark) |
+| `assets/calendar-report-template.html` | The self-contained page, with momputer's look built in (light and dark) |
 
 ## License
 

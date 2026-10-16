@@ -21,6 +21,7 @@ Python 3.8+, standard library only.
     python survey.py --out survey.json --root "<folder>" [--fake-registry reg.json] [--extra-drive "<folder>"]
 """
 import argparse
+import bisect
 import html
 import json
 import os
@@ -48,6 +49,7 @@ A_OFFLINE, A_RECALL_OPEN, A_RECALL_DATA = 0x1000, 0x40000, 0x400000
 CLOUD_ONLY = A_OFFLINE | A_RECALL_OPEN | A_RECALL_DATA
 TAG_CLOUD = 0x9000001A          # cloud-files placeholder folder (OneDrive). Any other reparse folder is a link
 OLD_COPY_DAYS = 30              # a copy older than this no longer counts as a second copy of today's files
+MONTHS = 24                     # your own files are tallied by the month they last changed, this far back
 WINDOW = 24                     # folder listings read at once
 REPO_MAX = 2000
 HEX_RX = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
@@ -120,6 +122,27 @@ def iso(ts):
         return datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts and ts > 0 else None
     except (OverflowError, OSError, ValueError):
         return None
+
+
+def month_bounds(now, n):
+    """The local start time and "YYYY-MM" key of the last n months, oldest first (this month last)."""
+    t = time.localtime(now)
+    y, m = t.tm_year, t.tm_mon
+    keys = []
+    for _ in range(n):
+        keys.append((y, m))
+        y, m = (y, m - 1) if m > 1 else (y - 1, 12)
+    keys.reverse()
+    starts = [time.mktime((yy, mm, 1, 0, 0, 0, 0, 0, -1)) for yy, mm in keys]
+    return starts, ["%04d-%02d" % k for k in keys]
+
+
+def day_start(day):
+    """Local midnight of an ISO date ("2026-03-30"), or 0."""
+    try:
+        return time.mktime(time.strptime(str(day)[:10], "%Y-%m-%d"))
+    except (ValueError, OverflowError):
+        return 0.0
 
 
 def ext_of(name):
@@ -579,6 +602,9 @@ class Place(object):
         self.truncated = self.measured = False
         self.repos, self.linked_worktrees = [], 0
         self.loose_only = False
+        self.months = {}                # "2026-03": [files, bytes] of your own files, by the month they last changed
+        self.cut = 0.0                  # the day of the newest dated copy of this folder (0: none)
+        self.since = [0, 0]             # files and bytes changed since then
 
 
 class Survey(object):
@@ -590,6 +616,7 @@ class Survey(object):
         self.entries = self.errors = self.links = 0
         self.truncated = False
         self.repos, self.repo_stats = [], {}
+        self.month_starts, self.month_keys = month_bounds(self.now, MONTHS)
         self.pool = ThreadPoolExecutor(max_workers=max(1, args.threads))
         if args.root:
             root = os.path.abspath(args.root)
@@ -985,6 +1012,13 @@ class Survey(object):
                     c[1] += size
                     if m > place.newest:
                         place.newest = m
+                    i = bisect.bisect_right(self.month_starts, m) - 1
+                    tally = place.months.setdefault(self.month_keys[i] if i >= 0 else "older", [0, 0])
+                    tally[0] += 1
+                    tally[1] += size
+                    if place.cut and m >= place.cut:
+                        place.since[0] += 1
+                        place.since[1] += size
                     if repo is not None:
                         s = self.repo_stats[repo["path"]]
                         s[0] += size
@@ -1001,6 +1035,15 @@ class Survey(object):
         return r
 
     # -------------------------------------------------- verdicts
+    def copy_cut(self, place):
+        """The day the newest dated copy of this folder was made (local midnight), or 0 if no copy has a date."""
+        pn, best = norm(place.path), 0.0
+        for p in self.protectors:
+            for c in p["covers"]:
+                if c.get("last_copy") and under(pn, norm(c["path"])):
+                    best = max(best, day_start(c["last_copy"]))
+        return best
+
     def protection(self, place):
         out, pn = [], norm(place.path)
         for p in self.protectors:
@@ -1079,7 +1122,10 @@ class Survey(object):
                 "level": level, "level_words": LEVEL_WORDS[level], "protection": prot, "verdict": verdict,
                 "counts": counts, "program_like": program_like, "truncated": pl.truncated,
                 "repos": len(pl.repos), "repos_at_risk": len(risky), "linked_worktrees": pl.linked_worktrees,
-                "maybe_on": hints[:3], "maybe_by": maybe if verdict == "none" else []})
+                "maybe_on": hints[:3], "maybe_by": maybe if verdict == "none" else [],
+                "months": {k: {"files": v[0], "bytes": v[1]} for k, v in sorted(pl.months.items())}})
+            if pl.cut:
+                rows[-1]["changed_since_copy"] = {"since": iso(pl.cut), "files": pl.since[0], "bytes": pl.since[1]}
             for r in pl.repos:
                 r["place_id"], r["place_verdict"] = i, verdict
         return rows
@@ -1088,6 +1134,8 @@ class Survey(object):
         self.find_protectors()
         self.look_at_drives()
         self.plan_places()
+        for pl in self.places:
+            pl.cut = self.copy_cut(pl)
         deadline = self.t0 + self.args.max_seconds
         for pl in self.places:
             if time.time() < deadline:

@@ -26,9 +26,11 @@ sys.path.insert(0, HERE)
 sys.dont_write_bytecode = True
 from _common import PY, Checks, hashes, ranges, remove_work_folder, run, work_folder  # noqa: E402
 from _gen_drive import BAD_IDS, box, file_id, md5, row, write_drive  # noqa: E402
-from _report_page import SIZES, NoBrowser, Pages, basics  # noqa: E402
+from _report_page import SIZES, NoBrowser, Pages  # noqa: E402
 
 MARK = "made-by-test_drive_audit.txt"
+KIT_BG = {"light": "rgb(236, 236, 236)", "dark": "rgb(0, 0, 0)"}   # the brand kit's page colours (skills/_kit/kit.css)
+FONTS = re.compile(r'url\("data:font/woff2;base64,[A-Za-z0-9+/=]+"\)')  # the kit's fonts, inlined: the only url() a page may hold
 WORDS = ("unshare", "outside", "duplicates", "empty", "stale")
 TRASH = ("duplicates", "empty", "stale")
 LINK = re.compile(r"https://drive\.google\.com/(open\?id=[A-Za-z0-9][A-Za-z0-9_-]{18,99}|drive/search\?q=[A-Za-z0-9%._-]+|drive/(quota|trash))")
@@ -141,6 +143,25 @@ def as_older_reports_did(plan, kept_row):
     return old
 
 
+def basics(pages, tag, scheme):
+    """What every report page must pass at every size, light and dark: _report_page.basics, for a page on
+    the brand kit. The kit has its own background, and its fonts are inlined as data: addresses, which the
+    browser lists as requests although nothing leaves the page. Call it right after open()."""
+    p = pages.problems()
+    check(tag + ": no script errors", not p["exceptions"] and not p["console_errors"], p)
+    check(tag + ": no alert() ran", not p["dialogs"], p["dialogs"])
+    away = [u for u in p["requests"] if not u.startswith("data:")]
+    check(tag + ": no network requests", len(away) == 1 and away[0].startswith("file:///"), away)
+    m = pages.js("({sw: document.documentElement.scrollWidth, iw: window.innerWidth, bw: document.body.scrollWidth})")
+    check(tag + ": no horizontal scroll", m["sw"] <= m["iw"] and m["bw"] <= m["iw"], m)
+    wide = pages.js("""Array.from(document.querySelectorAll('main *')).filter(e => { const r = e.getBoundingClientRect();
+        return r.width > 0 && (r.right > window.innerWidth + 0.5 || r.left < -0.5) && !e.closest('.scroll-x') && !e.closest('svg'); })
+        .slice(0, 5).map(e => e.tagName + '.' + e.className)""")
+    check(tag + ": nothing sticks out of the page", not wide, wide)
+    bg = pages.js("getComputedStyle(document.body).backgroundColor")
+    check(tag + ": %s background" % scheme, bg == KIT_BG[scheme], bg)
+
+
 def page_checks(p, page, plan, shots):
     """The report in a headless browser: every size, light and dark, then ticking and the approval line."""
     total = sum(len(plan["lists"][w]) for w in WORDS)
@@ -149,8 +170,8 @@ def page_checks(p, page, plan, shots):
         p.open(page, width, height, scheme)
         p.js("try { localStorage.clear() } catch (e) {}")
         p.open(page, width, height, scheme)
-        basics(check, p, tag, scheme)
-        n = p.js("({lists: document.querySelectorAll('#lists [data-list].card').length, boxes: document.querySelectorAll('#lists input[type=checkbox]').length,"
+        basics(p, tag, scheme)
+        n = p.js("({lists: document.querySelectorAll('#lists .plan-group[data-list]').length, boxes: document.querySelectorAll('#lists input[type=checkbox]').length,"
                  " ticked: document.querySelectorAll('#lists input[type=checkbox]:checked').length, scripts: document.scripts.length,"
                  " bad: document.querySelectorAll('img, iframe, object, embed, link, base, form, meta[http-equiv], main script, [srcdoc]').length,"
                  " handlers: Array.from(document.querySelectorAll('*')).filter(e => Array.from(e.attributes).some(a => /^on/i.test(a.name))).length,"
@@ -163,8 +184,20 @@ def page_checks(p, page, plan, shots):
         check(tag + ": no text under 11 px", n["tiny"] == 0, n["tiny"])
         check(tag + ": every link goes to drive.google.com in an allowed form, with rel=noopener noreferrer", n["links"] and all(
             LINK.fullmatch(h) and "noopener" in rel and "noreferrer" in rel for h, rel in n["links"]), [h for h, _ in n["links"] if not LINK.fullmatch(h)][:3])
+        dash = p.js("({facts: document.querySelectorAll('#facts .fact').length, meter: document.querySelectorAll('#facts .storage .meter').length,"
+                    " take: document.querySelectorAll('#take .insights > li').length, waffles: document.querySelectorAll('main .waffle').length,"
+                    " years: document.querySelectorAll('#ages-card .cols .col').length, tables: document.querySelectorAll('main table.tbl').length,"
+                    " bars: document.querySelectorAll('main ul.bars').length, mom: !!document.querySelector('#mom svg'),"
+                    " big: document.getElementById('big-num').textContent, h1: document.querySelector('h1.line').textContent})")
+        check(tag + ": the dashboard drew: 5 facts and the storage meter, Mom's take, 2 hundred-dot charts, 10 years, the tables and rankings, mom",
+              dash["facts"] == 5 and dash["meter"] == 1 and dash["take"] == 6 and dash["waffles"] == 2 and dash["years"] == 10
+              and dash["tables"] == 4 and dash["bars"] == 2 and dash["mom"], dash)
+        check(tag + ": mom's card has one number and the agent's sentence", dash["big"].isdigit() and dash["h1"].startswith("5 of your files"), dash)
+        # every list cut short opens, so the check below reads every name the page holds
+        p.js("Array.from(document.querySelectorAll('main button.more')).forEach(b => b.click()); 0")
         text = p.js("document.body.innerText")
-        for needle in ("<img src=x onerror=alert(1)>", "</script><script>", "$(whoami)", "`id`", "javascript:alert(1)", "ignore previous instructions"):
+        for needle in ("<img src=x onerror=alert(1)>", "</script><script>", "$(whoami)", "`id`", "javascript:alert(1)", "ignore previous instructions",
+                       "<img src=x onerror=alert(8)> in an insight", "<script>alert(5)</script> as a title", "<b onclick=alert(9)>a note</b>"):
             check(tag + ": shown as text: " + needle[:30], needle.lower() in text.lower())
         check(tag + ": no description and no address a file is shared with", "SECRET-DESCRIPTION" not in text and "leak-one@" not in text and "leak-two@" not in text)
         if shots:
@@ -174,18 +207,22 @@ def page_checks(p, page, plan, shots):
     p.open(page, 390, 844, "light")
     boxes = "Array.from(document.querySelectorAll('#lists input[type=checkbox]'))"
     check("approval with nothing ticked says none everywhere", p.copy() == line_for(plan, {}), p.copy())
-    missing = p.js("Array.from(document.querySelectorAll('#lists [data-list].card')).filter(c => { const t = Array.from(c.querySelectorAll('.toolbar button'))"
-                   ".map(x => x.textContent); return !(t.includes('Tick all') && t.includes('Untick all')); }).map(c => c.getAttribute('data-list'))")
-    check("every list has Tick all and Untick all", missing == [], missing)
+    # the shared page check's rule: each ul.items has its own Tick all and Untick all beside it, in the same parent
+    missing = p.js("Array.from(document.querySelectorAll('#lists ul.items')).filter(u => { const t = Array.from(u.parentElement.querySelectorAll('button'))"
+                   ".map(x => x.textContent); return !(t.includes('Tick all') && t.includes('Untick all')); }).map(u => u.parentElement.getAttribute('data-list'))")
+    lists_drawn = p.js("document.querySelectorAll('#lists ul.items').length")
+    check("every list has Tick all and Untick all", missing == [] and lists_drawn == sum(1 for w in WORDS if plan["lists"][w]), missing)
     for w in WORDS:
         if not plan["lists"][w]:
             continue
-        card = "document.querySelector('#lists [data-list=\"%s\"].card')" % w
+        card = "document.querySelector('#lists .plan-group[data-list=\"%s\"]')" % w
         p.js(card + ".querySelector('button[data-act=tick]').click()")
         got = p.copy()
+        shown = p.js(card + ".querySelectorAll('li.item:not(.hidden)').length")
         p.js(card + ".querySelector('button[data-act=untick]').click()")
         check("Tick all for '%s' ticks its %d rows and no others, Untick all clears them" % (w, len(plan["lists"][w])),
               got == line_for(plan, {w: [r["n"] for r in plan["lists"][w]]}) and p.copy() == line_for(plan, {}), got)
+        check("Tick all for '%s' shows every row it ticked (%d)" % (w, len(plan["lists"][w])), shown == len(plan["lists"][w]), shown)
     p.js("document.getElementById('tick-all').click()")
     everything = p.copy()
     check("the top Tick all ticks every row, and the line names each once", p.js(boxes + ".filter(x => x.checked).length") == total and everything == line_for(plan), everything)
@@ -201,6 +238,13 @@ def page_checks(p, page, plan, shots):
         return [window.__copied, Array.from(document.querySelectorAll('#searches code')).map(x => x.textContent)]; })()""")
     check("a search's Copy button copies that search, and every search shown is a fixed one (%d)" % len(got[1]),
           got[0] == got[1][0] and all(SEARCH.fullmatch(q) for q in got[1]), got)
+    found = p.js("""(async () => { const q = document.getElementById('q'); q.value = 'Atlas drone'; q.dispatchEvent(new Event('input'));
+        await new Promise(r => setTimeout(r, 400));
+        const seen = Array.from(document.querySelectorAll('main [data-q]')).filter(e => e.getClientRects().length).map(e => e.getAttribute('data-q'));
+        q.value = ''; q.dispatchEvent(new Event('input')); await new Promise(r => setTimeout(r, 400));
+        return [seen, document.querySelectorAll('main .nohit').length]; })()""")
+    check("the search shows only rows that match, and clearing it shows them all again",
+          found[0] and all("atlas drone" in s for s in found[0]) and found[1] == 0, found)
     p.js("document.getElementById('toggle-notes').click(); document.getElementById('notes').value = 'keep  number 2\\nplease'; 0")
     noted = p.copy()
     check("a note goes on a second line, on one line", noted == one + "\nnote: keep number 2 please", noted)
@@ -267,10 +311,39 @@ try:
     check("raw < > & never appear inside the data the page holds", not re.search(r"[<>&]", re.search(r'type="application/json">(.*?)</script>', html, re.S).group(1)))
     check("the script says how many files it couldn't offer a fix for", any("no id in a plain form" in n for n in data["script_notes"]), data["script_notes"])
     tail = html[html.index("</script>") + 9:]  # the page's own code, after the data
+    head = html[:html.index("<body")]
+    kit = re.search(r"/\*@kit-js\*/(.*?)/\*@end\*/", tail, re.S)
+    check("the page's script starts with the brand kit's, between its markers", kit is not None and tail.lstrip().startswith("<script>\n/*@kit-js*/"))
+    # the page's own code, and the kit's without its comments (they say what it never does: "never innerHTML")
+    code = tail.replace(kit.group(0), "") + re.sub(r"/\*.*?\*/", "", kit.group(1), flags=re.S) if kit else tail
     for word in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "srcdoc"):
-        check("the page's code never uses %s" % word, word not in tail)
-    check("the page has exactly two </script> tags and loads nothing", html.count("</script>") == 2 and not re.search(
-        r"<[a-z]+[^>]*\ssrc\s*=|\.src\s*=|url\(|@import|fetch\(|XMLHttpRequest|WebSocket|sendBeacon|EventSource|importScripts", tail + html[:html.index("<body")]))
+        check("the page's code never uses %s" % word, word not in code)
+    check("the brand kit is inlined: Geist, Geist Mono and Doto as data, and mom's face", len(FONTS.findall(head)) == 3 and 'id="mom"' in html
+          and "/*@kit-css*/" in head and "<!--@mom-->" in html)
+    check("the page has exactly two </script> tags and loads nothing (the kit's inlined fonts aside)", html.count("</script>") == 2 and not re.search(
+        r"<[a-z]+[^>]*\ssrc\s*=|\.src\s*=|url\(|@import|fetch\(|XMLHttpRequest|WebSocket|sendBeacon|EventSource|importScripts", code + FONTS.sub("", head)))
+    with open(os.path.join(SKILL, "assets", "drive-report-template.html"), encoding="utf-8") as f:
+        template = f.read()
+    check("the template names no site but drive.google.com", "https://" not in template.replace("https://drive.google.com/", "")
+          and "http://" not in template.replace("http://www.w3.org/", ""))
+
+    # the dashboard's own data: what the agent wrote goes in as text, and the charts add up
+    ins = data["insights"]
+    check("Mom's take: the agent's insights, at most 6, as text (the one with markup in it too)", len(ins) == 6 and all(set(i) == {"title", "text"} for i in ins)
+          and ins[-1] == {"title": "<script>alert(5)</script> as a title", "text": "<img src=x onerror=alert(8)> in an insight"}, ins[-1:])
+    check("notes on files are kept only for files with a plain id, as text", data["file_notes"] and all(b.SAFE_FILE_ID.fullmatch(k) for k in data["file_notes"])
+          and "<b onclick=alert(9)>a note</b> from the agent" in data["file_notes"].values(), data["file_notes"])
+    check("the outside domains named are only ones in a safe form", data["outside_domains"] and all(b.SAFE_DOMAIN.fullmatch(d[0]) for d in data["outside_domains"])
+          and not any("evil" in d[0] or "script" in d[0] for d in data["outside_domains"]), data["outside_domains"])
+    sums = [sum(s[1][i] for s in data["year_kinds"]) for i in range(len(data["by_year"]))]
+    check("the years split by kind add up to the years", sums == [y[1] for y in data["by_year"]] and [s[0] for s in data["year_kinds"]][:len(data["kinds"])]
+          == [k for k in data["kinds"] if k in [s[0] for s in data["year_kinds"]]], (sums, [y[1] for y in data["by_year"]]))
+    risky = data["tables"]["risky"]["rows"]
+    check("the riskiest shares come widest first, public links before outside ones", risky and [r["level"] for r in risky] == sorted((r["level"] for r in risky), reverse=True)
+          and risky[0]["public"], [r["level"] for r in risky][:8])
+    dupes = data["tables"]["dupes"]["rows"]
+    check("each duplicate group names the copy that stays, and its extra space adds up to the total", dupes
+          and sum(r["extra"] for r in dupes) == data["totals"]["dup_bytes"] and all(r["copies"] >= 2 for r in dupes), dupes[:2])
 
     # ---------------------------------------------------------------- 2. ids and searches, case by case
     print("\n-- 2. which ids make a link, and which searches can be built")

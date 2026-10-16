@@ -9,6 +9,7 @@
 - charges.json format
 - Hints
 - What the report keeps
+- What the page works out
 
 ## Statement CSV files
 
@@ -125,8 +126,12 @@ Work in a new tab in the user's signed-in browser. Open `https://mail.google.com
   "currency": "EUR",
   "sources": ["statement csv", "gmail connector"],
   "searches_run": ["receipts", "renewals", "trials", "prices", "cancelled"],
-  "headline": "About 150 euros a month goes on things that renew by themselves.",
-  "highlights": ["Lanternfall Plus went from 9.99 to 11.99 in June."],
+  "headline": "About 150 euros a month renews by itself, and two plans look like the same thing twice.",
+  "insights": [
+    {"title": "Copperline is paid twice", "text": "2.99 a month from the bank and 9.99 on the card. If the 2 TB plan holds what the 50 GB one does, the small one could go: 35.88 a year back."},
+    {"title": "Prices crept up 3 times", "text": "Lanternfall Plus went from 9.99 to 11.99 in June. Together the rises add 46 a year."}
+  ],
+  "highlights": ["Halcyon VPN renews for a year on 28 October."],
   "notes": "Receipts came from the mail; amounts and dates from two statements.",
   "charges": [
     {"date": "2026-09-03", "merchant": "LANTERNFALL PLUS AMSTERDAM", "amount": 11.99, "currency": "EUR",
@@ -151,6 +156,7 @@ Work in a new tab in the user's signed-in browser. Open `https://mail.google.com
 - A notice needs `merchant` and `kind`: `trial_ends`, `renewal`, `price_change`, `cancelled`, `payment_failed`, or `receipt` (treated as a charge). `on` is the day it takes effect, `amount` the price that will be charged, `period` one of `weekly`, `fortnightly`, `monthly`, `every 2 months`, `quarterly`, `half-yearly`, `yearly`.
 - The same payment counts once: a receipt and its statement line (same merchant, same amount, within five days), two e-mails about one payment (within two days), and a row that two overlapping exports both hold.
 - `owner` is masked on the page. `today` (YYYY-MM-DD) overrides the day the report counts from.
+- `headline`, `insights` and `highlights` are yours, written after a first build (see SKILL.md, step 3). `insights` is 3 to 6 `{"title", "text"}` (a plain string works too, without a title); `highlights` are older one-liners shown after them. At most 8 show in all; a title is cut at 90 characters, a text at 600.
 - Leave out what you don't know. Don't guess an amount.
 
 ## Hints
@@ -178,3 +184,16 @@ Hints are your text, but they often echo a statement line, so the page still tre
 ## What the report keeps
 
 For each subscription: a name, a category, the amount, the currency, the rhythm, the dates and amounts of its last 24 charges, the next date, and the last four digits of the card if the statement had a card column. The name is the first words of the statement line (or the name you gave it); for a line that reads like a message, up to 60 characters of it are shown so the user can see what it says. Numbers of seven digits or more are cut to their last four everywhere, again, when the report is built, also in your own headline and notes; write dates there as `2026-10-13` or in words. No subjects, no balances and no message text reach the page or the plan file.
+
+## What the page works out
+
+Besides the plan, `build_report.py` works out the figures the page draws, all in the main currency (nothing is converted):
+
+| Figure | What it is |
+| --- | --- |
+| `kinds` | Each kind of thing (category) and what it costs a year now. Past six, the five dearest keep a light of their own and the rest share one ("Everything else"). |
+| `month_kinds` | What each of the last 12 full months cost, by kind; the month under way is told apart, and the dearest month is named with the yearly plan that made it dear. |
+| `creep` | What the plans in force cost a month, a year ago (at that day's prices) and now, and how many started since. Left out for less than six months of history. |
+| `changes` | Every price rise, drop and announced price, oldest first, with what it adds or saves in a year. |
+| `overlaps` | Plans that look like one thing bought more than once, each group once, with their yearly total. |
+| `totals.paid` | What the current subscriptions were paid in all, and since when. |

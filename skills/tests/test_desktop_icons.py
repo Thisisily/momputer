@@ -270,6 +270,7 @@ try:
     print("\n-- 2. the page and the plan")
     evil = "</script><img src=x onerror=\"window.__pwned=1\"> ' \u2019 $(x) `y` ; & \u2028"
     notes = {"headline": "Headline " + evil, "highlights": ["One " + evil, "Two"], "drop": [sug["Twice A.lnk"]["id"]],
+             "insights": [{"title": "Title " + evil, "text": "Text " + evil}, "Just a sentence, no title"],
              "retarget": {str(sug["notes.txt"]["id"]): os.path.join(root, "Documents", "Notes", "notes.txt")},
              "add": [{"op": "recycle", "from": os.path.join(desk, "Twice B.lnk"), "why": "Why " + evil}]}
     notes_json = os.path.join(out, "notes.json")
@@ -299,6 +300,22 @@ try:
           html.count("http://www.w3.org/2000/svg") == html.count("http://") and "https://" not in html and "//cdn" not in html)
     check("what a flagged shortcut would run is described next to it, never shown",
           "characters of instructions" in acts["Invoice.pdf.lnk"].get("detail", "") and "echo pwned" not in json.dumps(plan) and "echo pwned" not in html)
+    start = html.index('<script id="desktop-data" type="application/json">') + len('<script id="desktop-data" type="application/json">')
+    data = json.loads(html[start:html.index("</script>", start)])
+    st, ins = data.get("stats") or {}, data["notes"].get("insights") or []
+    check("mom's take goes in exactly as written, as data: titles and text, a plain sentence becoming an untitled one",
+          len(ins) == 2 and ins[0] == {"title": "Title " + evil, "text": "Text " + evil} and ins[1] == {"title": "", "text": "Just a sentence, no title"}, ins)
+    years = st.get("years") or {}
+    check("the charts' numbers are worked out by the builder and add up: every thing has a kind and a year, every action a destination",
+          sum(k["count"] for k in st.get("kinds", [])) == len(sv["items"])
+          and sum(sum(s["values"]) for s in years.get("series", [])) + years.get("undated", 0) == len(sv["items"])
+          and all(len(s["values"]) == len(years["labels"]) for s in years.get("series", []))
+          and sorted(int(k) for k in st.get("dest", {})) == sorted(a["id"] for a in plan["actions"])
+          and st["shortcuts"]["total"] == sv["counts"]["shortcuts"] and st["shortcuts"]["dead"] == sv["counts"]["dead"]
+          and all(it.get("cat") for it in data["survey"]["items"]), {k: st.get(k) for k in ("kinds", "years", "shortcuts")})
+    check("the plan file holds only the plan: nothing the charts need was added to its actions",
+          all(set(a) <= {"id", "item", "group", "op", "from", "to", "bytes", "why", "default", "risk", "mtime_ns", "is_dir", "bucket", "keep", "name", "detail"}
+              for a in plan["actions"]), sorted({k for a in plan["actions"] for k in a}))
     r = run(build + ["--notes", notes_json, "--out", os.path.join(out, "again.html"), "--plan", os.path.join(out, "again.json")])
     check("building twice from the same survey and notes gives the same plan id",
           json.load(open(os.path.join(out, "again.json"), encoding="utf-8"))["plan_id"] == plan["plan_id"])
@@ -325,6 +342,8 @@ try:
         ("a retarget of something that isn't a move", {"retarget": {str(sug["Copperline Notes.lnk"]["id"]): os.path.join(root, "Documents", "x.lnk")}}),
         ("an operation that doesn't exist", {"add": [{"op": "delete", "from": os.path.join(desk, "notes.txt")}]}),
         ("a layout that doesn't exist", {"layout": "everywhere"}),
+        ("insights that aren't a list", {"insights": "Six shortcuts lead nowhere"}),
+        ("an insight whose title isn't text", {"insights": [{"title": ["x"], "text": "y"}]}),
     ]
     for why, n in bad_notes:
         nb, pb = os.path.join(out, "bad-notes.json"), os.path.join(out, "bad-plan.json")
@@ -506,6 +525,42 @@ try:
             note("no browser to open the page in: " + r.stdout.strip()[-120:])
         else:
             check("the page passes every browser check", r.returncode == 0, r.stdout[-600:] + r.stderr[-300:])
+            import check_page  # noqa: E402  (the same headless browser: driven over a pipe, its throwaway profile inside the work folder)
+            try:
+                b = check_page.Browser(T)
+            except check_page.NoBrowser as ex:
+                b = None
+                note("the dashboard was not looked at: %s" % ex)
+            if b:
+                try:
+                    bp = b.page
+                    bp.call("Emulation.setDeviceMetricsOverride", width=1280, height=900, deviceScaleFactor=1, mobile=False)
+                    bp.call("Page.navigate", url="file:///" + page.replace("\\", "/").replace("%", "%25").replace("#", "%23").replace("?", "%3F").replace(" ", "%20"))
+                    for _ in range(100):
+                        if bp.js("document.readyState") == "complete" and bp.js("!!document.getElementById('copy')"):
+                            break
+                        time.sleep(0.1)
+                    bp.settle()
+                    seen = bp.js("(function () { var q = function (s) { return document.querySelectorAll(s).length; };"
+                                 " document.getElementById('untick-all').click(); var empty = q('#after-card .after-empty');"
+                                 " document.getElementById('tick-all').click();"
+                                 " return { insights: q('#take .insights .row'), take: document.getElementById('take').textContent,"
+                                 " dots: q('#desk-card svg.desk circle'), waffle: q('#kinds-card .waffle i'), years: q('#kinds-card .cols .col'),"
+                                 " links: q('#links-card .bars .row'), table: q('#all-box tbody tr'), empty: empty, places: q('#after-card .bars .row'),"
+                                 " big: document.getElementById('big-num').textContent, pwned: !!window.__pwned }; })()")
+                finally:
+                    b.close()
+                scr = sv["screen"]
+                places = {("bin",) if a["op"] == "recycle" else ("removed",) if a["op"] == "remove-empty-dir" else os.path.dirname(a["to"]).lower()
+                          for a in plan["actions"]}
+                sc_rows = len(st["shortcuts"]["rows"]) + (1 if st["shortcuts"]["dead"] else 0) + (1 if st["shortcuts"]["unknown"] else 0)
+                want_seen = {"insights": 2, "dots": min(scr["columns"], 80) * min(scr["rows"], 40), "waffle": 100, "years": len(years["labels"]) if len(years["labels"]) > 1 else 0,
+                             "links": sc_rows, "table": len(sv["items"]), "empty": 1, "places": len(places), "big": str(len(sv["items"])), "pwned": False}
+                check("the dashboard draws what the builder worked out: mom's take, the screen (a dot per place for an icon), 100 dots by kind, "
+                      "a column a year, the shortcuts, every thing in the table, and where the ticked things go",
+                      {k: seen.get(k) for k in want_seen} == want_seen, ({k: seen.get(k) for k in want_seen}, want_seen))
+                check("mom's take shows the hostile title and text as text", "Title " + evil.replace(" ", "") in seen["take"].replace(" ", "")
+                      and "Just a sentence, no title" in seen["take"], seen["take"][:300])
     check("no __pycache__ left in the skill folder", pycache_before or not os.path.isdir(os.path.join(S, "__pycache__")))
 finally:
     for link in links + other_links:

@@ -21,8 +21,8 @@
       "Where are my tax papers?",
       "Are all my games in the Games folder?"
     ],
-    "version": "1.0.1",
-    "hash": "41dd446f1f8e96c5"
+    "version": "1.1.0",
+    "hash": "8bfee6b7bec00648"
   },
   {
     "name": "desktop-icons",
@@ -33,8 +33,8 @@
       "Clean up my desktop",
       "Which of my desktop shortcuts are broken?"
     ],
-    "version": "1.0.1",
-    "hash": "48795657394a08ba"
+    "version": "1.1.0",
+    "hash": "2a631fa02f73cf62"
   },
   {
     "name": "rename-documents",
@@ -45,8 +45,8 @@
       "Rename my scans so I can find them",
       "Give the PDFs in Downloads proper names"
     ],
-    "version": "1.0.1",
-    "hash": "9cd9fa4de2f5e306"
+    "version": "1.1.0",
+    "hash": "d4c08e73f5dbdd3a"
   },
   {
     "name": "disk-space-report",
@@ -57,8 +57,8 @@
       "Where did my disk space go?",
       "Why is C: full?"
     ],
-    "version": "1.2.0",
-    "hash": "5a270b49c26c78bc"
+    "version": "1.3.0",
+    "hash": "2800736c145e5f21"
   },
   {
     "name": "backup-checkup",
@@ -69,8 +69,8 @@
       "Are my files backed up?",
       "What would I lose if this disk died?"
     ],
-    "version": "1.0.0",
-    "hash": "d2a09486c316e4a7"
+    "version": "1.1.0",
+    "hash": "7b2a5ff0379d0572"
   },
   {
     "name": "inbox-cleanup",
@@ -81,8 +81,8 @@
       "Clean up my Gmail",
       "What should I unsubscribe from?"
     ],
-    "version": "1.0.0",
-    "hash": "2bb9456b6980556b"
+    "version": "1.1.0",
+    "hash": "9ce2c5e74d0e46c3"
   },
   {
     "name": "calendar-fixer",
@@ -93,8 +93,8 @@
       "Fix my calendar",
       "Where am I double booked?"
     ],
-    "version": "1.0.1",
-    "hash": "444c917ab35b6309"
+    "version": "1.1.0",
+    "hash": "ae7b96f454f2f156"
   },
   {
     "name": "drive-audit",
@@ -105,8 +105,8 @@
       "Audit my Google Drive",
       "What am I sharing publicly?"
     ],
-    "version": "1.0.1",
-    "hash": "fe77dd9b45b45110"
+    "version": "1.1.0",
+    "hash": "73e496951c2f602b"
   },
   {
     "name": "subscription-audit",
@@ -117,8 +117,8 @@
       "What am I subscribed to?",
       "Which free trials are about to charge me?"
     ],
-    "version": "1.0.0",
-    "hash": "5a7aa6ae5dccd0aa"
+    "version": "1.1.0",
+    "hash": "c9a261d3ba7d064d"
   },
   {
     "name": "bookmark-cleanup",
@@ -129,7 +129,7 @@
       "Clean up my bookmarks",
       "Which of my bookmarks are dead?"
     ],
-    "version": "1.0.1",
-    "hash": "7f26bd3e2d7b2fd3"
+    "version": "1.1.0",
+    "hash": "964a938bb425c203"
   }
 ]

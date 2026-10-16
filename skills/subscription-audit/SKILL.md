@@ -1,10 +1,10 @@
 ---
 name: subscription-audit
-description: Finds what a person pays for again and again and what it costs a year, read-only, from receipts and renewal notices in Gmail (through a Gmail connector or MCP server, or browser automation) and from bank or card statement CSV files they export. Detects recurring charges, price rises, two plans for the same thing, free trials about to start charging and yearly renewals coming up, and builds a private HTML report with monthly and yearly totals, a category chart, a renewal calendar, each subscription's amount history and a plan the user ticks (cancel, draft a cancellation e-mail, downgrade, switch to yearly, check it's still used). Use when the user asks to audit, find, list or cut their subscriptions or recurring payments, asks what they pay for every month, what renews soon, or which free trials are about to charge. Never cancels, pays, logs in or types card details; the user does the cancelling. Not for budgeting or tax, one-off spending, disputing a charge, or anything that needs online-banking access.
+description: Finds what a person pays for again and again and what it costs a year, read-only, from receipts and renewal notices in Gmail (a Gmail connector or MCP server, or browser automation) and bank or card statement CSV files they export. Spots price rises, two plans for one thing, plans still charging after a cancellation, trials about to charge and yearly renewals, and builds a private HTML report that explains the spending (each month by kind, where it goes, what crept up, a renewal calendar) with the agent's insights, then a plan the user ticks (cancel, draft a cancellation e-mail, downgrade, switch to yearly, check it's still used). Use when the user asks to audit, find, list or cut their subscriptions or recurring payments, what they pay for every month, what renews soon, or which free trials are about to charge. Never cancels, pays, logs in or types card details; the user does the cancelling. Not for budgeting or tax, one-off spending, disputing a charge, or anything that needs online-banking access.
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Needs at least one source. Statement CSV files the user exports, or a Gmail connector, MCP server or browser tool signed in to Gmail, or both. Python 3.8+ (standard library only) reads the statements and builds the report.
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Subscription audit
@@ -31,7 +31,7 @@ Copy this checklist and tick it off:
 ```
 - [ ] 1. Agree on the sources; say what you'll look at
 - [ ] 2. Gather (read-only) into charges.json
-- [ ] 3. Add names, categories and a headline
+- [ ] 3. Add names, categories, a headline and mom's take
 - [ ] 4. Build the report and show it
 - [ ] 5. Get the approval line and check it
 - [ ] 6. Do only what was ticked, report back, delete the scratch files
@@ -81,7 +81,14 @@ Build once, look at the names, then add `hints` to `charges.json` and build agai
 - `same_service`: names that are the same thing bought twice.
 - `periods`: a yearly plan charged only once in the statements.
 - `unused`: only what the user has told you they no longer use.
-- `headline` and `highlights`: one sentence and up to eight short findings, written after you've looked at the numbers.
+
+Then write, at the top level of `charges.json`, after you've looked at the built page's figures:
+
+- `headline`: one kind sentence for mom's card, with the number that matters ("About 235 euros a month renews by itself, and a few plans are worth a second look").
+- `insights`: mom's take, 3 to 6 of `{"title", "text"}`. Each says what a bank app can't: what's been forgotten (paid every month, last used who knows when), what overlaps (two plans for one thing, a family plan and a single one), how prices crept up, what kept charging after a cancellation, which renewal is the expensive one, and what would help. Name the service, use digits ("4.99 has gone out 4 times since 2 June"), end with what to do. Title under 10 words, text under 40. Kind and plain: no scolding, no guilt, no guessing what they "should" have.
+- `highlights` (older, optional): plain one-liners; they show under the insights without a title.
+
+Everything you write here is shown as text and cut to size; long numbers are cut to their last four digits.
 
 ### 4. Build the report and show it
 
@@ -89,7 +96,7 @@ Build once, look at the names, then add `hints` to `charges.json` and build agai
 python scripts/build_report.py "<out>/charges.json" --out "<out>/subscriptions-report.html"
 ```
 
-It writes the page and `subscriptions-plan.json`. Open the page (`start "" "<out>\subscriptions-report.html"` on Windows, `open` on macOS), or publish it as a private artifact if the user wants a link and you can. Say in a few lines what stands out: the yearly total, anything paid twice, what renews soon. Ask them to tick what they want and press **Copy approval**. Every kind of tick has Tick all and Untick all.
+It writes the page and `subscriptions-plan.json`. The page works out and draws the rest itself: the yearly total on mom's card, a row of facts, what each month cost by kind, what the plans in force cost a year ago against now, where the money goes, every subscription in a table to sort, what's worth a look (price changes, one thing paid twice, still charging after a cancellation, trials, renewals, payment-failed e-mails), eight weeks of what's coming, then the plan. Open the page (`start "" "<out>\subscriptions-report.html"` on Windows, `open` on macOS), or publish it as a private artifact if the user wants a link and you can. Say in a few lines what stands out: the yearly total, anything paid twice, what renews soon. Ask them to tick what they want and press **Copy approval**. Every kind of tick has Tick all and Untick all.
 
 ### 5. Check the approval
 
@@ -118,6 +125,7 @@ Then report: what you prepared, what's left for them to do and by when (renewal 
 - **A subscription**: the same merchant charging a steady amount weekly, every two or four weeks, monthly, every two or three months, half-yearly or yearly. Three charges make a rhythm. Two are enough only for about the same amount a year apart, or the same amount to the cent a quarter or half a year apart, and those are marked as a guess. A bill whose amount changes (energy, phone) needs four charges and counts with "about".
 - **Price rise**: a step of five per cent or more, or a smaller one that has held for two charges. A wobbling exchange rate isn't one. **Announced price**: a price-change notice.
 - **Two plans for the same thing**: one merchant charging twice each round (two amounts, or the same amount twice, on the same day or on two fixed days), or names you listed in `same_service`. App-store lines are left out: the statement doesn't say which app.
+- **Still charging after a cancellation**: a cancellation notice, then two or more charges after it (one for a yearly plan). One more round is often a notice period, so it isn't marked.
 - **Trial about to charge**: a trial-ending notice with a date still ahead.
 - **Renews soon**: a quarterly-or-slower plan due within 45 days.
 - **Stopped**: no charge for well over one rhythm, measured against the end of the statement file the charges came from, or a cancellation notice. Not counted in the totals. A plan whose statement ends over 45 days ago is still counted, and marked "nothing newer is known".
@@ -131,5 +139,5 @@ The same payment counts once: a receipt and its statement line, a receipt and an
 - `scripts/mail_searches.py`: the fixed Gmail searches.
 - `scripts/build_report.py`: `charges.json` to `subscriptions-report.html` and `subscriptions-plan.json`.
 - `scripts/approved.py`: checks an approval line against the plan and lists what it covers.
-- `assets/subscriptions-report-template.html`: the page. Self-contained, no network requests, light and dark.
+- `assets/subscriptions-report-template.html`: the page, on momputer's brand kit (`skills/_kit`, copied in). Self-contained, no network requests, light and dark.
 - [references/gathering.md](references/gathering.md): statements, the map file, the mail searches, the `charges.json` format.

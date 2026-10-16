@@ -1,6 +1,6 @@
 # inbox-cleanup
 
-An Agent Skill that reviews the last two months of a Gmail inbox without changing anything and turns it into one private report page. The page has charts of mail per day, mail per Gmail tab and the biggest senders, lists of newsletters you don't open, senders you never opened, likely spam and phishing, and big attachments, plus a declutter plan with ready Gmail searches and filter suggestions. The user ticks what they approve (every list has Tick all and Untick all) and copies an approval line back. The agent then does only those items.
+An Agent Skill that reviews the last two months of a Gmail inbox without changing anything and turns it into one private dashboard page that explains the mailbox: mail per day by kind (people, newsletters, promotions, notifications), when it arrives, what gets opened, Gmail's tabs, the busiest senders and the people you write back to, a sortable table of newsletters and shops, the unread backlog, senders never opened, big attachments and likely phishing, with the agent's own insights on top. Then a declutter plan with ready Gmail searches and filter suggestions. The user ticks what they approve (every list has Tick all and Untick all) and copies an approval line back. The agent then does only those items.
 
 ## Needs
 

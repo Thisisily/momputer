@@ -4,7 +4,7 @@ description: Surveys a Windows PC's personal folders read-only (Desktop, Documen
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline.
 metadata:
-  version: "1.0.1"
+  version: "1.1.0"
 ---
 
 # Tidy folders
@@ -54,8 +54,9 @@ python scripts/survey.py --out "<out>/survey.json"
 
 Then write `<out>/notes.json` (format in the review guide):
 
-- `headline`: one sentence with the biggest finding ("Downloads holds 1,250 loose files, 6 GB of them over a year old.").
-- `highlights`: 3 to 6 short findings the user should know (passport scans on the Desktop, Steam games spread over two drives, a 1.4 GB duplicate).
+- `headline`: one kind sentence with the biggest finding ("Downloads holds 1,250 loose files, 6 GB of them over a year old."). Mom says it on top of the page.
+- `insights`: mom's take, 3 to 6 of `{"title", "text"}`. Each says what a file browser can't: what a folder is for ("Your Desktop is a screenshot shelf"), a habit over time ("Downloads stopped being emptied in 2022"), what's unusual (papers that belong to someone else), and what would help. Title under 10 words, text under 40, digits not words, no scolding: it's their computer and their habits are fine. Naming a kind (papers, pictures, videos, music, installers, code) lights it on the page.
+- `places`: up to 60 `{"path", "note"}` for folders worth a line ("Your own tax folder: new tax papers are filed here"). The note shows beside that folder in the charts.
 - `drop`: suggestion ids that are wrong (an app icon called "invoice-icon.png", a blank template).
 - `retarget`: better destinations, such as a tax folder the user already keeps somewhere else.
 - `add`: extra moves you're confident about. Keep them inside the user's own folders.
@@ -66,7 +67,7 @@ Then write `<out>/notes.json` (format in the review guide):
 python scripts/build_page.py "<out>/survey.json" --notes "<out>/notes.json" --out "<out>/tidy-plan.html"
 ```
 
-This writes the page and `plan.json` (the numbered actions and the plan id) next to it.
+This writes the page and `plan.json` (the numbered actions and the plan id) next to it. The page is already designed in momputer's look: mom's card with the number out of place and your headline, the facts, mom's take, what fills each folder by kind of file, files by year, what lies loose where and for how long, the important papers, where the ticked moves land, then the plan. Don't restyle it or edit it by hand. If something reads wrong, change `notes.json` and build again. (`highlights`, a list of plain sentences, still works and shows as insights without a title.)
 
 - **If you can publish artifacts** (for example Claude's Artifact tool), publish `tidy-plan.html` as a private artifact and give the user the link. Don't share it further.
 - **Otherwise** open the file: `start "" "<out>\tidy-plan.html"` in cmd, or `Invoke-Item "<out>\tidy-plan.html"` in PowerShell.
@@ -134,5 +135,5 @@ Then delete the output folder (`survey.json`, `plan.json`, the page) unless the 
 - `scripts/apply_plan.py`: dry run, apply, undo. The command you run. It adds program folders and launcher game libraries to the off-limits list and hands the work to `safe_apply.py`.
 - `scripts/safe_apply.py`: the file-moving engine every skill in this collection shares. It enforces the hard rules. Don't edit it.
 - `scripts/revert.ps1`: the fixed revert script copied next to each undo log.
-- `assets/tidy-plan-template.html`: the page. Self-contained, works offline, light and dark.
-- [references/review-guide.md](references/review-guide.md): inspecting the survey, the notes.json format, judgement calls.
+- `assets/tidy-plan-template.html`: the page, in the app's look (copied in from the collection's page kit). Self-contained, works offline, light and dark.
+- [references/review-guide.md](references/review-guide.md): inspecting the survey, the notes.json format, writing mom's take, judgement calls.

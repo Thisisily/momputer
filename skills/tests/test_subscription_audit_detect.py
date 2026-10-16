@@ -171,6 +171,62 @@ def rhythm():
             check("bad rows are skipped, not guessed at: %s" % str(bad)[:50], False, repr(e))
 
 
+def dashboard():
+    """Part 3: the figures the page explains the spending with, and a plan still charging after a cancellation."""
+    gone = {"merchant": "Atlas Photos", "kind": "cancelled", "date": "2026-06-02"}
+    r = report(rows("ATLAS PHOTOS", months(12, 26, (2026, 9)), 4.99), notices=[gone])
+    check("a cancellation e-mail and 4 monthly charges since: still counted, marked red, a check suggested", len(r["items"]) == 1
+          and r["items"][0]["status"] == "active" and "charged_after_cancel" in kinds(r["items"][0]) and r["items"][0]["suggest"] == ["check"]
+          and r["totals"]["after_cancel"] == 1 and not r["stopped"], r["items"])
+    r = report(rows("ATLAS PHOTOS", months(8, 26, (2026, 9)), 4.99), notices=[dict(gone, date="2026-08-30")])
+    check("one charge after it (a notice period): not marked as still charging", len(r["items"]) == 1
+          and "charged_after_cancel" not in kinds(r["items"][0]), [(i["name"], kinds(i)) for i in r["items"]])
+    r = report(rows("QUILLHAVEN NEWS", [date(2024, 11, 2), date(2025, 11, 2)], 119.0), notices=[{"merchant": "Quillhaven News", "kind": "cancelled", "date": "2025-01-10"}])
+    check("a yearly plan that renewed after its cancellation: marked", len(r["items"]) == 1 and "charged_after_cancel" in kinds(r["items"][0]), r["items"])
+    r = report(rows("ATLAS PHOTOS", months(6, 26, (2026, 3)), 4.99) + rows("OTHER THING", months(8), 3.0), notices=[dict(gone, date="2026-03-27")])
+    check("a cancellation after the last charge is still 'cancelled', not 'still charging'", [s["name"] for s in r["stopped"]] == ["Atlas Photos"]
+          and r["stopped"][0]["why"] == "cancelled", r["stopped"])
+
+    # mom's take: the agent's words as text, cut to size, then the older highlights
+    r = report(rows("LANTERNFALL PLUS", months(4), 9.99), insights=[{"title": "Paid twice", "text": "Card 4111111111111111 pays for it twice."}, "a plain sentence works too",
+                                                                    {"title": "no text"}, 42, {"title": ["x"], "text": "x" * 2000}], highlights=["An older one-liner."])
+    ins = r["insights"]
+    check("insights: title and text kept as text, numbers scrubbed, odd entries passed over, highlights after them",
+          [i["title"] for i in ins] == ["Paid twice", "", "", ""] and "4111" not in ins[0]["text"] and ins[1]["text"] == "a plain sentence works too"
+          and len(ins[2]["text"]) <= 600 and ins[3]["text"] == "An older one-liner.", ins)
+    r = report(rows("LANTERNFALL PLUS", months(4), 9.99), insights=[{"title": "t%d" % k, "text": "x"} for k in range(12)])
+    check("insights: at most 8", len(r["insights"]) == 8, len(r["insights"]))
+
+    # kinds of thing, and what each month cost
+    names = ["LANTERNFALL STREAM", "COPPERLINE CLOUD", "NIMBUS GYM", "ATLAS NEWS", "STOREFRONT ENERGY", "MARROWGATE INSURANCE", "PINEWHISTLE MUSIC"]
+    r = report([c for k, nm in enumerate(names) for c in rows(nm, months(14, 3 + k), 10.0 + k)])
+    ks = r["kinds"]
+    check("more than 6 kinds: the 5 dearest keep a light of their own, the rest share one", len(ks) == 6 and ks[-1]["rest"] and len(ks[-1]["of"]) == 2
+          and [k["yearly"] for k in ks[:5]] == sorted([k["yearly"] for k in ks[:5]], reverse=True)
+          and abs(sum(k["yearly"] for k in ks) - r["totals"]["main"]["yearly"]) < 0.01, ks)
+    mk = r["month_kinds"]
+    check("month by month: the 12 full months before this one, then the one under way told apart", len(mk["labels"]) == 12 and mk["labels"][-1] == "2026-09"
+          and mk["so_far"]["month"] == "2026-10" and [s["name"] for s in mk["series"]] == [k["name"] for k in ks]
+          and all(abs(sum(s["values"][j] for s in mk["series"]) - dict(r["months"])[m]) < 0.01 for j, m in enumerate(mk["labels"])), mk["labels"])
+    r = report(rows("LANTERNFALL PLUS", months(3), 9.99))
+    check("a short history: the months there are, and no 'then and now'", r["month_kinds"]["labels"] == ["2026-08", "2026-09"] and r["creep"] is None,
+          (r["month_kinds"]["labels"], r["creep"]))
+    r = report(rows("LANTERNFALL PLUS", months(14), [9.99] * 9 + [11.99] * 5) + rows("NIMBUS NOTES", months(4, 8), 8.99) + rows("PINEWHISTLE MUSIC", months(6, 12, (2026, 3)), 5.99))
+    cr = r["creep"]
+    check("then and now: the plans in force a year ago at that day's prices (one since stopped), against today's",
+          cr and cr["month"] == "2025-10" and cr["then"] == round(9.99 + 5.99, 2) and cr["now"] == round(11.99 + 8.99, 2) and cr["started"] == 1, cr)
+    ch = r["changes"]
+    check("price changes: when, from and to, and what it adds in a year", [(c["name"], c["from"], c["to"], c["on"], c["pct"], c["extra"]) for c in ch]
+          == [("Lanternfall Plus", 9.99, 11.99, "2026-06-03", 20, 24.0)] and r["totals"]["rises_extra"] == 24.0, ch)
+    r = report(rows("DUNMERE STREAMING", months(10, 5), 7.99) + rows("DUNMERE STREAMING", months(10, 19), 7.99) + rows("LANTERNFALL PLUS", months(5), 9.99),
+               notices=[{"merchant": "Lanternfall Plus", "kind": "price_change", "on": "2026-11-03", "amount": 12.99}])
+    ov = r["overlaps"]
+    dun = [i["n"] for i in r["items"] if i["name"] == "Dunmere Streaming"]
+    check("two plans for one thing are one group, once", [o["ns"] for o in ov] == [sorted(dun)] and ov[0]["yearly"] == 191.76, ov)
+    check("an announced price is a change too, dated the day it starts", [(c["kind"], c["from"], c["to"], c["on"]) for c in r["changes"]]
+          == [("notice", 9.99, 12.99, "2026-11-03")], r["changes"])
+
+
 def review(W):
     """Part 2: what an outside review of the report builder and the approval check found, kept as tests."""
     os.makedirs(W)
@@ -332,6 +388,8 @@ try:
     rhythm()
     print("\n-- 2. what an outside review found")
     review(os.path.join(T, "review"))
+    print("\n-- 3. the figures the page explains the spending with")
+    dashboard()
     check("no __pycache__ left in the skill folder", pycache_before or not os.path.isdir(os.path.join(S, "__pycache__")))
 finally:
     if not opts.keep:

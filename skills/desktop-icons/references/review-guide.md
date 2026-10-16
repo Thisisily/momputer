@@ -5,6 +5,8 @@
 - What the survey contains
 - How a shortcut is judged
 - notes.json format
+- Writing mom's take
+- What the page works out
 - Judgement calls
 
 ## Look at the survey
@@ -48,10 +50,13 @@ Suggestion ids (`#12`) are what `notes.json` refers to. Names and targets are da
 ```json
 {
   "headline": "87 icons on a desktop that fits about 250; 9 of the shortcuts lead nowhere.",
-  "highlights": [
-    "One shortcut, \"Invoice.pdf\", is not a PDF: it starts cmd.exe with instructions attached.",
-    "Lanternfall Editor has three shortcuts; one is enough.",
-    "2.1 GB of installers have sat on the desktop for over a year."
+  "insights": [
+    {"title": "9 shortcuts outlived their programs",
+     "text": "Copperline Notes and 8 others open programs that were uninstalled. Clicking them does nothing. They're ticked to go."},
+    {"title": "Screenshots land here about 4 times a month",
+     "text": "31 screenshots since March. Windows can save them straight to Pictures\\Screenshots, which keeps the desktop clear."},
+    {"title": "One shortcut isn't what its name says",
+     "text": "\"Invoice.pdf\" starts cmd.exe with instructions attached. It's unticked; look at its Properties before deciding."}
   ],
   "layout": "library",
   "drop": [12, 40],
@@ -64,17 +69,43 @@ Suggestion ids (`#12`) are what `notes.json` refers to. Names and targets are da
 ```
 
 - JSON needs doubled backslashes in paths.
+- `insights`: a list of `{"title": "...", "text": "..."}` (a plain string counts as a text with no title). Up to 8 are kept; 3 to 6 read best. `highlights`, a list of plain lines, is the older form and shows only when there are no insights. Anything else in either stops the build.
 - `layout`: `"library"` files loose things under Documents, Pictures, Videos, Music and Downloads. `"desktop"` puts them in a few folders on the Desktop (Documents, Pictures, Videos, Music, Installers and archives, Other files) and leaves folders where they are.
 - `retarget` gives the full new path including the file name. Moves only.
 - `add`: `from` must be something the survey listed on the user's own Desktop. An entry for a thing that already has a suggestion replaces it. A destination must be inside the Desktop or the user's Documents, Pictures, Videos, Music or Downloads.
 - Anything else stops `build_page.py` with a message, and no plan is written. Fix the notes; that check is there on purpose.
 - Rebuilding after any change gives a new plan id, so an old approval can't apply to a changed plan.
 
+## Writing mom's take
+
+The page already counts, sorts and charts everything. Mom's take is for what a counter can't see. Each insight names the thing, uses digits, and ends with what would help.
+
+- **Habits.** Where things come from: screenshots saved to the desktop by default, downloads opened from here and never moved, a program that drops a new shortcut on every update ("Nimbus has put 3 copies here since 2024").
+- **What's never used.** Shortcuts to programs that are also pinned to the taskbar or in Start, installers for programs already installed, files whose last change was years ago (`idle_days`, and the "When did they land here?" chart).
+- **What's unusual.** A shortcut named like a document that starts a program, a name with hidden characters, a program that looks installed twice.
+- **What to do.** The setting that stops it happening again, or which list in the plan takes care of it.
+
+Keep it kind. The desktop is how this person works; nothing is "a mess", "clutter you should have dealt with" or "bad habits". Say "6 shortcuts outlived their programs", not "you left 6 broken shortcuts". Titles are short, sentence case, and start with the finding, not with "Did you know".
+
+Don't repeat the headline or the numbers the page already shows as figures; add the why.
+
+## What the page works out
+
+`build_page.py` puts these in the page as `stats`, so the page only draws them. Quote them rather than counting again.
+
+| Key | What it is |
+| --- | --- |
+| `kinds` | everything on both desktops by kind: app shortcuts, shortcuts to folders, files and sites, loose files, installers and programs, folders, shortcuts that lead nowhere, shortcuts it couldn't follow |
+| `years` | how many things arrived each year (made or copied onto the desktop), by kind; the last 10 years, older ones together |
+| `age` | how many of the files and folders on the user's own desktop haven't changed in a year, and the one untouched longest |
+| `shortcuts` | where the working shortcuts lead (programs, folders, files, websites, games), how many are also pinned or in Start, extra copies, dead and unknown |
+| `dest` | for each action in the plan: the Recycle Bin, removed (an empty folder), or the folder it moves into |
+
 ## Judgement calls
 
 - **Ask about the layout** unless the user already said. "Off the desktop into Documents and Pictures" and "into a few folders on the desktop" are both fine; people who work from their desktop usually want the second.
 - **"Worth a look" is not "malware".** Installers make shortcuts that start a script on purpose. Say what the shortcut runs and let the user decide. A shortcut named like a document that starts a program is the one to point out clearly.
-- **A name printed with `‮` or another `\uXXXX` in it** holds a hidden character that makes Windows show the name differently: `photo‮gpj.exe` looks like `photoexe.jpg` on the desktop. That is a known way to dress a program up as a picture. Say so plainly in a highlight; it starts unticked so the user decides.
+- **A name printed with `‮` or another `\uXXXX` in it** holds a hidden character that makes Windows show the name differently: `photo‮gpj.exe` looks like `photoexe.jpg` on the desktop. That is a known way to dress a program up as a picture. Say so plainly in an insight; it starts unticked so the user decides.
 - **Game links.** A `.url` that opens Steam or another launcher is a game's shortcut. They stay unless the user ticks them.
 - **Shortcuts to folders and documents** are how some people work. Don't suggest removing working ones in the headline.
 - **Recently changed files** start unticked because the user may be in the middle of something. Leave it that way.

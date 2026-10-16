@@ -4,7 +4,7 @@ description: Surveys a Windows PC's local drives read-only and shows where the d
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline.
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
 ---
 
 # Disk space report
@@ -61,8 +61,12 @@ python scripts/summarize.py "<out>/survey.json" --section suspects --limit 20
 
 Then write `<out>/notes.json` (format in [references/review-guide.md](references/review-guide.md)):
 
+This is where the page becomes more than a scanner. Look at what the folders are, not just their sizes: whose they are, what made them, when they last changed (`summarize.py --section ages` and the folder dates), and what that says about how this person uses the PC.
+
 - `headline`: mom says it at the top of the page. One kind sentence, under 20 words, with the biggest finding ("C: is 96% full. Docker's disk image and 3 games you haven't opened this year are half of it."). Digits, not words, for numbers. No scolding.
-- `highlights`: 3 to 6 short findings, each under 30 words. Name the drive (`C:`, `E:`): the page puts that drive's light beside it. Say what would help, not just what's there.
+- `insights`: mom's take, 3 to 6 of `{"title", "text"}`. Each says something a drive scanner can't: what a place is for ("D: is a game shelf"), a pattern over time ("E:\Downloads stopped changing in March 2023: a time capsule"), something unusual, and what would help. Title under 10 words, text under 40. Name drives (`C:`) so the page lights them.
+- `drives`: one line per drive letter about its character ("Your working drive: apps, code and Claude's scratch").
+- `places`: up to 40 `{"path", "note"}` for folders worth explaining ("Claude Code's scratch from this week; safe to clear in the app"). They show beside the folder in the chart.
 - `focus` (optional): the drive the page opens on, such as `"C"`. Pick the fullest one, or the one the user asked about.
 - `drop`: plan items that don't fit this user (for example `docker-system-prune` if they said their containers matter).
 

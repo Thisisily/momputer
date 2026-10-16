@@ -40,6 +40,16 @@ TEXT_MAX = 90
 MAX_ROWS = 60              # per tickable list
 MAX_TABLE = 40
 MAX_EVENTS = 6000
+BIG = 8                    # a meeting this size or bigger is a big one
+SHORT_GAP = 30             # a gap between meetings shorter than this is too short to use
+MAX_PEOPLE = 40            # organizers listed under "Who fills your calendar"
+MAX_SERIES = 40            # repeating meetings listed
+# The kinds of meeting the charts split time into, in this order (the page gives each a light).
+KINDS_OF_MEETING = [("one", "1:1"), ("small", "Small groups, 3 to 7"), ("big", "Big meetings, %d or more" % BIG),
+                    ("outside", "With people from outside")]
+# A personal address has no organization, so nobody on it counts as "from outside".
+FREE_MAIL = {"gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com", "yahoo.com", "icloud.com",
+             "me.com", "proton.me", "protonmail.com"}
 
 # ---- safe forms. Everything that ends up in a link, or that the agent later hands to a
 # calendar tool, must match one of these in full. Titles, names and places never do: they
@@ -261,7 +271,14 @@ def norm_calendars(cal):
     return out
 
 
-def norm_event(raw, cals, default_cal, suspicious):
+def home_domain(account):
+    """The person's own organization, from their address: '' for a personal address."""
+    a = str(account or "").strip().lower()
+    dom = a.rsplit("@", 1)[1] if "@" in a else ""
+    return dom if dom and dom not in FREE_MAIL else ""
+
+
+def norm_event(raw, cals, default_cal, suspicious, home=""):
     start, timed, zulu = parse_when(raw.get("start"))
     if start is None:
         return None
@@ -284,16 +301,20 @@ def norm_event(raw, cals, default_cal, suspicious):
     sid = sid if isinstance(sid, str) and SAFE_ID.fullmatch(sid) else ""
 
     att, counts = raw.get("attendees"), {"total": 0, "accepted": 0, "declined": 0, "tentative": 0, "needs_action": 0}
-    answers_known = False             # without the answers, "nobody accepted" can't be said
+    answers_known, outside = False, 0  # without the answers, "nobody accepted" can't be said
     if isinstance(att, dict):
         for k in counts:
             counts[k] = num(att.get(k))
         counts["needs_action"] = max(counts["needs_action"], num(att.get("needsAction")))
         answers_known = any(k in att for k in ("accepted", "declined", "tentative", "needs_action", "needsAction"))
+        outside = num(att.get("outside"))
     elif isinstance(att, list):       # a raw guest list: only the answers are counted, nothing else is kept
         for a in att:
             r = (a.get("response") or a.get("responseStatus")) if isinstance(a, dict) else ""
             counts[RESPONSES.get(str(r or "").lower().replace(" ", ""), "needs_action")] += 1
+            mail = a.get("email") if isinstance(a, dict) else None
+            if home and isinstance(mail, str) and "@" in mail and a.get("self") is not True:
+                outside += 1 if mail.rsplit("@", 1)[1].strip().lower() != home else 0
         counts["total"], answers_known = len(att), True
     elif isinstance(att, (int, float)) and not isinstance(att, bool):
         counts["total"] = num(att)
@@ -324,6 +345,9 @@ def norm_event(raw, cals, default_cal, suspicious):
         "busy": not marked_free(raw),
         "cancelled": str(raw.get("status") or "").lower() == "cancelled",
         "tz": tz if isinstance(tz, str) and SAFE_TZ.fullmatch(tz) else "",
+        "outside": min(outside, max(0, total - 1)),
+        # whether the description says anything: true or false only. The description itself is never kept.
+        "agenda": raw.get("has_agenda") if isinstance(raw.get("has_agenda"), bool) else None,
     }
 
 
@@ -335,6 +359,47 @@ def note_suspicious(found, where, value, skip_code=False):
     row = {"where": where, "text": clip(value, 120), "why": why}
     if why and row not in found:
         found.append(row)
+
+
+def kind_of(e):
+    """Which kind of meeting this is: someone from outside first, then by size."""
+    if e["outside"] > 0:
+        return "outside"
+    if e["total"] <= 2:
+        return "one"
+    return "small" if e["total"] < BIG else "big"
+
+
+def cadence(dates):
+    """How often a repeating meeting comes round, from the dates it fell on: (words, times a year).
+    One date says nothing about the rhythm: ("Repeats", None)."""
+    if len(dates) < 2:
+        return "Repeats", None
+    gaps = sorted((b - a).days for a, b in zip(dates, dates[1:]))
+    g, weekend = gaps[len(gaps) // 2], any(d.weekday() >= 5 for d in dates)
+    if g <= 1 or (set(gaps) <= {1, 3} and not weekend):
+        return ("Every day", 365) if weekend else ("Every weekday", 260)
+    for lo, hi, words, times in ((6, 8, "Weekly", 52), (13, 15, "Every 2 weeks", 26), (20, 22, "Every 3 weeks", 17),
+                                 (27, 36, "Monthly", 12)):     # "the first Thursday" comes 28 or 35 days apart
+        if lo <= g <= hi:
+            return words, times
+    return "Every %d days" % g, int(round(365.0 / g))
+
+
+def agent_insights(raw, fallback):
+    """Mom's take: up to six things the agent noticed, each a title and a few sentences. Plain text only.
+    Older reports gave short "highlights" instead; those stand in when there are no insights."""
+    out = []
+    for it in (raw if isinstance(raw, list) and raw else fallback if isinstance(fallback, list) else []):
+        if isinstance(it, dict):
+            title, text = clip(it.get("title"), 80), clip(it.get("text"), 400)
+        else:
+            title, text = "", clip(it, 240)
+        if text:
+            out.append({"title": title, "text": text})
+        if len(out) >= 6:
+            break
+    return out
 
 
 def plan_id(lists):
@@ -411,6 +476,7 @@ def build(cal):
     own = [c for c in cals.values() if c["mine"]]
     primary = next((c for c in own if c["primary"]), own[0] if own else None)
     cal_tz = cal.get("timezone") if isinstance(cal.get("timezone"), str) and SAFE_TZ.fullmatch(cal["timezone"]) else ""
+    home = home_domain(cal.get("account"))
     ws, we, wdays, hours_given = working(cal)
     now, has_clock, _ = parse_when(cal.get("today"))       # "today" may carry the time: what already ended is past
     today = now.date() if now else date.today()
@@ -424,7 +490,7 @@ def build(cal):
     # ---- events: read, drop repeats of the same id, leave other people's calendars out
     events, seen, unreadable, odd_ids, elsewhere, zulu = [], {}, 0, 0, 0, 0
     for raw in (cal.get("events") if isinstance(cal.get("events"), list) else [])[:MAX_EVENTS]:
-        e = norm_event(raw, cals, primary, suspicious) if isinstance(raw, dict) else None
+        e = norm_event(raw, cals, primary, suspicious, home) if isinstance(raw, dict) else None
         if e is None:
             unreadable += 1
             continue
@@ -542,6 +608,22 @@ def build(cal):
         d += one
     all_days = sorted(stats)
     future = [e for e in events if today <= e["start"].date() <= d1 and not (has_clock and e["end"] <= now)]
+
+    # ---- each day's meeting minutes split by kind. Time two meetings share counts once, for the
+    # one that started first, so the kinds add up to the day's minutes. A day the agent only counted
+    # has its number and no split.
+    day_kinds = {}
+    for d in all_days:
+        if d in given:
+            day_kinds[d] = {"counted": stats[d]["minutes"]} if stats[d]["minutes"] else {}
+            continue
+        split, until = {}, 0
+        for s, en, e in sorted(meet_day.get(d, []), key=lambda x: (x[0], x[1])):
+            a = max(s, until)
+            if en > a:
+                split[kind_of(e)] = split.get(kind_of(e), 0) + en - a
+            until = max(until, en)
+        day_kinds[d] = split
 
     # ---- clashes
     act = [e for e in future if counted(e) and e["busy"] and not e["all_day"] and id(e) not in copies
@@ -736,7 +818,7 @@ def build(cal):
             e = norm_event({"id": nxt.get("id"), "start": nxt.get("start"), "end": nxt.get("end"), "calendar": r.get("calendar"),
                             "title": r.get("title"), "organizer": r.get("organizer"), "mine": r.get("mine"),
                             "attendees": r.get("attendees"), "my_response": r.get("my_response"), "recurring": True,
-                            "series_id": sid}, cals, primary, suspicious)
+                            "series_id": sid}, cals, primary, suspicious, home)
             if e and e["cal_mine"] and today <= e["start"].date():
                 s["future"].append(e)
     drop = []
@@ -856,13 +938,136 @@ def build(cal):
                   for a, b, mins in pairs]
     weeks = {}
     for d in all_days:
-        w = weeks.setdefault(d - timedelta(days=d.weekday()), {"minutes": 0, "capacity": 0, "meetings": 0, "first": d, "last": d})
+        w = weeks.setdefault(d - timedelta(days=d.weekday()), {"minutes": 0, "capacity": 0, "meetings": 0, "first": d, "last": d, "kinds": {}})
         w["minutes"] += stats[d]["minutes"]
         w["meetings"] += stats[d]["count"]
         w["capacity"] += (we - ws) if working_day(d) else 0
         w["last"] = d
+        for k, v in day_kinds[d].items():
+            w["kinds"][k] = w["kinds"].get(k, 0) + v
     ahead = [d for d in all_days if d >= today]
     ahead_minutes = sum(stats[d]["minutes"] for d in ahead)
+
+    # ---- the dashboard: what the person's time goes to, worked out here so the page only draws it
+    kinds_total = {}
+    for d in all_days:
+        for k, v in day_kinds[d].items():
+            kinds_total[k] = kinds_total.get(k, 0) + v
+    kinds = [{"key": k, "name": name, "minutes": kinds_total.get(k, 0)} for k, name in KINDS_OF_MEETING]
+    if kinds_total.get("counted"):
+        kinds.append({"key": "counted", "name": "Counted, not listed", "minutes": kinds_total["counted"]})
+
+    # when meetings happen: minutes in each hour of each weekday, over the days seen in full
+    heat_min, seen_days, seen_work = [[0] * 24 for _ in range(7)], 0, 0
+    for d in all_days:
+        if d in given:
+            continue
+        seen_days += 1
+        seen_work += 1 if working_day(d) else 0
+        for s, en in merged([(s, en) for s, en, _ in meet_day.get(d, [])]):
+            h = s // 60
+            while h < 24 and h * 60 < en:
+                heat_min[d.weekday()][h] += min(en, (h + 1) * 60) - max(s, h * 60)
+                h += 1
+    # the hours shown: the working day, stretched to the meetings, but no more than 2 hours before
+    # it and 3 after. What falls further out is counted, and the page says where to find it.
+    used = [h for h in range(24) if any(heat_min[r][h] for r in range(7))]
+    h_lo = max(ws // 60 - 2, min([ws // 60] + used[:1]), 0)
+    h_hi = min(-(-we // 60) + 3, max([-(-we // 60)] + [h + 1 for h in used[-1:]]), 24)
+    # fewer than five working days seen in full (the counted form) say nothing about a usual week
+    heat_rows = [r for r in range(7) if r in wdays or any(heat_min[r])] if seen_work >= 5 else []
+    heat = {"rows": [DAYS[r] for r in heat_rows], "from": h_lo, "to": h_hi, "weeks": round(seen_days / 7.0, 2) if heat_rows else 0,
+            "minutes": [heat_min[r][h_lo:h_hi] for r in heat_rows],
+            "beyond": sum(heat_min[r][h] for r in range(7) for h in range(24) if not h_lo <= h < h_hi)}
+
+    # who sends the meetings: the organizer, or the person themselves
+    window_meets = [e for e in events if meeting(e) and id(e) not in copies and d0 <= e["start"].date() <= d1]
+    who = {}
+    for e in window_meets:
+        name = "You" if e["mine"] else (e["organizer"] or "Someone else")
+        p = who.setdefault("" if e["mine"] else name.casefold(), {"name": name, "mine": e["mine"], "minutes": 0, "meetings": 0,
+                                                                  "repeating": 0, "ahead": 0, "outside": 0})
+        p["minutes"] += min(minutes_of(e), 1440)
+        p["meetings"] += 1
+        p["repeating"] += 1 if e["recurring"] else 0
+        p["ahead"] += 1 if e["start"].date() >= today else 0
+        p["outside"] += 1 if e["outside"] else 0
+    people = sorted(who.values(), key=lambda p: (-p["minutes"], p["name"]))[:MAX_PEOPLE]
+
+    # repeating meetings: how often, how long, and what each costs over a year
+    occ = {}
+    for e in events:
+        if e["series"] and e["kind"] == "event" and not e["cancelled"] and id(e) not in copies and d0 <= e["start"].date() <= d1:
+            occ.setdefault(e["series"], []).append(e)
+    stale_ids, recurring = {r["series"] for r in drop}, []
+    for sid, s in series.items():
+        evs = list(occ.get(sid, []))
+        evs += [e for e in s["future"] if all(e is not x for x in evs)]
+        evs = sorted((e for e in evs if e["others"] >= 1 and not e["all_day"]), key=lambda e: (e["start"], e["id"]))
+        if not evs:
+            continue
+        words, times = cadence(sorted({e["start"].date() for e in evs}))
+        length_now = sorted(minutes_of(e) for e in evs)[len(evs) // 2]
+        nxt = next((e for e in evs if e["start"].date() >= today), evs[-1])
+        held, declined, accepted = s["past"]
+        if nxt["mine"]:
+            said_ = "Yours"
+        elif held:
+            said_ = ("Declined %d of the last %d" % (declined, held) if declined and declined >= accepted else
+                     "Accepted %d of the last %d" % (accepted, held) if accepted else "No answer to the last %d" % held)
+        else:
+            said_ = {"accepted": "Accepted", "declined": "Declined", "tentative": "Maybe", "needs_action": "Not answered"}.get(nxt["resp"], "")
+        people_in = max(e["total"] for e in evs)
+        year = round(times * length_now / 60.0, 1) if times else 0
+        recurring.append({"title": nxt["title"], "organizer": "" if nxt["mine"] else nxt["organizer"], "mine": nxt["mine"],
+                          "cadence": words, "per_year": times, "minutes": length_now, "hours_year": year, "people": people_in,
+                          "everyone": round(year * people_in), "said": said_, "stale": sid in stale_ids,
+                          "since": s["started"].year if s["started"] else None})
+    recurring.sort(key=lambda r: (-r["hours_year"], r["title"]))
+    recurring_ahead = sum(min(minutes_of(e), 1440) for e in future if meeting(e) and e["recurring"] and id(e) not in copies)
+
+    # room to think, week by week from today: working time with no meeting or other busy time in
+    # stretches of two hours or more (focus time counts as room), and time lost in short gaps
+    room = {}
+    for d in ahead:
+        if not working_day(d):
+            continue
+        wk = d - timedelta(days=d.weekday())
+        r = room.setdefault(wk, {"start": wk, "capacity": 0, "free": 0, "gaps": 0, "focus": 0, "no_free": 0, "days": 0})
+        r["capacity"] += we - ws
+        r["days"] += 1
+        r["no_free"] += 1 if stats[d]["no_free"] else 0
+        if d in given:
+            f = stats[d]["free"] or 0
+            r["free"] += f if f >= FREE_BLOCK else 0
+            continue
+        blocked = merged([(max(s, ws), min(en, we)) for s, en, x in taken_day.get(d, []) if x["kind"] != "focus" and min(en, we) > max(s, ws)])
+        t = ws
+        for s, en in blocked + [[we, we]]:
+            if s - t >= FREE_BLOCK:
+                r["free"] += s - t
+            t = max(t, en)
+        meets = merged([(s, en) for s, en, _ in meet_day.get(d, [])])
+        for (_a, b), (c, _d) in zip(meets, meets[1:]):
+            if GAP < c - b < SHORT_GAP and b >= ws and c <= we:
+                r["gaps"] += c - b
+        r["focus"] += sum(en - s for s, en in merged([(s, en) for s, en, x in taken_day.get(d, []) if x["kind"] == "focus"]))
+    room_rows = [dict(r, start=r["start"].isoformat(), now=r["start"] <= today < r["start"] + timedelta(days=7),
+                      label=("This week" if r["start"] <= today else "Week of %d %s" % (r["start"].day, MONTHS[r["start"].month - 1])))
+                 for _, r in sorted(room.items())]
+
+    # several people, and nothing in the description: only when the agent said so (has_agenda false)
+    agenda_known = any(e["agenda"] is not None for e in events)
+    no_agenda_rows, seen_agenda = [], set()
+    for e in future:
+        if not (meeting(e) and e["total"] >= SEVERAL and e["agenda"] is False and id(e) not in copies):
+            continue
+        k = e["series"] or e["id"] or str(id(e))
+        if k in seen_agenda:
+            continue
+        seen_agenda.add(k)
+        no_agenda_rows.append({"title": e["title"], "when": when_label(e), "organizer": "you" if e["mine"] else e["organizer"],
+                               "people": e["total"], "repeats": e["recurring"], "day_link": day_link(e["start"].date())})
     notes = []
     if zulu:
         notes.append("%d times were written in UTC (ending in Z) and read as written; if this calendar isn't on UTC, they are shifted." % zulu)
@@ -879,25 +1084,37 @@ def build(cal):
         "complete": bool(cal.get("complete", True)) and not given,
         "agent_notes": clip(cal.get("notes"), 400), "headline": clip(cal.get("headline"), 240),
         "highlights": [clip(h, 240) for h in (cal.get("highlights") if isinstance(cal.get("highlights"), list) else [])][:6],
+        "insights": agent_insights(cal.get("insights"), cal.get("highlights")),
         "working": {"start": clock(ws), "end": clock(we), "days": [DAYS[i] for i in sorted(wdays)], "given": hours_given},
         "calendars": [c["name"] for c in own][:8],
         "totals": {"meetings_ahead": sum(stats[d]["count"] for d in ahead), "minutes_ahead": ahead_minutes,
                    "weeks_ahead": max(1, round(len(ahead) / 7)), "clashes": len(pairs), "unanswered": len(answer),
                    "runs": len(run_rows), "no_free_days": len(no_free_rows), "outside": len(outside_rows),
                    "stale": len(drop), "duplicates": len(duplicates) + len(dup_rows), "slips": len(slip_rows),
-                   "no_link": len(links) + len(no_link_rows), "events": len(events)},
+                   "no_link": len(links) + len(no_link_rows), "events": len(events),
+                   "double_bookings": sum(1 for r in clash_rows if r["kind"] == "double booking"),
+                   "days_ahead": len(ahead), "capacity_ahead": sum(r["capacity"] for r in room_rows),
+                   "free_ahead": sum(r["free"] for r in room_rows), "gaps_ahead": sum(r["gaps"] for r in room_rows),
+                   "focus_ahead": sum(r["focus"] for r in room_rows), "recurring_ahead": recurring_ahead,
+                   "meetings_window": sum(stats[d]["count"] for d in all_days),
+                   "minutes_window": sum(stats[d]["minutes"] for d in all_days), "days_window": len(all_days),
+                   "no_agenda": len(no_agenda_rows)},
         "daily": [[d.isoformat(), stats[d]["minutes"], stats[d]["count"], 0 if working_day(d) else 1,
                    1 if stats[d]["no_free"] else 0] for d in all_days],
+        "day_kinds": [day_kinds[d] for d in all_days],
         "weekly": [{"label": ("%d %s" % (w["first"].day, MONTHS[w["first"].month - 1])) + ("" if w["first"] == w["last"] else
                               " – %d %s" % (w["last"].day, MONTHS[w["last"].month - 1])), "minutes": w["minutes"], "capacity": w["capacity"], "meetings": w["meetings"],
-                    "now": w["first"] <= today <= w["last"]} for _, w in sorted(weeks.items())],
+                    "now": w["first"] <= today <= w["last"], "start": "%d %s" % (w["first"].day, MONTHS[w["first"].month - 1]),
+                    "days": (w["last"] - w["first"]).days + 1, "kinds": w["kinds"]} for _, w in sorted(weeks.items())],
+        "kinds": kinds, "heat": heat, "people": people, "recurring": recurring[:MAX_SERIES],
+        "more_recurring": max(0, len(recurring) - MAX_SERIES), "room": room_rows, "agenda_known": agenda_known,
         "lists": lists, "more": more,
         "tables": {"clashes": table(clash_rows), "runs": table(run_rows), "no_free": table(no_free_rows),
                    "outside": table(outside_rows), "slips": table(slip_rows), "no_link": table(no_link_rows),
-                   "duplicates": table(dup_rows)},
+                   "duplicates": table(dup_rows), "no_agenda": table(no_agenda_rows)},
         "suspicious": suspicious, "script_notes": notes,
         "thresholds": {"gap": GAP, "run_meetings": RUN_MEETINGS, "run_minutes": RUN_MINUTES, "free_block": FREE_BLOCK,
-                       "break": BREAK, "several": SEVERAL, "stale_years": STALE_DAYS // 365},
+                       "break": BREAK, "several": SEVERAL, "stale_years": STALE_DAYS // 365, "big": BIG, "short_gap": SHORT_GAP},
         "generated": datetime.now().isoformat(timespec="seconds"),
     }
     # Last check before anything is written: every id, time and link is in a form this script

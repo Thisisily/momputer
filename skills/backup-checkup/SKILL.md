@@ -4,7 +4,7 @@ description: Checks a Windows PC read-only to answer "if this disk died today, w
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Check and page work offline.
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Backup checkup
@@ -57,11 +57,15 @@ python scripts/summarize.py "<out>/survey.json"
 python scripts/summarize.py "<out>/survey.json" --section repos --limit 40
 ```
 
-Then write `<out>/notes.json` (format in [references/review-guide.md](references/review-guide.md)):
+Then write `<out>/notes.json` (format in [references/review-guide.md](references/review-guide.md)). The page counts and charts; your notes say what it means for this person:
 
-- `headline`: one sentence in your own words, under the page's own count ("Your photos are in only one place, and OneDrive hasn't been running.").
-- `highlights`: 3 to 6 short findings worth knowing.
+- `headline`: one kind sentence in your own words, under the page's own count ("Your photos are in only one place, and OneDrive hasn't been running.").
+- `insights`: mom's take, 3 to 6 of `{"title", "text"}`. Each says something a backup tool can't: what really matters here (12 years of photos in Pictures, the thesis in Documents), a single point of failure (the only copy of the code is this laptop), a pattern over time (File History stopped in March, when its drive was last plugged in), and what would help. Title under 10 words, text under 40. Use digits, name drives (`D:`) so the page lights them, stay warm: no blame.
+- `places`: up to 40 `{"path", "note"}` for folders worth a line ("Wedding photos, 2019 to 2024"). They show beside the folder.
+- `drives`: one line per drive letter that helps ("Your old laptop's disk: the best home for a copy").
 - `drop`: parts of the plan that don't fit (`open-windows-backup`, `open-file-history`, `copies`, `repos`, `checks`).
+
+`highlights` (plain sentences) still works and shows as insights without a title.
 
 ### 3. Build the page and show it
 
@@ -69,7 +73,7 @@ Then write `<out>/notes.json` (format in [references/review-guide.md](references
 python scripts/build_page.py "<out>/survey.json" --notes "<out>/notes.json" --out "<out>/backup-checkup.html"
 ```
 
-This writes the page and `backup-plan.json` next to it.
+This writes the page and `backup-plan.json` next to it. The page reads top to bottom: mom's card (one number, your headline), the figures at a glance, mom's take, how much of the user's work has a second copy and what copies each folder, how old each copy is and whether each month's work is in one, what they would lose (sortable), what keeps copies and the other drives, code that exists only here, then the plan.
 
 - **If you can publish artifacts**, publish the page as a private artifact and give the user the link. Don't share it further.
 - **Otherwise** open the file: `start "" "<out>\backup-checkup.html"` in cmd, or `Invoke-Item "<out>\backup-checkup.html"` in PowerShell.
@@ -122,5 +126,5 @@ Then delete the output folder (`survey.json`, the plan, the page) unless the use
 - `scripts/summarize.py`: short digest of a survey for step 2.
 - `scripts/build_page.py`: builds `backup-checkup.html` and `backup-plan.json`.
 - `scripts/run_plan.py`: checks the approval and opens the ticked Windows pages; prints the rest.
-- `assets/backup-checkup-template.html`: the page. Self-contained, works offline, light and dark.
+- `assets/backup-checkup-template.html`: the page, built on momputer's page kit. Self-contained, works offline, light and dark.
 - [references/review-guide.md](references/review-guide.md): survey fields, `notes.json`, what each program's detection rests on, judgement calls.

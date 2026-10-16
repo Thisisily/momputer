@@ -198,9 +198,16 @@ def norm_sharing(sh, own):
         count = max(count, outside)
     if not own:
         outside = count              # a personal account has no "inside": everyone else is someone else
+    # people per outside domain, for the "where outside shares go" chart: only domains in the safe form
+    by_domain = {}
+    if doms is not None:
+        for d, c in list(doms.items())[:500]:
+            d, c = str(d).strip().lower(), num(c, 100000)
+            if c and d in names[:20]:
+                by_domain[d] = by_domain.get(d, 0) + c
     return {"anyone": anyone, "found": found, "domain_link": role(sh.get("domain")), "people": count,
             "outside": min(outside, count), "personal": min(personal, count), "domains": names[:3],
-            "more_domains": max(0, len(names) - 3)}
+            "more_domains": max(0, len(names) - 3), "by_domain": by_domain}
 
 
 def note_suspicious(found, where, value):
@@ -416,13 +423,15 @@ def build(box):
             groups.setdefault(("same contents", f["checksum"], f["size"]), []).append(f)
         elif f["type"] not in NATIVE and f["name_key"]:
             groups.setdefault(("same name and size", f["name_key"], f["size"]), []).append(f)
-    duplicates, in_trash_list, stays, dup_groups, wasted = [], set(), set(), 0, 0
+    duplicates, in_trash_list, stays, dup_groups, wasted, dup_rows = [], set(), set(), 0, 0, []
     for (how, _, size), g in sorted(groups.items(), key=lambda kv: (-kv[0][2] * (len(kv[1]) - 1), kv[0][1])):
         if len(g) < 2:
             continue
         # keep the copy other people use, then the one touched last, then the oldest
         g.sort(key=lambda f: (not shared(f), -(f["last"] or date.min).toordinal(), (f["created"] or date.max).toordinal(), f["id"]))
         keep, dup_groups = g[0], dup_groups + 1
+        dup_rows.append({"name": keep["name"], "kind": TYPE_LABELS[keep["type"]], "copies": len(g), "size": size, "extra": size * (len(g) - 1),
+                         "kept_last": iso(keep["last"]), "how": how, "link": file_link(keep["id"])})
         for f in g[1:]:
             wasted += f["size"]
             if not fixable(f):
@@ -490,19 +499,54 @@ def build(box):
                 note_suspicious(suspicious, "owner name", r.get("owner"))
     years = [[("%d" % y) if y > today.year - YEARS + 1 else "≤%d" % y, by_year.get(y, [0, 0])[0], by_year.get(y, [0, 0])[1],
               1 if y < cutoff.year else 0] for y in range(today.year - YEARS + 1, today.year + 1)]
-    overview = [["Anyone with the link", sum(1 for f in mine if f["sharing"]["anyone"]), True],
-                ["People outside %s" % own if own else "Other people", sum(1 for f in mine if not f["sharing"]["anyone"] and f["sharing"]["outside"]), bool(own)],
+    # The same years, split by the five kinds of file that take the most room (and the rest), so the
+    # page can colour each kind the same in every chart.
+    kinds = [t[0] for t in types[:5]]
+    first_year, split = today.year - YEARS + 1, {}
+    for f in stuff:
+        if f["last"] and f["last"].year <= today.year:
+            label = TYPE_LABELS[f["type"]]
+            row_ = split.setdefault(label if label in kinds else "Everything else", [0] * YEARS)
+            row_[max(f["last"].year, first_year) - first_year] += f["size"]
+    year_kinds = [[k, split[k]] for k in kinds + ["Everything else"] if k in split and any(split[k])]
+    overview = [["Anyone with the link", sum(1 for f in mine if f["sharing"]["anyone"]), True, "anyone"],
+                ["People outside %s" % own if own else "Other people", sum(1 for f in mine if not f["sharing"]["anyone"] and f["sharing"]["outside"]), bool(own), "outside"],
                 ["Only people at %s" % own if own else "", sum(1 for f in mine if own and not f["sharing"]["anyone"] and not f["sharing"]["outside"]
-                                                            and (f["sharing"]["people"] or f["sharing"]["domain_link"])), False],
-                ["Only you", sum(1 for f in mine if not f["sharing"]["anyone"] and not f["sharing"]["people"] and not f["sharing"]["domain_link"]), False]]
+                                                            and (f["sharing"]["people"] or f["sharing"]["domain_link"])), False, "inside"],
+                ["Only you", sum(1 for f in mine if not f["sharing"]["anyone"] and not f["sharing"]["people"] and not f["sharing"]["domain_link"]), False, "private"]]
     overview = [r for r in overview if r[0]]
+    # where outside shares go: files and people per domain (the part after the @; never an address)
+    dom_files, dom_people = {}, {}
+    for f in mine:
+        for d, c in f["sharing"]["by_domain"].items():
+            dom_files[d], dom_people[d] = dom_files.get(d, 0) + 1, dom_people.get(d, 0) + c
+    outside_domains = [[d, dom_files[d], dom_people[d], d in FREEMAIL] for d in sorted(dom_files, key=lambda d: (-dom_files[d], -dom_people[d], d))]
+
+    def exposure(f):
+        """How far a file of the person's reaches, as (how bad, what to say). 0 when it stays inside."""
+        s = f["sharing"]
+        if s["anyone"]:
+            return 3 + (s["anyone"] == "edit") + s["found"], "Anyone with the link can %s%s" % (
+                {"view": "view", "comment": "comment", "edit": "edit"}[s["anyone"]], ", and find it in search" if s["found"] else "")
+        if s["outside"]:
+            return 1 + (s["personal"] > 0), ("%s outside %s" % (people(s["outside"]), own) if own else "Shared with %s" % people(s["outside"])) + (
+                " (%d at a personal address)" % s["personal"] if s["personal"] and own else "")
+        return 0, ""
+
+    risky = []
+    for f in mine:
+        level, says = exposure(f)
+        if level:
+            risky.append({"name": f["name"], "kind": TYPE_LABELS[f["type"]], "level": level, "access": says, "public": bool(f["sharing"]["anyone"]),
+                          "people": f["sharing"]["people"], "last": iso(f["last"]), "link": file_link(f["id"])})
+    risky.sort(key=lambda r: (-r["level"], -r["people"], r["name"]))
 
     def flag(f):
         s = f["sharing"]
         return "anyone with the link" if s["anyone"] else ("outside %s" % own if own and s["outside"] else ("shared" if s["people"] else ""))
 
     biggest = [{"name": f["name"], "kind": TYPE_LABELS[f["type"]], "size": f["size"], "last": iso(f["last"]), "shared": flag(f),
-                "link": file_link(f["id"])} for f in sorted(stuff, key=lambda f: (-f["size"], f["id"]))[:BIG_ROWS] if f["size"] > 0]
+                "level": exposure(f)[0], "link": file_link(f["id"])} for f in sorted(stuff, key=lambda f: (-f["size"], f["id"]))[:BIG_ROWS] if f["size"] > 0]
     open_theirs = [{"name": f["name"], "owner": f["owner"], "kind": TYPE_LABELS[f["type"]], "role": f["sharing"]["anyone"], "link": file_link(f["id"])}
                    for f in sorted(theirs, key=lambda f: (-ROLE_RANK[f["sharing"]["anyone"]], f["id"])) if f["sharing"]["anyone"]]
     no_fix = [f for f in mine if not f["ok"] and (f["sharing"]["anyone"] or f["sharing"]["outside"])]
@@ -528,6 +572,19 @@ def build(box):
     pages = [{"title": "Storage, biggest first", "why": "Drive's own list of what uses your storage.", "link": "https://drive.google.com/drive/quota"},
              {"title": "Trash", "why": "Emptying it deletes for good, so that step is yours.", "link": "https://drive.google.com/drive/trash"}]
 
+    # What the agent wrote: Mom's take (insights), and a line about a particular file or folder (by id).
+    insights = []
+    for it in (box.get("insights") if isinstance(box.get("insights"), list) else [])[:6]:
+        title, text = (it.get("title"), it.get("text")) if isinstance(it, dict) else ("", it)
+        if isinstance(text, str) and clip(text):
+            insights.append({"title": clip(title, 90) if isinstance(title, str) else "", "text": clip(text, 420)})
+    file_notes = {}
+    for raw in (box.get("files") if isinstance(box.get("files"), list) else [])[:MAX_FILES]:
+        if isinstance(raw, dict) and isinstance(raw.get("note"), str) and clip(raw["note"]) and len(file_notes) < 300:
+            fid = raw.get("id")
+            if isinstance(fid, str) and SAFE_FILE_ID.fullmatch(fid):
+                file_notes[fid] = clip(raw["note"], 160)
+
     notes = []
     if odd_ids:
         notes.append("%d files had no id in a plain form, so they have no link and no fix is offered for them%s." % (
@@ -541,17 +598,23 @@ def build(box):
         "complete": bool(box.get("complete", True)) and not counted,
         "agent_notes": clip(box.get("notes"), 400), "headline": clip(box.get("headline"), 240),
         "highlights": [clip(h, 240) for h in (box.get("highlights") if isinstance(box.get("highlights"), list) else [])][:6],
+        "insights": insights, "file_notes": file_notes,
         "storage": {k: num(storage.get(k)) for k in ("used_bytes", "total_bytes", "drive_bytes", "gmail_bytes", "photos_bytes") if storage.get(k) is not None},
         "totals": {"files": num(counts.get("files")) or len(live), "listed": len(live), "mine": len(mine), "mine_bytes": my_bytes,
                    "theirs": len(theirs), "public": len(unshare), "public_edit": sum(1 for r in unshare if r["role"] == "edit"),
                    "outside": len(outside), "outside_people": sum(r["loses_count"] for r in outside),
                    "dup_groups": dup_groups, "dup_bytes": wasted, "empty": len(empty), "stale": len(old),
                    "stale_bytes": sum(f["size"] for f in old), "trash": bin_count, "trash_bytes": bin_bytes,
-                   "public_theirs": len(open_theirs)},
+                   "public_theirs": len(open_theirs), "public_all": sum(1 for f in mine if f["sharing"]["anyone"]),
+                   "public_found": sum(1 for f in mine if f["sharing"]["found"]),
+                   "outside_all": sum(1 for f in mine if f["sharing"]["outside"]), "shared_all": sum(1 for f in mine if shared(f))},
         "by_type": types, "by_owner": owners, "by_year": years, "overview": overview,
+        "kinds": kinds, "year_kinds": year_kinds, "outside_domains": outside_domains[:8], "more_domains": max(0, len(outside_domains) - 8),
         "lists": lists, "more": more, "searches": searches, "pages": pages,
         "tables": {"biggest": {"rows": biggest, "more": 0},
-                   "public_theirs": {"rows": open_theirs[:MAX_TABLE], "more": max(0, len(open_theirs) - MAX_TABLE)}},
+                   "public_theirs": {"rows": open_theirs[:MAX_TABLE], "more": max(0, len(open_theirs) - MAX_TABLE)},
+                   "risky": {"rows": risky[:MAX_TABLE], "more": max(0, len(risky) - MAX_TABLE)},
+                   "dupes": {"rows": dup_rows[:MAX_TABLE], "more": max(0, len(dup_rows) - MAX_TABLE)}},
         "suspicious": suspicious, "script_notes": notes,
         "thresholds": {"stale_days": STALE_DAYS, "big_rows": BIG_ROWS},
         "generated": datetime.now().isoformat(timespec="seconds"),

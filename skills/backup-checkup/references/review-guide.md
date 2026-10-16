@@ -4,6 +4,7 @@
 - Look at the survey without reading it whole
 - What the survey contains
 - notes.json format
+- Writing mom's take
 - What each finding rests on
 - Reading Git without running it
 - Judgement calls
@@ -23,7 +24,7 @@ Paths under the user's profile print as `~\...`. Folder, repository and branch n
 | Key | What it is |
 | --- | --- |
 | `summary` | the headline, how many folders count, how many have no copy, an old copy, need a look or are fine, bytes at risk, repository states |
-| `places` | every folder looked at: `label`, `path`, `kind` (known, sync, profile, drive, loose), `own_bytes` (without packages and build output), `what` (the mix of files), `level` (3 can't be replaced, 2 hard to replace, 1 can be downloaded again), `protection` (who copies it, state, last copy, age in days), `verdict`, `counts` (whether it is in the headline) |
+| `places` | every folder looked at: `label`, `path`, `kind` (known, sync, profile, drive, loose), `own_bytes` (without packages and build output), `what` (the mix of files), `level` (3 can't be replaced, 2 hard to replace, 1 can be downloaded again), `protection` (who copies it, state, last copy, age in days), `verdict`, `counts` (whether it is in the headline), `months` (files and bytes by the month they last changed, 24 months back, then `older`), `changed_since_copy` (when it has a dated copy: files and bytes changed since that day) |
 | `lose` | folders with no copy, an old copy or an unconfirmed one, sorted the way the page shows them |
 | `protectors` | OneDrive, Dropbox, Google Drive, iCloud Drive, Syncthing, Nextcloud, other backup programs, File History, Windows Backup, System Restore: `state` (set-up, installed, not-set-up, note), `running`, `coverage` (known, unknown), `covers`, masked `account`, `last_copy` |
 | `drives` | every drive letter: type, whether it is on the same physical disk as Windows (`same_disk`), free space, and `backups` (things on it that look like a backup, with the newest date inside) |
@@ -37,16 +38,35 @@ Sizes are file lengths. Online-only cloud files are counted in `online_only_byte
 ```json
 {
   "headline": "Your photos and your code are each in only one place, and OneDrive hasn't been running.",
-  "highlights": [
-    "Pictures (41 GB) has no second copy anywhere.",
-    "File History last ran 200 days ago: the drive it copies to isn't connected.",
-    "9 repositories hold commits that are on no remote."
+  "insights": [
+    {"title": "12 years of photos live only on C:", "text": "Pictures holds 41 GB from 2014 to today, and nothing copies it. Turning on OneDrive folder backup would cover it, if your OneDrive has the room."},
+    {"title": "File History stopped in March", "text": "Its last copy is 200 days old, from when its drive was last plugged in. 6 GB of new photos since then are in one place. Plug the drive in and press Run now."},
+    {"title": "Your thesis has no remote", "text": "thesis-2026 has never been pushed: its whole history is only on this laptop. One push to a private repository keeps it safe."}
   ],
+  "places": [{"path": "C:\\Users\\you\\Pictures", "note": "Family photos, 2014 to today."}],
+  "drives": {"D": "Your old laptop's disk, plugged in for File History."},
   "drop": ["open-file-history", "copies"]
 }
 ```
 
-`drop` takes `open-windows-backup`, `open-file-history`, `copies` (copy-a-folder items), `repos` (push items) and `checks` (start or check a program). Rebuilding after any change gives a new plan id, so an old approval can't apply to a changed plan.
+- `headline` (under 300 characters) goes under the page's big number.
+- `insights` (up to 6 shown) are mom's take. `highlights`, a list of plain sentences, still works and shows as insights without a title.
+- `places` notes show beside that folder in the chart. A path the survey didn't look at is dropped.
+- `drives` takes a drive letter (`"D"` or `"D:"`). An unknown letter is dropped.
+- `drop` takes `open-windows-backup`, `open-file-history`, `copies` (copy-a-folder items), `repos` (push items) and `checks` (start or check a program). Rebuilding after any change gives a new plan id, so an old approval can't apply to a changed plan.
+
+Everything here is shown as plain text, never as markup.
+
+## Writing mom's take
+
+The page already counts folders, draws how much has a copy, and dates each copy. Mom's take is what only someone looking at the whole picture can say. Good insights:
+
+- **Say what matters to this person.** "Pictures" is a folder; "12 years of family photos" is what they'd grieve. Use `what`, `newest`, the sizes and the folder names to tell which folder is the precious one.
+- **Find the single point of failure.** Everything that matters on one disk, a backup drive that is the same disk, the only copy of code on one laptop, a sync program that stopped.
+- **Read the pattern over time.** `months`, `changed_since_copy` and `last_copy` tell a story: "File History stopped in March", "you've made 6 GB of new work since".
+- **End with what to do,** in one step, and point at the plan item that does it.
+- **Be kind and concrete.** Digits, not words. No blame ("you forgot"): it's a check-up, not a telling-off. Title under 10 words, text under 40.
+- **Don't repeat the page.** "6 folders have no second copy" is already the big number.
 
 ## What each finding rests on
 

@@ -50,6 +50,22 @@ def main(argv=None):
         print("Looked at %s entries in %ss%s. No second copy: %s, old copy: %s, needs a look: %s, fine: %s. At risk: %s." % (
             b.get("entries_seen"), b.get("seconds"), " (TRUNCATED)" if b.get("truncated") else "", sm.get("none"), sm.get("old"),
             (sm.get("check") or 0) + (sm.get("partial") or 0), sm.get("ok"), human(sm.get("bytes_at_risk"))))
+        since = [p for p in s.get("places", []) if p.get("counts") and (p.get("changed_since_copy") or {}).get("bytes")]
+        if since:
+            print("Changed since its last dated copy: " + "; ".join("%s %s in %d files since %s" % (
+                sh(p["label"]), human(p["changed_since_copy"]["bytes"]), p["changed_since_copy"]["files"], p["changed_since_copy"]["since"])
+                for p in sorted(since, key=lambda p: -p["changed_since_copy"]["bytes"])[:a.limit]) + ".")
+        gen = str(s.get("generated") or "")[:7]
+        if gen:
+            y, m = int(gen[:4]), int(gen[5:7])
+            recent = ["%04d-%02d" % ((y, m - i) if m - i > 0 else (y - 1, m - i + 12)) for i in range(12)]
+            mine = {}
+            for p in s.get("places", []):
+                if p.get("counts"):
+                    mine[p["verdict"]] = mine.get(p["verdict"], 0) + sum(((p.get("months") or {}).get(k) or {}).get("bytes", 0) for k in recent)
+            if any(mine.values()):
+                print("Changed in the last 12 months, by the folder's verdict: %s." % ", ".join(
+                    "%s %s" % (v, human(n)) for v, n in sorted(mine.items(), key=lambda t: -t[1]) if n))
     if want("folders"):
         print("\nFolders (worst first):")
         order = {"none": 0, "old": 1, "check": 2, "partial": 3, "ok": 4}

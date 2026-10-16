@@ -31,7 +31,7 @@ var Kit = (function () {
     }
     return n;
   }
-  /** el("div", {class: "x", text: "..."}, child, ...): never innerHTML. */
+  /** el("div", {class: "x", text: "..."}, child, ...): text goes in as text, never parsed as markup. */
   function el(tag, attrs) { return fill(document.createElement(tag), attrs, arguments, 2); }
   function svg(tag, attrs) { return fill(document.createElementNS(SVGNS, tag), attrs, arguments, 2); }
 
@@ -41,7 +41,7 @@ var Kit = (function () {
     var u = ["B", "KB", "MB", "GB", "TB", "PB"], i = 0;
     n = Math.max(0, n);
     while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-    var d = digits != null ? digits : (n < 10 && i ? 1 : 0);
+    var d = typeof digits === "number" ? digits : (n < 10 && i ? 1 : 0);   // a formatter may be handed a row as its second argument
     return (i ? n.toFixed(d) : Math.round(n)) + " " + u[i];
   }
   /** The number and its unit apart, for a readout: ["94", "GB"]. */
@@ -278,7 +278,11 @@ var Kit = (function () {
     var secs = links.map(function (l) { return document.getElementById(l.getAttribute("data-target")); });
     function onScroll() {
       var y = window.scrollY + 120, best = null;
-      secs.forEach(function (s, i) { if (s && s.offsetTop <= y) best = links[i]; });
+      secs.forEach(function (s, i) { if (s && s.offsetTop <= y && s.offsetParent !== null) best = links[i]; });
+      // at the very bottom a short last section can't reach the top: light the last one shown
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) {
+        for (var i = secs.length - 1; i >= 0; i--) if (secs[i] && secs[i].offsetParent !== null) { best = links[i]; break; }
+      }
       mark(best);
     }
     var raf = null;
@@ -344,6 +348,183 @@ var Kit = (function () {
     return { node: node, set: set };
   }
 
+  // ---- charts: dots, like the widget's meters. They take plain numbers and labels, build
+  //      nodes with textContent only, and give every mark a tooltip. Colours are CSS values
+  //      (a page's --cN lights, or ink); text stays ink, never the colour.
+
+  /** A light: a small dot in a colour (ink-3 when none is given). */
+  function led(color) {
+    return el("span", { "class": color ? "led c" : "led", style: color ? { "--c": color } : null, "aria-hidden": "true" });
+  }
+  /** Shares of n whole dots for values, by largest remainder (so they always add up to n). */
+  function share(values, n) {
+    var sum = 0;
+    values.forEach(function (v) { sum += Math.max(0, v || 0); });
+    if (!sum || n <= 0) return values.map(function () { return 0; });
+    var exact = values.map(function (v) { return n * Math.max(0, v || 0) / sum; });
+    var out = exact.map(Math.floor), left = n - out.reduce(function (a, b) { return a + b; }, 0);
+    exact.map(function (x, i) { return [x - out[i], i]; }).sort(function (a, b) { return b[0] - a[0]; })
+      .forEach(function (r) { if (left > 0) { out[r[1]]++; left--; } });
+    return out;
+  }
+  /** "Show all 40" for a list cut short, so nothing is hidden without a sign. */
+  function moreButton(hiddenNodes, noun) {
+    var b = el("button", { "class": "link-btn more", type: "button", text: "Show " + count(hiddenNodes.length) + " more" + (noun ? " " + noun : "") });
+    b.addEventListener("click", function () { hiddenNodes.forEach(function (n) { n.classList.remove("hidden"); }); b.remove(); });
+    return b;
+  }
+  /** A legend: each series' light and name, with an optional value. */
+  function legend(items) {
+    return el("div", { "class": "chart-legend" }, items.map(function (it) {
+      return el("span", { "class": "who" }, led(it.color), el("b", { text: it.name }), it.value != null ? " " + it.value : null);
+    }));
+  }
+  /** Columns of dots over time. labels: ["2019", ...]; series: [{ name, color, values }] stacked bottom
+      up in that order. opts: { rows (dots tall, 12), fmt (value to text), label (what it shows, for
+      screen readers), caption }. Gives back the chart element. */
+  function columns(labels, series, opts) {
+    opts = opts || {};
+    var rows = opts.rows || 12, fmt = opts.fmt || String;
+    var totals = labels.map(function (_, i) { return series.reduce(function (a, s) { return a + (s.values[i] || 0); }, 0); });
+    var max = Math.max.apply(null, totals.concat([0])) || 1;
+    var grid = el("div", { "class": "cols", style: { "--n": labels.length }, role: "img", "aria-label": opts.label || "Chart" });
+    labels.forEach(function (lab, i) {
+      var lit = totals[i] > 0 ? Math.max(1, Math.round(rows * totals[i] / max)) : 0;
+      var parts = share(series.map(function (s) { return s.values[i] || 0; }), lit);
+      var col = el("div", { "class": "col" });
+      var dots = [];
+      for (var k = 0; k < rows - lit; k++) dots.push(el("i"));
+      for (var j = series.length - 1; j >= 0; j--) for (var m = 0; m < parts[j]; m++) dots.push(el("i", { "class": "on", style: { "--c": series[j].color || "var(--ink)" } }));
+      dots.forEach(function (d) { col.appendChild(d); });
+      col.addEventListener("pointermove", function (e) {
+        tip(e, String(lab), series.length > 1 ? series.filter(function (s) { return s.values[i]; }).map(function (s) { return s.name + ": " + fmt(s.values[i]); }).concat(["Together: " + fmt(totals[i])]) : [fmt(totals[i])]);
+      });
+      col.addEventListener("pointerleave", untip);
+      grid.appendChild(col);
+    });
+    // every nth label, fewer on a phone (class "s"), so they never run into each other
+    var every = Math.max(1, Math.ceil(labels.length / 12)), small = Math.max(every, Math.ceil(labels.length / 5));
+    var labs = el("div", { "class": "cols-labels", style: { "--n": labels.length }, "aria-hidden": "true" },
+      labels.map(function (lab, i) {
+        var w = i % every === 0, sm = i % small === 0;
+        return el("span", { "class": (w ? "w" : "") + (sm ? " s" : ""), text: w || sm ? String(lab) : "" });
+      }));
+    return el("div", { "class": "chart" }, grid, labs,
+      series.length > 1 ? legend(series.map(function (s) { return { name: s.name, color: s.color }; })) : null,
+      opts.caption ? el("p", { "class": "chart-caption", text: opts.caption }) : null);
+  }
+  /** A grid of dots sized by value, such as weekday by hour. values[r][c]; rowLabels and colLabels
+      are short text. opts: { color, fmt, label, every (show every nth column label) }. */
+  function heat(rowLabels, colLabels, values, opts) {
+    opts = opts || {};
+    var fmt = opts.fmt || String, max = 0;
+    values.forEach(function (r) { r.forEach(function (v) { if (v > max) max = v; }); });
+    var grid = el("div", { "class": "heat", style: { "--cols": colLabels.length }, role: "img", "aria-label": opts.label || "Chart" });
+    rowLabels.forEach(function (rl, r) {
+      grid.appendChild(el("span", { "class": "heat-l", text: rl }));
+      colLabels.forEach(function (cl, c) {
+        var v = (values[r] || [])[c] || 0;
+        var cell = el("i", { "class": v ? "on" : null, style: { "--s": v ? (0.3 + 0.7 * Math.sqrt(v / (max || 1))).toFixed(2) : "0.3", "--c": opts.color || "var(--ink)" } });
+        cell.addEventListener("pointermove", function (e) { tip(e, rl + " " + cl, [fmt(v)]); });
+        cell.addEventListener("pointerleave", untip);
+        grid.appendChild(cell);
+      });
+    });
+    var every = opts.every || Math.max(1, Math.ceil(colLabels.length / 8));
+    grid.appendChild(el("span", { "class": "heat-l" }));
+    colLabels.forEach(function (cl, c) { grid.appendChild(el("span", { "class": "heat-x", text: c % every === 0 ? cl : "" })); });
+    return el("div", { "class": "chart" }, grid, opts.caption ? el("p", { "class": "chart-caption", text: opts.caption }) : null);
+  }
+  /** A hundred dots split between parts: [{ name, v, color }]. With its legend beside it. */
+  function waffle(parts, opts) {
+    opts = opts || {};
+    var fmt = opts.fmt || String, total = 0;
+    parts.forEach(function (p) { total += p.v || 0; });
+    var counts = share(parts.map(function (p) { return p.v; }), 100);
+    var grid = el("div", { "class": "waffle", role: "img", "aria-label": opts.label || "Chart" });
+    parts.forEach(function (p, i) {
+      for (var k = 0; k < counts[i]; k++) {
+        var d = el("i", { "class": "on", style: { "--c": p.color || "var(--ink)" } });
+        d.addEventListener("pointermove", function (e) { tip(e, p.name, [fmt(p.v) + " · " + pct(p.v, total)]); });
+        d.addEventListener("pointerleave", untip);
+        grid.appendChild(d);
+      }
+    });
+    for (var r = grid.children.length; r < 100; r++) grid.appendChild(el("i"));
+    var key = el("ul", { "class": "rows waffle-key" }, parts.map(function (p) {
+      return el("li", { "class": "row" }, led(p.color), el("span", { "class": "name", text: p.name }), el("span", { "class": "num", text: fmt(p.v) }), el("span", { "class": "num2", text: pct(p.v, total) }));
+    }));
+    return el("div", { "class": "chart waffle-wrap" }, grid, key);
+  }
+  /** A ranked list with a meter on each row: [{ name, sub, v, v2, color }]. opts: { fmt, fmt2, limit, n, max }. */
+  function bars(rowsIn, opts) {
+    opts = opts || {};
+    var fmt = opts.fmt || String, limit = opts.limit || 10, max = opts.max || 0;
+    rowsIn.forEach(function (r) { if (r.v > max) max = r.v; });
+    var ul = el("ul", { "class": "rows bars" }), cut = [];
+    rowsIn.forEach(function (r, i) {
+      var m = meter(max ? r.v / max : 0, { n: opts.n || 40 });
+      m.node.style.setProperty("--c", r.color || "var(--ink)");
+      var li = el("li", { "class": "row" + (i >= limit ? " hidden" : ""), "data-q": opts.searchable ? String(r.name + " " + (r.sub || "")).toLowerCase() : null },
+        el("span", { "class": "name", text: r.name }), m.node, el("span", { "class": "num", text: fmt(r.v) }),
+        el("span", { "class": "num2", text: r.v2 != null ? (opts.fmt2 || String)(r.v2) : "" }),
+        r.sub ? el("span", { "class": "row-note", text: r.sub }) : null);
+      if (i >= limit) cut.push(li);
+      ul.appendChild(li);
+    });
+    if (cut.length) ul.appendChild(el("li", { "class": "more-line" }, moreButton(cut, opts.noun)));
+    return ul;
+  }
+  /** A table you can sort by any column. cols: [{ key, label, num, mono, fmt, led }]; rows: objects.
+      opts: { limit, sort: key, desc, q: row -> search text, noun }. */
+  function table(cols, rowsIn, opts) {
+    opts = opts || {};
+    var limit = opts.limit || 25, sortKey = opts.sort || null, desc = opts.desc !== false;
+    var body = el("tbody"), head = el("tr"), cut = [], foot = el("div", { "class": "tbl-foot" });
+    function cell(c, r) {
+      var v = r[c.key], text = c.fmt ? c.fmt(v, r) : (v == null ? "–" : String(v));
+      return el("td", { "class": (c.num ? "n" : "") + (c.mono ? " mono" : "") }, c.led ? led(c.led(r)) : null, c.led ? " " : null, text);
+    }
+    function paint() {
+      body.textContent = ""; foot.textContent = ""; cut = [];
+      var rs = rowsIn.slice();
+      if (sortKey) rs.sort(function (a, b) {
+        var x = a[sortKey], y = b[sortKey];
+        var o = typeof x === "number" && typeof y === "number" ? x - y : String(x == null ? "" : x).localeCompare(String(y == null ? "" : y));
+        return desc ? -o : o;
+      });
+      rs.forEach(function (r, i) {
+        var tr = el("tr", { "class": i >= limit ? "hidden" : null, "data-q": opts.q ? String(opts.q(r)).toLowerCase() : null }, cols.map(function (c) { return cell(c, r); }));
+        if (i >= limit) cut.push(tr);
+        body.appendChild(tr);
+      });
+      if (cut.length) foot.appendChild(moreButton(cut, opts.noun));
+      Array.prototype.forEach.call(head.children, function (th, j) { th.setAttribute("aria-sort", cols[j].key === sortKey ? (desc ? "descending" : "ascending") : "none"); });
+    }
+    cols.forEach(function (c) {
+      var b = el("button", { type: "button", text: c.label });
+      b.addEventListener("click", function () { if (sortKey === c.key) desc = !desc; else { sortKey = c.key; desc = !!c.num; } paint(); });
+      head.appendChild(el("th", { "class": c.num ? "n" : null, scope: "col" }, b));
+    });
+    paint();
+    return el("div", { "class": "tbl-wrap" }, el("table", { "class": "tbl" }, el("thead", null, head), body), foot);
+  }
+  /** A few figures in a row, each a dot-matrix number over its label: [{ value, unit, label }]. */
+  function facts(items) {
+    return el("div", { "class": "facts" }, items.map(function (f) {
+      return el("div", { "class": "fact" }, el("div", { "class": "fact-v" }, el("span", { "class": "dots", text: String(f.value) }), f.unit ? el("span", { "class": "u", text: f.unit }) : null),
+        el("div", { "class": "fact-l", text: f.label }));
+    }));
+  }
+  /** Mom's take: what the agent noticed, each with the lights of what it's about. [{ title, text, colors }]. */
+  function insights(list) {
+    return el("ul", { "class": "group rows insights" }, list.map(function (it) {
+      var lights = (it.colors || []).length ? it.colors.map(led) : [led(null)];
+      return el("li", { "class": "row" }, el("span", { "class": "ins-leds" }, lights),
+        el("div", { "class": "ins-body" }, it.title ? el("b", { text: it.title }) : null, el("p", { text: it.text })));
+    }));
+  }
+
   /** Mom blinks once, a moment after the page opens. */
   function blink(mom) {
     if (!mom) return;
@@ -365,6 +546,7 @@ var Kit = (function () {
     $: $, el: el, svg: svg, icon: icon, bytes: bytes, bytesParts: bytesParts, count: count, pct: pct, plural: plural,
     store: store, motion: motion, animate: animate, tween: tween, countUp: countUp, reveal: reveal, whenShown: whenShown,
     smooth: smooth, swap: swap, tip: tip, untip: untip, toast: toast, copy: copy, flash: flash, theme: theme, key: key,
-    spy: spy, meter: meter, stack: stack, blink: blink, start: start
+    spy: spy, meter: meter, stack: stack, led: led, share: share, legend: legend, columns: columns, heat: heat,
+    waffle: waffle, bars: bars, table: table, facts: facts, insights: insights, blink: blink, start: start
   };
 })();
