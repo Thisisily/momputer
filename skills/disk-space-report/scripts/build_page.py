@@ -13,7 +13,7 @@ deleting anything:
 notes.json is optional and is how the agent adds judgement:
 
     {
-      "headline": "C: is 96% full; Docker's disk image and three old games are half of it.",
+      "headline": "C: is 96% full; Docker's disk image and 3 old games are half of it.",
       "highlights": ["...", "..."],
       "drop": ["docker-system-prune", "games"],     # command ids or list ids to leave out of the plan
       "focus": "C:"                                  # optional: the drive the page opens on

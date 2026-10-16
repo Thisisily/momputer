@@ -38,7 +38,7 @@ Sizes are the space a file takes on the disk. Online-only cloud files count as z
 
 ```json
 {
-  "headline": "C: is 96% full. Docker's disk image and three games untouched since last year are half of it.",
+  "headline": "C: is 96% full. Docker's disk image and 3 games untouched since last year are half of it.",
   "highlights": [
     "Docker's disk image is 64 GB; pruning inside it and compacting gives most of that back.",
     "node_modules in 14 projects add up to 9 GB; six of those projects haven't changed in a year.",
@@ -49,7 +49,7 @@ Sizes are the space a file takes on the disk. Online-only cloud files count as z
 }
 ```
 
-`headline` is what mom says at the top: one kind sentence, under 20 words. Each highlight names its drive (`C:`), so the page can tag it in that drive's colour. `focus` is the drive letter the "Inside a drive" chart opens on; leave it out to open on the Windows drive, or the one the user last looked at.
+`headline` is what mom says at the top: one kind sentence, under 20 words, with digits for numbers. Each highlight names its drive (`C:`), so the page can put that drive's light beside it. `focus` is the drive letter the "Inside a drive" chart opens on; leave it out to open on the Windows drive, or the one the user last looked at.
 
 `drop` takes command ids (below) or list ids: `project-leftovers`, `virtual-disks`, `caches-by-hand`, `dev-kits`, `browser-caches`, `app-caches`, `games`, `system-files`, `driver-leftovers`, `old-installers`, `same-size`, `big-videos`, `disk-images`, `model-files`, `old-large`. Rebuilding after any change gives a new plan id, so an old approval can't apply to a changed plan.
 

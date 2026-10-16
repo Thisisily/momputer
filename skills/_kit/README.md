@@ -1,6 +1,6 @@
 # The page kit
 
-Momputer's look for the skills' pages: one CSS file, one JS file, mom, and three fonts. `sync.py` copies all of it into each page, so a page stays one file that works offline. `disk-space-report` is the reference page.
+The app's look for the skills' pages: one CSS file, one JS file, mom, and three fonts. `sync.py` copies all of it into each page, so a page stays one file that works offline. `disk-space-report` is the reference page.
 
 ## Use it in a page
 
@@ -8,7 +8,7 @@ Put the markers in the template, then run `python -I skills/_kit/sync.py`:
 
 ```html
 <style id="kit-css">/*@kit-css*/ /*@end*/</style>
-<!--@mom--><!--@end-->                      (optional: mom's face)
+<div class="screen" id="mom"><!--@mom--><!--@end--></div>   (mom's face)
 <script>
 /*@kit-js*/ /*@end*/
 // the page's own script, using Kit.*
@@ -21,13 +21,14 @@ Edit the kit here, never a page's copy. `sync.py --check` (run by `tests/run_all
 
 | File | What |
 | --- | --- |
-| `kit.css` | Light and dark tokens, the data colours `--c1` to `--c8`, and parts: masthead with mom and her speech bubble, sticky section bar with search, cards, LEDs, swatches and tags, dot meter, bars, buttons, switches, tabs, rows, folds, tooltip, toast, bottom dock, reveal motion, print |
-| `kit.js` | `Kit.el` / `Kit.svg` (nodes from `textContent` only), `bytes`, `count`, `pct`, `plural`, `store` (safe `localStorage`), `animate`, `tween`, `countUp`, `reveal`, `whenShown`, `smooth` (folds), `swap` (view transitions), `tip`, `toast`, `copy`, `flash`, `theme`, `key`, `spy`, `blink`, `start` |
+| `kit.css` | The app's light and dark tokens, the lights `--c1` to `--c6`, and its parts: title bar, mom's card (`.note`, `.screen`, `.big`, `.line`), section heads, cards (`.group`) of rows with dividers, lights (`.led`, `.led.c`, `.who`), dot meters, buttons (`.primary`, `.secondary`, `.link-btn`), ticks, sub tabs, the section bar with search, tooltip, toast, bottom dock, print |
+| `kit.js` | `Kit.el` / `Kit.svg` (nodes from `textContent` only), `bytes`, `count`, `pct`, `plural`, `store` (safe `localStorage`), `meter` and `stack` (dot meters), `animate`, `tween`, `countUp`, `reveal` (tells you when something comes into view; hides nothing), `whenShown`, `smooth` (folds), `swap` (view transitions), `tip`, `toast`, `copy`, `flash`, `theme`, `key`, `spy`, `blink`, `start` |
 | `mom.svg` | Mom's face, the same as the app's |
 | `fonts/` | Geist, Geist Mono and Doto, SIL Open Font License 1.1 (`OFL.txt`) |
 
 ## Rules it keeps
 
 - No network, no library, no `innerHTML`.
-- Colour is for telling data apart, in fixed order, always next to a name. Grey for everything else; red and green only for state.
-- Every animation plays once and ends. Reduced motion turns them off. Content below the first screen is never hidden waiting for one.
+- Colour is a light: one per thing, in fixed order, next to its name, never red or green. Red and green lights are for state. No coloured borders, stripes, glows or gradients. The faint dot paper behind the page is the website's own.
+- Content shows at once. Motion answers what someone did, eases out without bouncing, and never loops. Reduced motion turns it off.
+- Secondary text passes 4.5:1 on its background.

@@ -309,7 +309,7 @@ def main(argv=None):
         load(1280, scheme="light")
         p.js("try { localStorage.clear(); } catch (e) {}")
         load(1280, scheme="light")
-        check("the page loads and builds itself", p.js("document.querySelectorAll('.card').length") > 2)
+        check("the page loads and builds itself", p.js("document.querySelectorAll('.card, .group').length") > 2)
         light = p.js("getComputedStyle(document.body).backgroundColor + '|' + getComputedStyle(document.body).color")
         wide = p.js("[document.documentElement.scrollWidth, window.innerWidth]")
         check("no sideways scroll at 1280 px", wide[0] <= wide[1], wide)

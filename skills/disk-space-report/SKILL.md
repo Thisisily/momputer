@@ -4,7 +4,7 @@ description: Surveys a Windows PC's local drives read-only and shows where the d
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline.
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Disk space report
@@ -61,8 +61,8 @@ python scripts/summarize.py "<out>/survey.json" --section suspects --limit 20
 
 Then write `<out>/notes.json` (format in [references/review-guide.md](references/review-guide.md)):
 
-- `headline`: mom says it at the top of the page. One kind sentence, under 20 words, with the biggest finding ("C: is 96% full. Docker's disk image and three games you haven't opened this year are half of it."). No scolding.
-- `highlights`: 3 to 6 short findings, each under 30 words. Name the drive (`C:`, `E:`): the page tags each card in that drive's colour. Say what would help, not just what's there.
+- `headline`: mom says it at the top of the page. One kind sentence, under 20 words, with the biggest finding ("C: is 96% full. Docker's disk image and 3 games you haven't opened this year are half of it."). Digits, not words, for numbers. No scolding.
+- `highlights`: 3 to 6 short findings, each under 30 words. Name the drive (`C:`, `E:`): the page puts that drive's light beside it. Say what would help, not just what's there.
 - `focus` (optional): the drive the page opens on, such as `"C"`. Pick the fullest one, or the one the user asked about.
 - `drop`: plan items that don't fit this user (for example `docker-system-prune` if they said their containers matter).
 
@@ -72,7 +72,7 @@ Then write `<out>/notes.json` (format in [references/review-guide.md](references
 python scripts/build_page.py "<out>/survey.json" --notes "<out>/notes.json" --out "<out>/disk-space.html"
 ```
 
-This writes the page and `diskspace-plan.json` next to it. The page is already designed: each drive keeps one colour everywhere, mom reads out the headline, and it animates on its own. Don't restyle it or rewrite it by hand. If something reads wrong, change `notes.json` and build again.
+This writes the page and `diskspace-plan.json` next to it. The page is already designed in Momputer's look: each drive has a light of its own colour, mom says the headline, and the drive meters fill once on opening. Don't restyle it or rewrite it by hand. If something reads wrong, change `notes.json` and build again.
 
 If you can take a screenshot of a page, look at it once before showing it. Check that the headline fits and each highlight names the right drive.
 

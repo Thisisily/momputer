@@ -1,7 +1,8 @@
 /* momputer's page kit: small helpers every skill's page shares. No library, no network.
    Builds nodes with textContent only: names in the data are written by strangers.
-   Motion comes from the browser itself (the Web Animations API, View Transitions), plays once,
-   and steps aside when the person's system asks for less motion. Nothing loops at rest.
+   Motion comes from the browser itself (the Web Animations API, View Transitions). It answers
+   what the person does, plus at most one moment on opening; it never hides content, never loops,
+   and steps aside when the person's system asks for less motion.
 
    Kept in skills/_kit and copied into each page by skills/_kit/sync.py. */
 var Kit = (function () {
@@ -102,32 +103,17 @@ var Kit = (function () {
     if (from === to) { node.textContent = fmt(to); return; }
     tween(ms || 700, function (e) { node.textContent = fmt(from + (to - from) * e); });
   }
-  /** Each [data-reveal] in `root`: what's on the first screen rises in, one after another; what's
-      further down is never hidden (a full-page picture or a print shows it) and lifts gently into
-      place as it scrolls in. Each gets a "kit:shown" event when it plays. */
+  /** Tells each [data-reveal] in `root` when it first comes into view, with a "kit:shown" event, so
+      a page can play its one moment there. Never hides anything and never animates by itself:
+      content that waits for an animation is content people can't read yet. */
   function reveal(root) {
     var items = Array.prototype.slice.call((root || document).querySelectorAll("[data-reveal]:not(.shown)"));
-    function shown(n) { n.dispatchEvent(new CustomEvent("kit:shown")); }
-    if (!motion() || !("IntersectionObserver" in window)) { items.forEach(function (n) { n.classList.add("shown"); shown(n); }); return; }
-    var fold = window.innerHeight, later = [], first = 0;
-    items.forEach(function (n) {
-      n.classList.add("shown");
-      if (n.getBoundingClientRect().top < fold * 0.96) {
-        animate(n, [{ opacity: 0, transform: "translateY(16px)" }, { opacity: 1, transform: "none" }], { duration: 620, delay: 80 + Math.min(first++, 10) * 60 });
-        shown(n);
-      } else later.push(n);
-    });
-    if (!later.length) return;
+    function shown(n) { n.classList.add("shown"); n.dispatchEvent(new CustomEvent("kit:shown")); }
+    if (!("IntersectionObserver" in window)) { items.forEach(shown); return; }
     var io = new IntersectionObserver(function (entries) {
-      var k = 0;
-      entries.forEach(function (en) {
-        if (!en.isIntersecting) return;
-        io.unobserve(en.target);
-        animate(en.target, [{ opacity: 0.4, transform: "translateY(18px)" }, { opacity: 1, transform: "none" }], { duration: 640, delay: Math.min(k++, 6) * 50, fill: "none" });
-        shown(en.target);
-      });
-    }, { rootMargin: "0px 0px -4% 0px" });
-    later.forEach(function (n) { io.observe(n); });
+      entries.forEach(function (en) { if (en.isIntersecting) { io.unobserve(en.target); shown(en.target); } });
+    }, { rootMargin: "0px 0px -8% 0px" });
+    items.forEach(function (n) { io.observe(n); });
   }
   /** Runs fn once `node` is on screen (right away if motion is off). */
   function whenShown(node, fn) {
@@ -150,11 +136,11 @@ var Kit = (function () {
         build();
         details.open = true;
         var h = body.scrollHeight;
-        busy = body.animate([{ height: "0px", opacity: 0 }, { height: h + "px", opacity: 1 }], { duration: Math.min(520, 200 + h / 3), easing: "cubic-bezier(0.2, 0.7, 0.2, 1)" });
+        busy = body.animate([{ height: "0px", opacity: 0 }, { height: h + "px", opacity: 1 }], { duration: Math.min(360, 180 + h / 4), easing: "cubic-bezier(0.2, 0.7, 0.2, 1)" });
         busy.onfinish = function () { busy = null; };
       } else {
         var h2 = body.scrollHeight;
-        busy = body.animate([{ height: h2 + "px", opacity: 1 }, { height: "0px", opacity: 0 }], { duration: Math.min(420, 160 + h2 / 4), easing: "cubic-bezier(0.4, 0, 1, 1)" });
+        busy = body.animate([{ height: h2 + "px", opacity: 1 }, { height: "0px", opacity: 0 }], { duration: Math.min(280, 140 + h2 / 5), easing: "cubic-bezier(0.4, 0, 1, 1)" });
         busy.onfinish = function () { details.open = false; busy = null; };
       }
     });
@@ -205,7 +191,7 @@ var Kit = (function () {
     btn.appendChild(icon("check"));
     btn.appendChild(document.createTextNode(label));
     btn.setAttribute("data-state", "done");
-    animate(btn, [{ transform: "scale(0.94)" }, { transform: "scale(1.04)" }, { transform: "none" }], { duration: 380, fill: "none" });
+    animate(btn, [{ transform: "scale(0.96)" }, { transform: "none" }], { duration: 220, fill: "none" });
     clearTimeout(btn.__t);
     btn.__t = setTimeout(function () {
       btn.textContent = "";
@@ -302,6 +288,62 @@ var Kit = (function () {
     edges();
   }
 
+  // ---- meters: a row of dots, like the widget's
+  function dotsRun(from, to) {
+    var d = "";
+    for (var i = from; i < to; i++) d += "M" + (i + 0.5) + " 0.5h0";
+    return d;
+  }
+  /** A meter of n dots filled to a fraction; with warn, the last four lit go red. Lit dots take the
+      CSS colour --c. Gives back { node, set(fraction) }: set it again to animate the fill. */
+  function meter(fraction, opts) {
+    opts = opts || {};
+    var n = opts.n || 60;
+    var node = svg("svg", { "class": "meter", viewBox: "0 0 " + n + " 1", preserveAspectRatio: "xMinYMid meet", "aria-hidden": "true" });
+    var off = svg("path", { "class": "m-off" }), lit = svg("path", { "class": "m-on" }), hot = svg("path", { "class": "m-hot" });
+    node.appendChild(off);
+    node.appendChild(lit);
+    node.appendChild(hot);
+    var full = Math.max(fraction > 0 ? 1 : 0, Math.round(Math.max(0, Math.min(1, fraction || 0)) * n));
+    function set(t) {
+      var k = Math.round(full * Math.max(0, Math.min(1, t))), h = opts.warn ? Math.max(0, full - 4) : full;
+      off.setAttribute("d", dotsRun(k, n));
+      lit.setAttribute("d", dotsRun(0, Math.min(k, h)));
+      hot.setAttribute("d", dotsRun(Math.min(k, h), k));
+    }
+    set(1);
+    return { node: node, set: set };
+  }
+  /** One meter shared by several things: parts are [{ v, c }], lit in proportion to total, each in
+      its own colour c. Gives back { node, set(t) } where t from 0 to 1 lights them up in turn. */
+  function stack(parts, opts) {
+    opts = opts || {};
+    var n = opts.n || 48, sum = 0;
+    parts = parts.filter(function (p) { return p.v > 0; });
+    parts.forEach(function (p) { sum += p.v; });
+    var total = opts.total || sum || 1;
+    var lit = Math.min(n, Math.max(sum > 0 ? 1 : 0, Math.round(n * sum / total)));
+    var counts = parts.map(function (p) { return Math.floor(lit * p.v / (sum || 1)); });
+    var left = lit - counts.reduce(function (a, b) { return a + b; }, 0);
+    parts.map(function (p, i) { return [lit * p.v / (sum || 1) - counts[i], i]; })
+      .sort(function (a, b) { return b[0] - a[0]; })
+      .forEach(function (r) { if (left > 0) { counts[r[1]]++; left--; } });
+    var node = svg("svg", { "class": "meter", viewBox: "0 0 " + n + " 1", preserveAspectRatio: "xMinYMid meet", "aria-hidden": "true" });
+    var off = svg("path", { "class": "m-off" });
+    node.appendChild(off);
+    var paths = parts.map(function (p) { return node.appendChild(svg("path", { "class": "m-on", style: { stroke: p.c } })); });
+    function set(t) {
+      var upto = Math.round(lit * Math.max(0, Math.min(1, t))), at = 0;
+      paths.forEach(function (path, i) {
+        path.setAttribute("d", dotsRun(at, Math.min(at + counts[i], upto)));
+        at += counts[i];
+      });
+      off.setAttribute("d", dotsRun(Math.min(upto, lit), n));
+    }
+    set(1);
+    return { node: node, set: set };
+  }
+
   /** Mom blinks once, a moment after the page opens. */
   function blink(mom) {
     if (!mom) return;
@@ -323,6 +365,6 @@ var Kit = (function () {
     $: $, el: el, svg: svg, icon: icon, bytes: bytes, bytesParts: bytesParts, count: count, pct: pct, plural: plural,
     store: store, motion: motion, animate: animate, tween: tween, countUp: countUp, reveal: reveal, whenShown: whenShown,
     smooth: smooth, swap: swap, tip: tip, untip: untip, toast: toast, copy: copy, flash: flash, theme: theme, key: key,
-    spy: spy, blink: blink, start: start
+    spy: spy, meter: meter, stack: stack, blink: blink, start: start
   };
 })();

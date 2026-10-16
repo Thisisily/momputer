@@ -1,7 +1,8 @@
-/* momputer's page kit: the look every skill's page shares. Black and white like a Nothing phone,
-   mom on a little round white screen, numbers in dot matrix, tiny lights that glow green or red.
-   Colour is allowed for data: each drive (or account, or calendar) keeps one colour everywhere it
-   appears, from a palette checked for colour-blind readers in light and dark.
+/* momputer's page kit: the app's look on a page. Black and white, the way a Nothing phone is, with
+   mom on a little round white screen, numbers in dot matrix, and colour only from tiny lights.
+   Red and green lights mean "look at this" and "fine". A page may give each thing it shows (a drive,
+   an account, a calendar) a light of its own colour: --c1 to --c6, checked for colour-blind readers
+   in light and dark, never red or green, always next to the thing's name.
 
    Kept in skills/_kit and copied into each page by skills/_kit/sync.py, so a page stays one file
    that works offline. Don't edit a page's copy; edit this and run sync.py. */
@@ -10,39 +11,34 @@
   color-scheme: light;
   --bg: #ececec;
   --card: #ffffff;
-  --card-2: #f4f4f4;
-  --card-3: #ebebeb;
-  --line: #e6e6e6;
+  --card-2: #f3f3f3;
+  --card-hover: #f8f8f8;
+  --line: #ececec;
   --line-2: #d2d2d2;
-  --edge: rgba(0, 0, 0, 0.06);
+  --edge: rgba(0, 0, 0, 0.05);
   --ink: #000000;
-  --ink-2: #555555;
-  --ink-3: #6f6f6f;
+  --ink-2: #5a5a5a;
+  --ink-3: #6b6b6b;
   --red: #d71921;
   --green: #0fa548;
-  --led-off: #c4c4c4;
-  --glow: 45%;
-  --grid: rgba(0, 0, 0, 0.075);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
-  --lift: 0 2px 4px rgba(0, 0, 0, 0.06), 0 16px 40px rgba(0, 0, 0, 0.1);
-  --hatch: rgba(0, 0, 0, 0.16);
-  /* Data colours, in this order: validated for colour-blind readers (dataviz palette, adjacent pairs). */
-  --c1: #2a78d6;
-  --c2: #eb6834;
-  --c3: #1baf7a;
-  --c4: #eda100;
-  --c5: #e87ba4;
-  --c6: #008300;
-  --c7: #6250d6;
-  --c8: #e34948;
+  --led-off: #cdcdcd;
+  --dots: rgba(0, 0, 0, 0.07);   /* the faint dot paper the website sits on */
+  --hatch: rgba(0, 0, 0, 0.14);
+  --float: 0 10px 30px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
+  /* A light per thing, in this order (OKLCH, checked with the dataviz palette validator). */
+  --c1: #276ed2;
+  --c2: #bc7300;
+  --c3: #7c44c3;
+  --c4: #0091a6;
+  --c5: #7d8118;
+  --c6: #c13d82;
+  --c7: var(--ink-2);
+  --c8: var(--ink-3);
   --font-ui: "Geist", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-dot: "Doto", "Geist Mono", ui-monospace, monospace;
   --mono: "Geist Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
-  --r-lg: 24px;
-  --r-md: 16px;
-  --r-sm: 10px;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
-  --spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --settle: cubic-bezier(0.16, 1, 0.3, 1);   /* eases out and stops: no bounce, no overshoot */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -50,30 +46,26 @@
     color-scheme: dark;
     --bg: #000000;
     --card: #121212;
-    --card-2: #1a1a1a;
-    --card-3: #222222;
+    --card-2: #1c1c1c;
+    --card-hover: #171717;
     --line: #232323;
     --line-2: #383838;
-    --edge: rgba(255, 255, 255, 0.07);
+    --edge: rgba(255, 255, 255, 0.06);
     --ink: #ffffff;
-    --ink-2: #b3b3b3;
+    --ink-2: #a8a8a8;
     --ink-3: #8a8a8a;
     --red: #ff3b3b;
     --green: #2fe07a;
     --led-off: #3b3b3b;
-    --glow: 75%;
-    --grid: rgba(255, 255, 255, 0.07);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
-    --lift: 0 2px 6px rgba(0, 0, 0, 0.5), 0 18px 44px rgba(0, 0, 0, 0.5);
-    --hatch: rgba(255, 255, 255, 0.2);
-    --c1: #3987e5;
-    --c2: #d95926;
-    --c3: #199e70;
-    --c4: #c98500;
-    --c5: #d55181;
-    --c6: #008300;
-    --c7: #9085e9;
-    --c8: #e66767;
+    --dots: rgba(255, 255, 255, 0.07);
+    --hatch: rgba(255, 255, 255, 0.13);
+    --float: 0 12px 36px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    --c1: #498beb;
+    --c2: #c8830b;
+    --c3: #9163d5;
+    --c4: #1ca6b9;
+    --c5: #8b8c14;
+    --c6: #c84c8b;
   }
 }
 
@@ -81,30 +73,26 @@
   color-scheme: dark;
   --bg: #000000;
   --card: #121212;
-  --card-2: #1a1a1a;
-  --card-3: #222222;
+  --card-2: #1c1c1c;
+  --card-hover: #171717;
   --line: #232323;
   --line-2: #383838;
-  --edge: rgba(255, 255, 255, 0.07);
+  --edge: rgba(255, 255, 255, 0.06);
   --ink: #ffffff;
-  --ink-2: #b3b3b3;
+  --ink-2: #a8a8a8;
   --ink-3: #8a8a8a;
   --red: #ff3b3b;
   --green: #2fe07a;
   --led-off: #3b3b3b;
-  --glow: 75%;
-  --grid: rgba(255, 255, 255, 0.07);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
-  --lift: 0 2px 6px rgba(0, 0, 0, 0.5), 0 18px 44px rgba(0, 0, 0, 0.5);
-  --hatch: rgba(255, 255, 255, 0.2);
-  --c1: #3987e5;
-  --c2: #d95926;
-  --c3: #199e70;
-  --c4: #c98500;
-  --c5: #d55181;
-  --c6: #008300;
-  --c7: #9085e9;
-  --c8: #e66767;
+  --dots: rgba(255, 255, 255, 0.07);
+  --hatch: rgba(255, 255, 255, 0.13);
+  --float: 0 12px 36px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --c1: #498beb;
+  --c2: #c8830b;
+  --c3: #9163d5;
+  --c4: #1ca6b9;
+  --c5: #8b8c14;
+  --c6: #c84c8b;
 }
 
 /* ------------------------------------------------------------------ the page */
@@ -117,7 +105,7 @@
 
 html {
   -webkit-text-size-adjust: 100%;
-  scroll-padding-top: 84px;
+  scroll-padding-top: 76px;
 }
 
 html,
@@ -129,14 +117,13 @@ body {
 
 body {
   min-height: 100vh;
-  padding: 0 20px 168px;
-  background-image: radial-gradient(var(--grid) 1px, transparent 1.4px);
+  padding: 0 20px 150px;
+  background-image: radial-gradient(var(--dots) 1px, transparent 1.4px);
   background-size: 22px 22px;
-  font: 15px/1.55 var(--font-ui);
-  letter-spacing: -0.005em;
+  font: 15px/1.5 var(--font-ui);
+  letter-spacing: -0.003em;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  transition: background-color 240ms var(--ease), color 240ms var(--ease);
 }
 
 button,
@@ -147,13 +134,15 @@ textarea {
 }
 
 button {
+  padding: 0;
+  border: 0;
+  background: none;
   cursor: pointer;
 }
 
 :focus-visible {
   outline: 2px solid var(--ink);
-  outline-offset: 3px;
-  border-radius: 6px;
+  outline-offset: 2px;
 }
 
 ::selection {
@@ -162,7 +151,7 @@ button {
 }
 
 .wrap {
-  max-width: 1200px;
+  max-width: 1120px;
   margin: 0 auto;
 }
 
@@ -170,67 +159,27 @@ button {
   display: none !important;
 }
 
-.vh {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
 h1,
 h2,
-h3 {
+h3,
+p {
   margin: 0;
-  letter-spacing: -0.025em;
 }
 
-h1 {
-  font-size: clamp(30px, 5vw, 48px);
-  font-weight: 650;
-  line-height: 1.04;
-}
-
-h2 {
-  font-size: 22px;
-  font-weight: 650;
-  line-height: 1.2;
-}
-
-h3 {
-  font-size: 15.5px;
-  font-weight: 620;
-  line-height: 1.3;
+.num {
+  font-variant-numeric: tabular-nums;
 }
 
 .mono {
   font-family: var(--mono);
 }
 
-.small {
-  font-size: 13px;
-}
-
-.muted {
+.dim {
   color: var(--ink-3);
+  font-weight: 400;
 }
 
-.sub {
-  color: var(--ink-2);
-}
-
-.kicker {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font: 500 11px/1.4 var(--mono);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-}
-
-/* Dot matrix numbers, the widget's readouts. */
+/* Dot-matrix type with round dots, the widget's readouts. */
 .dots {
   font-family: var(--font-dot);
   font-weight: 800;
@@ -240,95 +189,343 @@ h3 {
   font-variant-numeric: tabular-nums;
 }
 
-/* ------------------------------------------------------------------ cards and sections */
+/* ------------------------------------------------------------------ the title bar */
 
-.card {
-  position: relative;
-  min-width: 0;
-  padding: 22px;
-  border-radius: var(--r-lg);
-  background: var(--card);
-  box-shadow: var(--shadow), inset 0 0 0 1px var(--edge);
-  transition: background-color 240ms var(--ease), box-shadow 240ms var(--ease), transform 240ms var(--ease);
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 64px;
+  padding: 10px 2px;
 }
 
-.card.flat {
+.wordmark {
+  font-size: 19px;
+  letter-spacing: 0.04em;
+}
+
+.topbar-what {
+  color: var(--ink-2);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.topbar-when {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+
+.topbar-tools {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  color: var(--ink-2);
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.icon-btn:hover {
+  background: var(--card);
+  color: var(--ink);
+}
+
+.icon-btn svg {
+  width: 19px;
+  height: 19px;
+}
+
+/* ------------------------------------------------------------------ mom's card */
+
+.note {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  column-gap: 26px;
+  align-items: center;
+  padding: 22px 26px 22px 22px;
+  border-radius: 32px;
+  background: var(--card);
   box-shadow: inset 0 0 0 1px var(--edge);
 }
 
-section.block {
-  margin-top: 56px;
-}
-
-.sec-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  justify-content: space-between;
-  gap: 8px 24px;
-  margin-bottom: 18px;
-}
-
-.sec-head p {
-  margin: 6px 0 0;
-  max-width: 64ch;
-  color: var(--ink-2);
-}
-
-/* ------------------------------------------------------------------ the masthead, with mom */
-
-.masthead {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 18px 28px;
-  align-items: start;
-  padding: 44px 0 8px;
-}
-
-.mom {
-  width: 96px;
-  height: 96px;
+.screen {
+  width: 132px;
+  height: 132px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 0 1px var(--edge), 0 10px 30px rgba(0, 0, 0, 0.12);
+  box-shadow: inset 0 0 0 1px var(--line-2), 0 0 0 5px color-mix(in srgb, var(--card-2) 70%, transparent);
   overflow: hidden;
 }
 
-.mom svg {
+.screen svg {
   display: block;
   width: 100%;
   height: 100%;
 }
 
-.mom .eye {
+.screen .eye {
   transform-box: fill-box;
   transform-origin: center;
 }
 
-.speech {
-  position: relative;
-  display: inline-block;
-  max-width: 68ch;
-  margin: 16px 0 0;
-  padding: 14px 18px;
-  border-radius: 6px 20px 20px 20px;
-  background: var(--card);
-  box-shadow: var(--shadow), inset 0 0 0 1px var(--edge);
-  font-size: 17px;
-  font-weight: 520;
-  line-height: 1.45;
-}
-
-.meta-line {
-  margin-top: 12px;
-  font: 12px/1.6 var(--mono);
-  color: var(--ink-3);
-}
-
-.mast-tools {
+.big {
   display: flex;
+  align-items: flex-start;
   gap: 8px;
-  padding-top: 4px;
+}
+
+.big-num {
+  font-size: 60px;
+}
+
+.big .led {
+  margin-top: 2px;
+}
+
+.big-label {
+  margin-top: 8px;
+  color: var(--ink-2);
+  font-size: 14px;
+}
+
+.line {
+  max-width: 40ch;
+  margin: 10px 0 0;
+  font-size: 25px;
+  font-weight: 620;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+  text-wrap: pretty;
+}
+
+.note-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-top: 20px;
+}
+
+.note-sub {
+  grid-column: 1 / -1;
+  max-width: 52ch;
+  margin-top: 14px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ buttons */
+
+.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 22px 0 18px;
+  border-radius: 22px;
+  background: var(--ink);
+  color: var(--bg);
+  font-size: 15px;
+  font-weight: 620;
+  white-space: nowrap;
+  transition: transform 120ms ease, opacity 140ms ease;
+}
+
+.primary:hover {
+  opacity: 0.88;
+}
+
+.primary:active {
+  transform: scale(0.97);
+}
+
+.primary svg {
+  width: 16px;
+  height: 16px;
+}
+
+.primary[data-state="done"] {
+  background: var(--green);
+  color: #fff;
+}
+
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 15px;
+  border-radius: 18px;
+  box-shadow: inset 0 0 0 1px var(--line-2);
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: box-shadow 160ms ease, background-color 160ms ease, transform 120ms ease;
+}
+
+.secondary:hover {
+  background: var(--card-2);
+  box-shadow: inset 0 0 0 1px var(--ink-2);
+}
+
+.secondary:active {
+  transform: scale(0.97);
+}
+
+.secondary svg {
+  width: 14px;
+  height: 14px;
+}
+
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--ink) 22%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  transition: text-decoration-color 160ms ease;
+}
+
+.link-btn:hover {
+  text-decoration-color: var(--ink);
+}
+
+.link-btn svg {
+  width: 13px;
+  height: 13px;
+}
+
+.mini {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--ink-3);
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.mini:hover {
+  background: var(--card-2);
+  color: var(--ink);
+}
+
+.mini svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* A tick like the widget's: a small rounded square that fills with ink. Still a real checkbox. */
+input.tick {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1.5px var(--ink-3);
+  cursor: pointer;
+  transition: background-color 160ms ease, box-shadow 160ms ease;
+}
+
+input.tick:hover {
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+
+input.tick::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 3.5px;
+  width: 5px;
+  height: 10px;
+  border: solid var(--bg);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) scale(0.4);
+  opacity: 0;
+  transition: transform 220ms var(--settle), opacity 120ms ease;
+}
+
+input.tick:checked {
+  background: var(--ink);
+  box-shadow: none;
+}
+
+input.tick:checked::after {
+  transform: rotate(45deg) scale(1);
+  opacity: 1;
+}
+
+.kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--card-2);
+  box-shadow: inset 0 -1px 0 var(--line-2);
+  color: var(--ink-2);
+  font: 600 11px/1 var(--mono);
+}
+
+/* ------------------------------------------------------------------ the little lights */
+
+.led {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--led-off);
+  vertical-align: middle;
+}
+
+.led.green {
+  background: var(--green);
+}
+
+.led.red {
+  background: var(--red);
+}
+
+/* A thing's own light: --c is its colour. */
+.led.c {
+  background: var(--c);
+}
+
+/* A drive (or account) by name, with its light. Text stays ink; only the light has colour. */
+.who {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.who b {
+  font-weight: 650;
 }
 
 /* ------------------------------------------------------------------ the section bar */
@@ -337,9 +534,9 @@ section.block {
   position: sticky;
   top: 0;
   z-index: 8;
-  margin: 18px -20px 0;
+  margin: 14px -20px 0;
   padding: 10px 20px;
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  background: color-mix(in srgb, var(--bg) 84%, transparent);
   -webkit-backdrop-filter: blur(14px) saturate(1.4);
   backdrop-filter: blur(14px) saturate(1.4);
 }
@@ -347,11 +544,12 @@ section.block {
 .secbar-in {
   display: flex;
   align-items: center;
-  gap: 12px;
-  max-width: 1200px;
+  gap: 10px;
+  max-width: 1120px;
   margin: 0 auto;
 }
 
+/* The app's tabs: a card with a thumb of ink that slides under the section you're in. */
 .secnav {
   position: relative;
   display: flex;
@@ -361,13 +559,50 @@ section.block {
   padding: 4px;
   overflow-x: auto;
   scrollbar-width: none;
-  border-radius: 999px;
+  border-radius: 23px;
   background: var(--card);
   box-shadow: inset 0 0 0 1px var(--edge);
 }
 
 .secnav::-webkit-scrollbar {
   display: none;
+}
+
+.secnav button {
+  position: relative;
+  z-index: 1;
+  flex: 1 0 auto;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 19px;
+  color: var(--ink-3);
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  transition: color 200ms ease;
+}
+
+.secnav button:hover {
+  color: var(--ink);
+}
+
+.secnav button[aria-current="true"] {
+  color: var(--bg);
+}
+
+.secnav .ind {
+  position: absolute;
+  z-index: 0;
+  top: 4px;
+  bottom: 4px;
+  left: 0;
+  width: 0;
+  border-radius: 19px;
+  background: var(--ink);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--bg) 14%, transparent);
+  transition: transform 380ms var(--settle), width 380ms var(--settle), opacity 200ms;
+  opacity: 0;
 }
 
 /* When the sections don't fit, an arrow shows at the end that has more (Kit.spy adds them) */
@@ -390,12 +625,9 @@ section.block {
   display: none;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  padding: 0;
-  border: 0;
+  width: 42px;
   color: var(--ink);
   background: var(--card);
-  cursor: pointer;
 }
 
 .nav-more::before {
@@ -408,16 +640,16 @@ section.block {
 }
 
 .nav-more svg {
-  width: 28px;
-  height: 28px;
-  padding: 6px;
+  width: 30px;
+  height: 30px;
+  padding: 7px;
   border-radius: 50%;
-  background: var(--card-3);
+  background: var(--card-2);
 }
 
 .nav-more.prev {
   left: 0;
-  border-radius: 999px 0 0 999px;
+  border-radius: 23px 0 0 23px;
   box-shadow: inset 1px 0 0 var(--edge), inset 0 1px 0 var(--edge), inset 0 -1px 0 var(--edge);
 }
 
@@ -432,7 +664,7 @@ section.block {
 
 .nav-more.next {
   right: 0;
-  border-radius: 0 999px 999px 0;
+  border-radius: 0 23px 23px 0;
   box-shadow: inset -1px 0 0 var(--edge), inset 0 1px 0 var(--edge), inset 0 -1px 0 var(--edge);
 }
 
@@ -446,56 +678,25 @@ section.block {
   display: flex;
 }
 
-.secnav button {
-  position: relative;
-  border: 0;
-  background: transparent;
-  z-index: 1;
-  flex: none;
-  padding: 7px 14px;
-  border-radius: 999px;
-  color: var(--ink-3);
-  font-size: 13px;
-  font-weight: 560;
-  text-decoration: none;
-  white-space: nowrap;
-  transition: color 200ms var(--ease);
-}
-
-.secnav button:hover,
-.secnav button[aria-current="true"] {
-  color: var(--ink);
-}
-
-.secnav .ind {
-  position: absolute;
-  z-index: 0;
-  top: 4px;
-  bottom: 4px;
-  left: 0;
-  width: 0;
-  border-radius: 999px;
-  background: var(--card-3);
-  transition: transform 360ms var(--spring), width 360ms var(--spring), opacity 200ms;
-  opacity: 0;
-}
-
 .search {
   position: relative;
-  flex: 0 1 260px;
+  flex: 0 1 250px;
   min-width: 0;
 }
 
 .search input {
   width: 100%;
-  height: 40px;
-  padding: 0 40px 0 38px;
+  height: 44px;
+  padding: 0 42px 0 40px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 22px;
   background: var(--card);
   box-shadow: inset 0 0 0 1px var(--edge);
   font-size: 14px;
-  transition: box-shadow 200ms var(--ease);
+}
+
+.search input::placeholder {
+  color: var(--ink-3);
 }
 
 .search input:focus {
@@ -505,8 +706,8 @@ section.block {
 
 .search > svg {
   position: absolute;
-  left: 14px;
-  top: 12px;
+  left: 15px;
+  top: 14px;
   width: 16px;
   height: 16px;
   color: var(--ink-3);
@@ -515,360 +716,155 @@ section.block {
 
 .search .kbd {
   position: absolute;
-  right: 10px;
-  top: 9px;
+  right: 11px;
+  top: 11px;
 }
 
-.kbd {
-  display: inline-grid;
-  place-items: center;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 6px;
-  border-radius: 6px;
-  background: var(--card-2);
-  box-shadow: inset 0 -1px 0 var(--line-2), inset 0 0 0 1px var(--edge);
-  color: var(--ink-3);
-  font: 600 11px/1 var(--mono);
+/* ------------------------------------------------------------------ sections and cards */
+
+section.block {
+  margin-top: 40px;
 }
 
-/* ------------------------------------------------------------------ lights */
-
-.led {
-  display: inline-block;
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--led-off);
-  vertical-align: middle;
-}
-
-.led.green {
-  background: var(--green);
-  box-shadow: 0 0 7px color-mix(in srgb, var(--green) var(--glow), transparent);
-}
-
-.led.red {
-  background: var(--red);
-  box-shadow: 0 0 7px color-mix(in srgb, var(--red) var(--glow), transparent);
-}
-
-.led.hollow {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--ink-3);
-}
-
-/* A data colour's mark beside its name: never the name itself in colour. */
-.swatch {
-  display: inline-block;
-  flex: none;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  background: var(--c, var(--ink-3));
-  vertical-align: middle;
-}
-
-.tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 9px 2px 7px;
-  border-radius: 999px;
-  background: var(--card-2);
-  box-shadow: inset 0 0 0 1px var(--edge);
-  color: var(--ink-2);
-  font: 600 12px/1.5 var(--mono);
-  white-space: nowrap;
-}
-
-/* ------------------------------------------------------------------ meters and bars */
-
-/* A row of dots that light up like the widget's: --c is the colour, --n how many. */
-.dotmeter {
-  display: grid;
-  grid-template-columns: repeat(var(--n, 30), 1fr);
-  gap: 3px;
-}
-
-.dotmeter i {
-  aspect-ratio: 1;
-  max-width: 9px;
-  border-radius: 50%;
-  background: var(--line-2);
-  transition: background-color 260ms var(--ease), box-shadow 260ms var(--ease);
-}
-
-.dotmeter i.on {
-  background: var(--c, var(--ink));
-}
-
-.dotmeter i.on.hot {
-  background: var(--red);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--red) var(--glow), transparent);
-}
-
-.dotmeter i.ghost {
-  background: color-mix(in srgb, var(--c, var(--ink)) 34%, var(--line-2));
-}
-
-.track {
-  display: flex;
-  gap: 2px;
-  height: 10px;
-  overflow: hidden;
-  border-radius: 4px;
-  background: var(--card-3);
-}
-
-.track .seg {
-  flex: none;
-  height: 100%;
-  border-radius: 2px;
-  background: var(--c, var(--ink));
-  transition: width 700ms var(--ease);
-}
-
-.track .seg:last-child {
-  border-radius: 2px 4px 4px 2px;
-}
-
-/* ------------------------------------------------------------------ buttons and switches */
-
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 0 15px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--card);
-  box-shadow: inset 0 0 0 1px var(--line-2);
-  color: var(--ink);
-  font-size: 13.5px;
-  font-weight: 560;
-  white-space: nowrap;
-  transition: box-shadow 160ms var(--ease), background-color 160ms var(--ease), transform 120ms var(--ease), opacity 160ms;
-}
-
-.btn:hover {
-  box-shadow: inset 0 0 0 1px var(--ink);
-}
-
-.btn:active {
-  transform: scale(0.97);
-}
-
-.btn svg {
-  width: 15px;
-  height: 15px;
-}
-
-.btn.primary {
-  min-height: 44px;
-  padding: 0 22px 0 18px;
-  background: var(--ink);
-  box-shadow: none;
-  color: var(--bg);
-  font-size: 14.5px;
-  font-weight: 620;
-}
-
-.btn.primary:hover {
-  opacity: 0.88;
-}
-
-.btn.primary[data-state="done"] {
-  background: var(--green);
-  color: #fff;
-}
-
-.btn.ghost {
-  box-shadow: none;
-  background: transparent;
-  color: var(--ink-2);
-}
-
-.btn.ghost:hover {
-  background: var(--card-2);
-  color: var(--ink);
-}
-
-.icon-btn {
-  display: inline-grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--card);
-  box-shadow: var(--shadow), inset 0 0 0 1px var(--edge);
-  color: var(--ink-2);
-  transition: color 160ms, transform 160ms var(--ease);
-}
-
-.icon-btn:hover {
-  color: var(--ink);
-  transform: translateY(-1px);
-}
-
-.icon-btn svg {
-  width: 18px;
-  height: 18px;
-}
-
-.mini {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ink-3);
-  transition: background-color 140ms, color 140ms;
-}
-
-.mini:hover {
-  background: var(--card-2);
-  color: var(--ink);
-}
-
-.mini svg {
-  width: 14px;
-  height: 14px;
-}
-
-/* A tick that looks like the widget's switch, with its light. Still a real checkbox. */
-input.switch {
-  appearance: none;
-  -webkit-appearance: none;
-  position: relative;
-  flex: none;
-  width: 42px;
-  height: 24px;
-  margin: 0;
-  border-radius: 999px;
-  background: var(--card-3);
-  box-shadow: inset 0 0 0 1px var(--line-2);
-  cursor: pointer;
-  transition: background-color 220ms var(--ease), box-shadow 220ms var(--ease);
-}
-
-input.switch::after {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--ink-3);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-  transition: transform 320ms var(--spring), background-color 220ms;
-}
-
-input.switch:hover {
-  box-shadow: inset 0 0 0 1px var(--ink-3);
-}
-
-input.switch:checked {
-  background: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--ink);
-}
-
-input.switch:checked::after {
-  transform: translateX(18px);
-  background: var(--bg);
-}
-
-/* ------------------------------------------------------------------ tabs */
-
-.tabs {
-  position: relative;
+/* A section's label: small capitals over its card, the aside (a total, a count) across from it. */
+.section-head {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-}
-
-.tab {
-  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--card-2);
-  box-shadow: inset 0 0 0 1px var(--edge);
+  justify-content: space-between;
+  gap: 6px 14px;
+  min-height: 24px;
+  padding: 0 6px 12px;
+}
+
+.section-head h2 {
+  min-width: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.section-head h3 {
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.section-head .aside {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.lead {
+  max-width: 52ch;
+  margin: -2px 8px 14px;
   color: var(--ink-2);
-  font-size: 13.5px;
-  font-weight: 600;
-  transition: background-color 200ms var(--ease), color 200ms var(--ease), box-shadow 200ms var(--ease);
+  font-size: 14px;
 }
 
-.tab:hover {
-  color: var(--ink);
+/* Cards: one surface, one hairline edge, one radius. */
+.group {
+  position: relative;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 20px;
+  border-radius: 26px;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  list-style: none;
 }
 
-.tab[aria-selected="true"] {
-  background: var(--ink);
-  color: var(--bg);
-  box-shadow: none;
+.group.pad {
+  padding: 20px;
 }
 
-/* ------------------------------------------------------------------ lists and rows */
+.group + .section-head {
+  margin-top: 22px;
+}
+
+/* ------------------------------------------------------------------ rows */
 
 .rows {
-  list-style: none;
   margin: 0;
   padding: 0;
+  list-style: none;
+}
+
+.rows.group {
+  padding: 4px 20px;
 }
 
 .row {
+  position: relative;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
-  gap: 4px 12px;
+  column-gap: 12px;
+  row-gap: 2px;
   align-items: center;
-  padding: 9px 10px;
-  border-radius: 12px;
-  transition: background-color 160ms var(--ease);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
 }
 
-.row + .row {
-  margin-top: 1px;
+.row:last-child {
+  border-bottom: 0;
 }
 
-.row:hover,
-.row.lit {
-  background: var(--card-2);
+.row .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
 }
 
 .row .path {
   min-width: 0;
-  font: 12.5px/1.45 var(--mono);
+  font: 13px/1.45 var(--mono);
   overflow-wrap: anywhere;
 }
 
 .row .num {
-  font: 12.5px var(--mono);
-  color: var(--ink-2);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   text-align: right;
 }
 
-.row .note {
-  grid-column: 2 / -1;
+.row .num2 {
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.row .row-note {
+  grid-column: 2 / -1;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+.row.lit {
+  background: linear-gradient(90deg, var(--card-2), transparent 85%);
 }
 
 .more-line {
-  padding: 8px 10px;
+  padding: 12px 0;
   color: var(--ink-3);
-  font-size: 12.5px;
+  font-size: 13px;
+}
+
+.empty {
+  padding: 16px 0;
+  color: var(--ink-3);
 }
 
 /* <details> that open and close smoothly (Kit.smooth). */
@@ -882,6 +878,7 @@ details.fold > summary::-webkit-details-marker {
 }
 
 .chev {
+  flex: none;
   width: 14px;
   height: 14px;
   color: var(--ink-3);
@@ -896,6 +893,72 @@ details.fold[open] > summary .chev {
   overflow: hidden;
 }
 
+/* ------------------------------------------------------------------ meters */
+
+/* A row of dots filled to a fraction, like a Nothing meter (Kit.meter, Kit.stack). Lit dots take
+   --c (ink if unset); the last few go red when something is nearly full. */
+.meter {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.meter path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: 0.62;
+}
+
+.meter .m-off {
+  stroke: var(--led-off);
+}
+
+.meter .m-on {
+  stroke: var(--c, var(--ink));
+}
+
+.meter .m-hot {
+  stroke: var(--red);
+}
+
+/* ------------------------------------------------------------------ sub tabs */
+
+.subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.subtab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 15px;
+  border-radius: 18px;
+  color: var(--ink-3);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.subtab:hover {
+  color: var(--ink);
+}
+
+.subtab[aria-selected="true"],
+.subtab[aria-pressed="true"] {
+  background: var(--card-2);
+  color: var(--ink);
+}
+
+.subtab .dim {
+  font-weight: 500;
+}
+
 /* ------------------------------------------------------------------ tooltip, toast, dock */
 
 .tip {
@@ -904,11 +967,11 @@ details.fold[open] > summary .chev {
   left: 0;
   top: 0;
   max-width: 300px;
-  padding: 10px 12px;
-  border-radius: 12px;
+  padding: 10px 13px;
+  border-radius: 14px;
   background: var(--ink);
   color: var(--bg);
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.45;
   pointer-events: none;
   opacity: 0;
@@ -929,26 +992,26 @@ details.fold[open] > summary .chev {
 
 .tip span {
   display: block;
-  opacity: 0.72;
-  font: 11.5px/1.5 var(--mono);
+  opacity: 0.75;
+  font-size: 12.5px;
 }
 
 .toast {
   position: fixed;
   z-index: 31;
   left: 50%;
-  bottom: 120px;
+  bottom: 112px;
   max-width: calc(100vw - 32px);
-  padding: 10px 16px;
-  border-radius: 999px;
+  padding: 10px 18px;
+  border-radius: 20px;
   background: var(--ink);
   color: var(--bg);
-  font-size: 13.5px;
-  font-weight: 560;
+  font-size: 14px;
+  font-weight: 600;
   pointer-events: none;
   opacity: 0;
   transform: translate(-50%, 10px);
-  transition: opacity 200ms var(--ease), transform 260ms var(--spring);
+  transition: opacity 200ms var(--ease), transform 260ms var(--settle);
 }
 
 .toast.on {
@@ -961,13 +1024,13 @@ details.fold[open] > summary .chev {
   z-index: 20;
   left: 50%;
   bottom: 16px;
-  width: min(1160px, calc(100vw - 24px));
-  padding: 12px 12px 12px 18px;
-  border-radius: 22px;
-  background: color-mix(in srgb, var(--card) 88%, transparent);
+  width: min(1080px, calc(100vw - 24px));
+  padding: 10px 10px 10px 20px;
+  border-radius: 30px;
+  background: color-mix(in srgb, var(--card) 90%, transparent);
   -webkit-backdrop-filter: blur(18px) saturate(1.5);
   backdrop-filter: blur(18px) saturate(1.5);
-  box-shadow: var(--lift), inset 0 0 0 1px var(--edge);
+  box-shadow: var(--float);
   transform: translateX(-50%);
 }
 
@@ -982,12 +1045,11 @@ details.fold[open] > summary .chev {
 .dock textarea {
   width: 100%;
   min-height: 64px;
-  margin-top: 10px;
-  padding: 10px 12px;
+  margin: 10px 0 2px;
+  padding: 10px 14px;
   border: 0;
-  border-radius: 14px;
+  border-radius: 18px;
   background: var(--card-2);
-  box-shadow: inset 0 0 0 1px var(--edge);
   resize: vertical;
 }
 
@@ -998,24 +1060,8 @@ details.fold[open] > summary .chev {
 
 /* ------------------------------------------------------------------ motion */
 
-/* Before the page reveals a block it hides it, only when motion is on (Kit.reveal). */
-.motion [data-reveal]:not(.shown) {
-  opacity: 0;
-}
-
-@keyframes led-on {
-  0%, 40% {
-    opacity: 0.15;
-  }
-  20%, 100% {
-    opacity: 1;
-  }
-}
-
-.motion .led.green,
-.motion .led.red {
-  animation: led-on 900ms steps(1, end) 1 both;
-}
+/* Motion answers something the person did (a click zooms in, a tick, a theme swap), plus at most
+   one moment that matters on opening. Content never waits for an animation, and nothing loops. */
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -1027,12 +1073,9 @@ details.fold[open] > summary .chev {
 }
 
 @media print {
-  .motion [data-reveal]:not(.shown) {
-    opacity: 1;
-  }
-
   body {
     background: #fff;
+    background-image: none;
     padding-bottom: 0;
   }
 
@@ -1040,11 +1083,12 @@ details.fold[open] > summary .chev {
   .dock,
   .toast,
   .tip,
-  .mast-tools {
+  .topbar-tools {
     display: none !important;
   }
 
-  .card {
+  .group,
+  .note {
     box-shadow: none;
     border: 1px solid #ddd;
     break-inside: avoid;
@@ -1053,52 +1097,66 @@ details.fold[open] > summary .chev {
 
 @media (max-width: 720px) {
   body {
-    padding: 0 14px 220px;
+    padding: 0 12px 200px;
   }
 
-  .masthead {
-    grid-template-columns: auto 1fr;
-    gap: 14px 16px;
-    padding-top: 28px;
+  .topbar {
+    min-height: 54px;
   }
 
-  .mom {
-    width: 64px;
-    height: 64px;
+  .topbar-when {
+    display: none;
   }
 
-  .mast-tools {
-    grid-column: 1 / -1;
-    grid-row: 1;
-    justify-content: flex-end;
-    padding: 0;
+  .note {
+    grid-template-columns: 88px minmax(0, 1fr);
+    column-gap: 16px;
+    padding: 18px;
+    border-radius: 28px;
   }
 
-  .speech {
-    font-size: 15.5px;
+  .screen {
+    width: 88px;
+    height: 88px;
+  }
+
+  .big-num {
+    font-size: 44px;
+  }
+
+  .line {
+    font-size: 19px;
   }
 
   .secbar {
-    margin: 12px -14px 0;
-    padding: 8px 14px;
+    margin: 10px -12px 0;
+    padding: 8px 12px;
   }
 
   .search {
     display: none;
   }
 
-  .card {
-    padding: 18px;
-    border-radius: 20px;
+  .group {
+    padding: 4px 16px;
+    border-radius: 24px;
+  }
+
+  .group.pad {
+    padding: 16px;
+  }
+
+  .rows.group {
+    padding: 4px 16px;
   }
 
   section.block {
-    margin-top: 40px;
+    margin-top: 32px;
   }
 
   .dock {
     bottom: 8px;
-    padding: 10px 10px 10px 14px;
-    border-radius: 18px;
+    padding: 8px 8px 8px 16px;
+    border-radius: 26px;
   }
 }
