@@ -24,7 +24,7 @@
 - The `mom` command: `mom leftovers`, `mom stop mine`, `mom trash`, `mom pc`, `mom tidy <folder>`, `mom undo`, `mom homework`; the read-only commands take --json.
 
 ## Skills
-- [momputer-skills](https://github.com/Thisisily/momputer/tree/main/skills): eleven skills for Claude Code and Codex, each tidying one room of your digital life. They work without momputer, under the Apache License 2.0, free for any use.
+- [momputer-skills](https://github.com/Thisisily/momputer/tree/main/skills): eleven skills for Claude Code and Codex, each tidying one room of your digital life: disk space, Gmail, calendar, Google Drive, subscriptions, bookmarks, backups, folders, the desktop and document names. Each one looks without changing anything, builds a private dashboard page that explains what it found (charts, tables and the agent's own insights), and acts only on what you tick. They work without momputer, under the Apache License 2.0, free for any use.
 
 ## Promises
 - Shows what goes and what stays before any clean-up; your own files go to the Recycle Bin.

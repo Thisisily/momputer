@@ -36,6 +36,13 @@ jobs:
         run: |
           cp -r app/ui site/demo
           python3 -I scripts/version-demo-assets.py site/demo
+          # the demo lives inside the main page; search engines should list the main page, not it
+          sed -i '0,/<meta charset="utf-8">/s//<meta charset="utf-8">\n  <meta name="robots" content="noindex">/' site/demo/index.html
+          grep -q 'name="robots" content="noindex"' site/demo/index.html
+      - name: Date the sitemap with this publish
+        run: |
+          sed -i "s|</loc></url>|</loc><lastmod>$(date -u +%F)</lastmod></url>|" site/sitemap.xml
+          grep -q '<lastmod>' site/sitemap.xml
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
