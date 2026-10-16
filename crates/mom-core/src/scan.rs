@@ -368,6 +368,9 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
     let mut session_of_agent: HashMap<u32, String> = HashMap::new();
     let mut project_of_agent: HashMap<u32, String> = HashMap::new();
     let mut entry_of_agent: HashMap<u32, String> = HashMap::new();
+    // One agent process can have several sessions alive at once (its own, and its sub-agents'),
+    // so each session points at its agent separately.
+    let mut agent_of_session: HashMap<String, u32> = HashMap::new();
     for p in table.procs.values() {
         let Some(m) = facts.get(&p.pid).and_then(|f| f.mark.as_ref()) else { continue };
         let (alive, apid) = instance_alive(p, m);
@@ -380,12 +383,28 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
         if let Some(apid) = apid {
             if let Some(sid) = &m.session {
                 session_of_agent.entry(apid).or_insert_with(|| sid.clone());
+                agent_of_session.entry(sid.clone()).or_insert(apid);
             }
             if let Some(pr) = &m.project {
                 project_of_agent.entry(apid).or_insert_with(|| pr.clone());
             }
             if let Some(e) = &m.entry {
                 entry_of_agent.entry(apid).or_insert_with(|| e.clone());
+            }
+        }
+    }
+
+    // A Claude Code session between commands has no child carrying its marker, so it would look
+    // over and its leftovers would flicker in and out. Claude Code notes each running session in a
+    // file of its own: that says it's alive between commands too.
+    let claude_home = std::env::var_os("MOMPUTER_HOME").map(std::path::PathBuf::from).or_else(dirs::home_dir);
+    if let Some(dir) = claude_home.map(|h| h.join(".claude").join("sessions")) {
+        for (pid, sid) in claude_sessions(&dir, table) {
+            if agent_of(pid).is_some_and(|(k, _)| k == AgentKind::ClaudeCode) {
+                // The file names the process's own session, over any sub-agent's seen in a child.
+                live_sessions.insert((AgentKind::ClaudeCode, sid.clone()));
+                agent_of_session.insert(sid.clone(), pid);
+                session_of_agent.insert(pid, sid);
             }
         }
     }
@@ -408,7 +427,6 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
             _ => None,
         })
         .collect();
-    let agent_of_session: HashMap<String, u32> = session_of_agent.iter().map(|(pid, s)| (s.clone(), *pid)).collect();
 
     let is_system = |pid: u32| -> bool {
         for a in table.ancestors(pid) {
@@ -798,6 +816,32 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
 }
 
 /// Mom's one-line explanation for a group.
+/// The sessions Claude Code says are running, from `~/.claude/sessions/<pid>.json` ({"pid",
+/// "sessionId", "startedAt" in milliseconds}): (pid, session). Only a file whose process is
+/// running now, is Claude, and started when the file says counts, so a reused pid doesn't.
+fn claude_sessions(dir: &std::path::Path, table: &ProcTable) -> Vec<(u32, String)> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    entries
+        .flatten()
+        .take(500)
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let pid: u32 = name.strip_suffix(".json")?.parse().ok()?;
+            let p = table.get(pid)?;
+            if !p.lname().starts_with("claude") {
+                return None;
+            }
+            std::fs::symlink_metadata(e.path()).ok().filter(|m| m.is_file() && m.len() <= 64 << 10)?;
+            let v: serde_json::Value = serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok()?;
+            if v.get("pid")?.as_u64()? != u64::from(pid) || (v.get("startedAt")?.as_u64()? / 1000).abs_diff(p.start) > 30 {
+                return None;
+            }
+            let sid = v.get("sessionId")?.as_str()?;
+            (!sid.is_empty() && sid.len() <= 64 && sid.chars().all(|c| c.is_ascii_hexdigit() || c == '-')).then(|| (pid, sid.to_string()))
+        })
+        .collect()
+}
+
 pub fn why(g: &Group) -> String {
     let age = human_age_long(g.age);
     let place = g.project.as_deref().map(|p| format!(" in {p}")).unwrap_or_default();
@@ -983,5 +1027,54 @@ mod tests {
         );
         assert_eq!(project_name(r"Z:\Workspace\atlas\apps\web").as_deref(), Some("atlas"));
         assert_eq!(project_name(r"Z:\Elsewhere\thing").as_deref(), Some("thing"));
+    }
+
+    #[test]
+    fn an_agent_running_a_sub_agent_still_owns_what_its_own_session_left() {
+        let now = crate::util::now_secs();
+        let t0 = now - 3600;
+        let own = "0199c2f4-1a2b-7c3d-8e4f-5a6b7c8d9e01";
+        let sub = "0199c2f4-1a2b-7c3d-8e4f-5a6b7c8d9e02";
+        let mut claude = fake(100, 50, "claude.exe", "claude.exe", t0);
+        claude.exe = Some(r"C:\Users\me\.local\bin\claude.exe".into());
+        // Both sessions have a command running right now, under the same Claude.
+        let own_cmd = with_env(fake(110, 100, "bash.exe", "bash -c 'sleep 60'", t0 + 10), &claude_task(own, 100));
+        let sub_cmd = with_env(fake(120, 100, "bash.exe", "bash -c 'sleep 60'", t0 + 20), &claude_task(sub, 100));
+        // A tail its own session started earlier, whose shell is gone.
+        let log = format!(r"C:/Users/me/AppData/Local/Temp/claude/C--Workspace-storefront/{own}/scratchpad/run.log");
+        let mut tail = fake(130, 7777, "tail.exe", &format!("tail -f {log}"), t0 + 30);
+        tail.cwd = Some(r"C:\Workspace\storefront".into());
+        let t = ProcTable::from_procs(vec![fake(50, 1, "explorer.exe", "explorer.exe", t0 - 9), claude, own_cmd, sub_cmd, tail], 999);
+        for _ in 0..20 {
+            let a = analyze(&t, &HashMap::new(), &Config::default());
+            let g = a.groups.iter().find(|g| g.root_pid == 130).expect("the tail is seen");
+            assert_eq!((g.status, g.owner.alive), (Status::Running, true), "its session is still running");
+        }
+    }
+
+    #[test]
+    fn a_running_claude_session_is_known_from_its_own_file_between_commands() {
+        let dir = std::env::temp_dir().join(format!("mom-claude-sessions-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let t0 = 1_790_000_000;
+        let sid = "0199c2f4-1a2b-7c3d-8e4f-5a6b7c8d9e0f";
+        let note = |pid: u32, started: u64, sid: &str| std::fs::write(dir.join(format!("{pid}.json")), format!(r#"{{"pid":{pid},"sessionId":"{sid}","startedAt":{}}}"#, started * 1000)).unwrap();
+        note(100, t0 + 1, sid);
+        note(200, t0, sid); // its pid now belongs to a process that started later
+        note(300, t0, sid); // not Claude
+        note(400, t0, "not a session id; rm -rf");
+        let t = ProcTable::from_procs(
+            vec![
+                fake(100, 1, "claude.exe", "claude", t0),
+                fake(200, 1, "claude.exe", "claude", t0 + 3600),
+                fake(300, 1, "node.exe", "node server.js", t0),
+                fake(400, 1, "claude.exe", "claude", t0),
+            ],
+            999,
+        );
+        assert_eq!(claude_sessions(&dir, &t), [(100, sid.to_string())]);
+        assert!(claude_sessions(&dir.join("missing"), &t).is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
