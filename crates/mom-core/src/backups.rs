@@ -119,6 +119,8 @@ pub(crate) struct Repairs {
     pub label: String,
     pub times: Vec<u64>,
     pub found: usize,
+    /// Windows' newest word on it is "healthy", after the last damage it found: it was repaired.
+    pub healthy_now: bool,
 }
 
 const LOOK_BACK_MS: u64 = 90 * 86_400 * 1000;
@@ -150,25 +152,49 @@ pub(crate) fn repairs(f: &Value) -> Vec<Repairs> {
         }
     }
     for d in &mut drives {
+        d.healthy_now = healthy_now(&events, d.letter);
+    }
+    for d in &mut drives {
         d.found = found_folders(Path::new(&format!("{}:\\", d.letter)));
         d.times = crate::speed::moments(std::mem::take(&mut d.times), 3_600);
     }
     drives
 }
 
+/// "F:" as a drive letter.
+fn letter(s: &str) -> Option<char> {
+    let s = s.trim();
+    (s.len() == 2 && s.ends_with(':')).then(|| s.chars().next()).flatten().filter(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase())
+}
+
+/// Windows says how each drive is at every start-up and every time it's connected (NTFS event
+/// 98): the newest is how it is now. True when that's "healthy" and no damage was found after
+/// it. A tie goes to healthy: a repair ends with it.
+pub(crate) fn healthy_now(events: &[Ev], drive: char) -> bool {
+    let mine = |e: &&Ev| e.provider == "Microsoft-Windows-Ntfs" && e.get("DriveName").and_then(letter) == Some(drive);
+    let mut newest: Option<(u64, bool)> = None;
+    for e in events.iter().filter(mine).filter(|e| e.id == 98) {
+        let ok = e.get("CorruptionActionState").is_some_and(|s| s.trim() == "0");
+        if newest.is_none_or(|(at, _)| e.at > at || (e.at == at && ok)) {
+            newest = Some((e.at, ok));
+        }
+    }
+    let Some((at, true)) = newest else { return false };
+    !events.iter().filter(mine).any(|e| matches!(e.id, 55 | 130) && e.at > at)
+}
+
 /// Which drive an event says needed a repair, if it says one did. NTFS names the drive; chkdsk
 /// and the start-up check name the volume's device ("\Device\HarddiskVolume7").
 pub(crate) fn drive_of(e: &Ev, devices: &[(char, String)]) -> Option<char> {
-    let letter = |s: &str| {
-        let s = s.trim();
-        (s.len() == 2 && s.ends_with(':')).then(|| s.chars().next()).flatten().filter(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase())
-    };
     match (e.provider.as_str(), e.id) {
         ("Microsoft-Windows-Ntfs", 55 | 130) => letter(e.get("DriveName")?),
         // 98 is logged for every drive at every start; only a state other than 0 is a repair.
         ("Microsoft-Windows-Ntfs", 98) => (e.get("CorruptionActionState").is_some_and(|s| s.trim() != "0")).then(|| letter(e.get("DriveName")?)).flatten(),
         ("Chkdsk", _) | ("Microsoft-Windows-Wininit", 1001) => {
             let text = e.text.to_ascii_lowercase();
+            if text.contains("found no problems") {
+                return None; // a check that found nothing wrong
+            }
             // The whole device name: volume 7 isn't volume 70.
             let names = |dev: &str| {
                 let dev = dev.to_ascii_lowercase();
@@ -225,13 +251,24 @@ pub(crate) fn repair_checks(drives: &[Repairs]) -> Vec<Check> {
         if n < 3 && d.found < 3 {
             continue;
         }
+        let label = if d.label.is_empty() { String::new() } else { format!(" (\"{}\")", d.label.replace(['"', '`'], "'")) };
+        if d.healthy_now {
+            out.push(check(
+                &format!("drive-repairs-{}", d.letter.to_ascii_lowercase()),
+                "Backups",
+                "ok",
+                format!("{}: is healthy again", d.letter),
+                format!("It was repaired after Windows found damage on it {} in 3 months. That's usually from losing power or its connection while saving: eject it before unplugging.", crate::util::plural(n.max(d.found) as u64, "time")),
+                Some(Fix { label: format!("Show {}:", d.letter), kind: "reveal", value: format!("{}:\\", d.letter), hint: None }),
+            ));
+            continue;
+        }
         // Most of these say Windows found damage (and wants a repair), not that it repaired it.
         let title = if n >= d.found {
             format!("Windows found damage on {}: {n} times in 3 months", d.letter)
         } else {
             format!("Windows has repaired {}: {} times", d.letter, d.found)
         };
-        let label = if d.label.is_empty() { String::new() } else { format!(" (\"{}\")", d.label.replace(['"', '`'], "'")) };
         let found = match d.found {
             0 => String::new(),
             1 => " One found.000 folder of recovered pieces sits at its top.".to_string(),
@@ -297,19 +334,40 @@ mod tests {
     }
 
     #[test]
+    fn a_repaired_drive_is_told_from_one_that_still_needs_it() {
+        let at = |e: Ev, t: u64| Ev { at: t, ..e };
+        let state = |s: &str| ev("Microsoft-Windows-Ntfs", 98, &[("DriveName", "F:"), ("CorruptionActionState", s)], "");
+        let damage = ev("Microsoft-Windows-Ntfs", 55, &[("DriveName", "F:")], "");
+        // Damage, then "needs a repair" at each start, then the repair and "healthy" in the same second.
+        let repaired = vec![at(damage.clone(), 10), at(state("2"), 20), at(state("2"), 30), at(state("0"), 30)];
+        assert!(healthy_now(&repaired, 'F'));
+        assert!(!healthy_now(&repaired, 'C'), "another drive's word isn't this one's");
+        let mut again = repaired.clone();
+        again.push(at(damage, 40));
+        assert!(!healthy_now(&again, 'F'), "damage found after it was healthy");
+        assert!(!healthy_now(&repaired[..3], 'F'), "still waiting for its repair");
+        let clean = ev("Chkdsk", 26226, &[], r"Checking file system on \Device\HarddiskVolume7 Windows has scanned the file system and found no problems.");
+        assert_eq!(drive_of(&clean, &[('F', r"\Device\HarddiskVolume7".to_string())]), None, "a check that found nothing isn't damage");
+    }
+
+    #[test]
     fn a_drive_that_keeps_needing_repairs_says_so() {
-        let worn = Repairs { letter: 'F', label: "Nimbus \"Backup\"".into(), times: vec![1, 2, 3, 4], found: 0 };
+        let worn = Repairs { letter: 'F', label: "Nimbus \"Backup\"".into(), times: vec![1, 2, 3, 4], found: 0, healthy_now: false };
         let c = repair_checks(&[worn]);
         assert_eq!((c[0].level, c[0].title.as_str()), ("warn", "Windows found damage on F: 4 times in 3 months"));
         assert_eq!((c[0].fix.as_ref().unwrap().kind, c[0].fix.as_ref().unwrap().value.as_str()), ("reveal", "F:\\"));
         let prompt = &c[0].more[0].value;
         assert!(prompt.contains("damage on my drive F: (\"Nimbus 'Backup'\") 4 times"), "{prompt}");
         assert!(!prompt.contains("found."), "no recovered pieces, so they aren't mentioned: {prompt}");
-        let found = Repairs { letter: 'D', label: String::new(), times: vec![], found: 40 };
+        let found = Repairs { letter: 'D', label: String::new(), times: vec![], found: 40, healthy_now: false };
         let c = repair_checks(&[found]);
         assert_eq!(c[0].title, "Windows has repaired D: 40 times");
         assert!(c[0].more[0].value.contains("40 found.NNN folders"));
-        assert!(repair_checks(&[Repairs { letter: 'C', label: String::new(), times: vec![1], found: 1 }]).is_empty());
+        let fixed = Repairs { letter: 'F', label: String::new(), times: vec![1, 2, 3, 4], found: 0, healthy_now: true };
+        let c = repair_checks(&[fixed]);
+        assert_eq!((c[0].level, c[0].title.as_str()), ("ok", "F: is healthy again"));
+        assert!(c[0].detail.contains("4 times") && c[0].more.is_empty());
+        assert!(repair_checks(&[Repairs { letter: 'C', label: String::new(), times: vec![1], found: 1, healthy_now: false }]).is_empty());
         let dir = std::env::temp_dir().join(format!("mom-found-{}", std::process::id()));
         for n in ["found.000", "found.001", "FOUND.017", "found.things", "found.0001"] {
             std::fs::create_dir_all(dir.join(n)).unwrap();

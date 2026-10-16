@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn a_screen_shown_below_what_its_made_for_says_so() {
         let s = Screen { width: 1920, height: 1080, native: Some((3840, 2160)), ..screen("Copperline 27U", 60, 60) };
-        let c = checks(&[s.clone()]);
+        let c = checks(std::slice::from_ref(&s));
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].title, "Your Copperline 27U shows 1920×1080, but it's made for 3840×2160");
         assert_eq!(c[0].level, "warn");
