@@ -911,4 +911,35 @@ mod tests {
         // Not a promise about CI, just that asking doesn't crash.
         let _ = is_elevated();
     }
+
+    // TEMPORARY: prints what the CI machine says about a test folder, then fails so it shows.
+    #[cfg(windows)]
+    #[test]
+    fn ci_diagnostic_test_folder_facts() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/mom-test-fixtures");
+        std::fs::create_dir_all(&base).unwrap();
+        let canon = std::fs::canonicalize(&base).unwrap();
+        let dir = canon.join(format!("diag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = std::fs::OpenOptions::new().read(true).share_mode(3).custom_flags(0x0200_0000 | 0x0020_0000).open(&dir).unwrap();
+        let mut buf = vec![0u16; 32_768];
+        let n = unsafe { windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW(f.as_raw_handle() as _, buf.as_mut_ptr(), buf.len() as u32, 0) } as usize;
+        let real = String::from_utf16_lossy(&buf[..n.min(buf.len())]);
+        let owner = acl::owner_of(f.as_raw_handle() as _);
+        let me = acl::me();
+        let msg = format!(
+            "\nDIAG manifest={}\nDIAG canonical={}\nDIAG final={real}\nDIAG owner={owner:?}\nDIAG me={me:?}\nDIAG elevated={}\nDIAG open_and_mine={}\nDIAG temp={}\n",
+            env!("CARGO_MANIFEST_DIR"),
+            dir.display(),
+            is_elevated(),
+            open_and_mine(&f),
+            std::env::temp_dir().display()
+        );
+        drop(f);
+        let _ = std::fs::remove_dir(&dir);
+        panic!("{msg}");
+    }
 }
+
