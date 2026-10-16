@@ -15,7 +15,8 @@ notes.json is optional and is how the agent adds judgement:
     {
       "headline": "C: is 96% full; Docker's disk image and three old games are half of it.",
       "highlights": ["...", "..."],
-      "drop": ["docker-system-prune", "games"]      # command ids or list ids to leave out of the plan
+      "drop": ["docker-system-prune", "games"],     # command ids or list ids to leave out of the plan
+      "focus": "C:"                                  # optional: the drive the page opens on
     }
 
 Python 3.8+, standard library only.
@@ -180,6 +181,60 @@ def build_actions(survey, drop):
     return out
 
 
+def drive_of(path, home):
+    """The drive letter of a path ("C"), or the profile's drive for a finding without a path (an app's grouped cache)."""
+    p = path or home or ""
+    return p[0].upper() if len(p) > 1 and p[1] == ":" and p[0].isalpha() else ""
+
+
+def by_drive(rows, home):
+    out = {}
+    for r in rows:
+        d = drive_of(r.get("path"), home)
+        if d:
+            out[d] = out.get(d, 0) + (r.get("bytes") or 0)
+    return out
+
+
+def add_drive_split(actions, survey):
+    """How much of each plan item, and of each kind of suspect, sits on each drive. From every
+    finding, before the page's lists are cut short."""
+    home = survey.get("profile") or ""
+    rules = survey.get("rules") or {}
+    findings = survey.get("findings") or []
+    lists = survey.get("lists") or {}
+    per_rule = {}
+    for f in findings:
+        per_rule.setdefault(f.get("rule"), []).append(f)
+    covers = {cid: c["covers"] for cid, c in run_plan.TABLE.items()}
+    rule_lists = {x[0]: x[2] for x in RULE_LISTS}
+    file_lists = {x[0]: x[2] for x in FILE_LISTS}
+    for a in actions:
+        if a.get("command_id") in covers:
+            a["by_drive"] = by_drive([f for r in covers[a["command_id"]] for f in per_rule.get(r, [])], home)
+        elif a.get("list_id") in rule_lists:
+            a["by_drive"] = by_drive([f for r in rule_lists[a["list_id"]] for f in per_rule.get(r, [])], home)
+        elif a.get("list_id") in file_lists:
+            key = file_lists[a["list_id"]]
+            rows = lists.get(key) or []
+            if key == "same_size":
+                rows = [{"path": g["paths"][0], "bytes": g["bytes"] * (len(g["paths"]) - 1)} for g in rows if g.get("paths")]
+            a["by_drive"] = by_drive(rows, home)
+    cats = {}
+    for rid, fs in per_rule.items():
+        cat = (rules.get(rid) or {}).get("category")
+        if not cat:
+            continue
+        split = cats.setdefault(cat, {})
+        for d, b in by_drive(fs, home).items():
+            split[d] = split.get(d, 0) + b
+    lid = {"downloads": "old_installers", "videos": "big_videos", "images": "disk_images", "models": "model_files", "old": "old_large"}
+    for cat, key in lid.items():
+        if lists.get(key):
+            cats[cat] = by_drive(lists[key], home)
+    return cats
+
+
 def human(n):
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024 or unit == "TB":
@@ -244,6 +299,7 @@ def main(argv=None):
     if unknown:
         sys.exit("notes.json 'drop' has ids this skill doesn't know: %s" % ", ".join(sorted(unknown)))
     actions = build_actions(survey, drop)
+    cat_split = add_drive_split(actions, survey)
     pid = run_plan.plan_id(actions)
     plan_path = args.plan or os.path.join(os.path.dirname(os.path.abspath(args.out)), "diskspace-plan.json")
     plan = {"schema": run_plan.PLAN_SCHEMA, "plan_id": pid, "generated": datetime.now().isoformat(timespec="seconds"),
@@ -255,9 +311,13 @@ def main(argv=None):
         html = f.read()
     if PLACEHOLDER not in html:
         sys.exit("template is missing the %s placeholder" % PLACEHOLDER)
-    data = {"plan_id": pid, "actions": actions, "survey": page_view(survey),
+    view = page_view(survey)
+    view["category_drives"] = cat_split
+    focus = str(notes.get("focus") or "").strip().upper()[:1]
+    data = {"plan_id": pid, "actions": actions, "survey": view,
             "notes": {"headline": str(notes.get("headline") or default_headline(survey)),
-                      "highlights": [str(h) for h in notes.get("highlights") or []]}}
+                      "highlights": [str(h) for h in notes.get("highlights") or []],
+                      "focus": focus if focus.isalpha() else ""}}
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(html.replace(PLACEHOLDER, embed(data)))
     kinds = {}

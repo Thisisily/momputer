@@ -36,13 +36,23 @@ It gives each changed skill the next version, in its `SKILL.md` and in `skills/i
 
 ## The page
 
-- One self-contained file. No network requests: no CDN scripts, no web fonts, no images from elsewhere.
+- One self-contained file. No network requests: no CDN scripts, no fonts or images from elsewhere.
 - Data goes in as JSON inside `<script type="application/json">`, with `<`, `>`, `&`, U+2028 and U+2029 escaped (see `embed()` in the reference scripts).
 - Build the page with `createElement` and `textContent`. Never `innerHTML`, `insertAdjacentHTML`, `document.write` or string-built HTML: file names, subjects and titles are written by strangers.
 - Links: only `https://` addresses the script built itself, with `rel="noopener noreferrer"`. Never a link taken from the data without checking its scheme.
 - **Every tickable list has Tick all and Untick all.** No exceptions.
-- Black and white with small red and green dots, light and dark, readable on a phone. Charts are inline SVG.
 - Ticks are remembered in `localStorage`, wrapped in try/catch.
+
+### How it looks: the kit
+
+Build the page on `skills/_kit/` ([its README](_kit/README.md)). It is Momputer's look in one CSS and one JS file, plus mom and the fonts. `python -I skills/_kit/sync.py` copies it into each template between markers, so the page stays one file. `run_all.py` fails if a copy is out of date.
+
+- **Brand.** Light grey or black page, white or near-black rounded cards. Geist for text, Geist Mono for numbers and paths, Doto for the one big number. Mom at the top says the headline in one short, kind sentence. Small red and green dots for state, light and dark, readable on a phone. Charts are inline SVG.
+- **Colour means something.** Interface stays grey. Colour is for telling data apart (a drive, a partition, an account): use the kit's `--c1` to `--c8` in fixed order, one per thing, never by rank, and always next to its name. They are checked for colour-blind readers in both modes. Red and green stay for state.
+- **Motion explains.** The first screen rises in, a number counts up once, bars grow once, a click zooms into what was clicked (`Kit.reveal`, `Kit.countUp`, `Kit.animate`, `Kit.swap`). Every animation ends; nothing loops. Nothing waits on an animation to be readable, and reduced motion turns it all off.
+- **Small comforts.** A sticky section bar with search (`/`), a shortcuts sheet (`?`), Esc to go back, a theme switch, copy buttons with a toast, hover that links a chart to its list.
+- **Libraries.** None from a CDN. A library goes in only if its licence is permissive (MIT, ISC, BSD, Apache), it is small, it never uses `innerHTML`, and a pinned copy sits in `skills/_kit/vendor/` with its licence and a size-and-hash test. d3-hierarchy and d3-shape (ISC) qualify. GSAP (free, but not an open-source licence) and three.js (too big for a report) don't.
+- **Look at it before you ship it.** Screenshot it light and dark, at 1280 and 390 px, and fix what you see.
 
 ## Safety rules (each one comes from a real hole)
 

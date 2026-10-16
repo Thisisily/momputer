@@ -29,6 +29,9 @@ def main(argv=None):
     extra = (["--no-browser"] if args.no_browser else []) + (["--keep"] if args.keep else [])
     keep = ["--keep"] if args.keep else []
     jobs = [("check_shared", ["check_shared.py", SKILLS])]
+    # the pages built on the brand kit (skills/_kit) hold its current copy
+    if os.path.isfile(os.path.join(SKILLS, "_kit", "sync.py")):
+        jobs.append(("kit copies up to date", [os.path.join("..", "_kit", "sync.py"), "--check"]))
     for skill in engines:
         jobs.append(("test_safe_apply %s" % skill, ["test_safe_apply.py", scratch, os.path.join(SKILLS, skill)] + keep))
     # tidy-folders' own command adds no rules in --root mode, so the whole engine test can run through it as well
@@ -45,8 +48,8 @@ def main(argv=None):
             jobs.append(("test_%s" % name, ["test_%s.py" % name, scratch] + extra))
             for part in parts:
                 jobs.append(("test_%s_%s" % (name, part), ["test_%s_%s.py" % (name, part), scratch] + keep))
-    # two that only read what was gathered and write a report: one test each, end to end
-    for name in ("calendar_fixer", "drive_audit"):
+    # three that only read what was gathered and write a report: one test each, end to end
+    for name in ("calendar_fixer", "drive_audit", "disk_space_report"):
         if os.path.isdir(os.path.join(SKILLS, name.replace("_", "-"))):
             jobs.append(("test_%s" % name, ["test_%s.py" % name, scratch] + extra))
     results = []
