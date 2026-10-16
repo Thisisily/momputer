@@ -513,8 +513,17 @@
     id: `app:${name.toLowerCase()}`, name, exe: extra.exe || `C:\\Program Files\\${name}\\${name}.exe`, cpu, avgCpu: cpu * 0.9, avgSecs: 240, mem, gpu: extra.gpu ?? null,
     count, windows: kind === "app" ? 1 : 0, kind, started: now - (extra.age || 3 * 3600), inside: extra.inside || null,
     can: kind === "app" ? ["restart", "quit", "end"] : kind === "background" ? ["restart", "end"] : [],
+    procs: extra.procs || [],
   });
+  // A test run's workers beside a dev server, in made-up projects.
+  const line = (pid, what, place, cpu, mem, mins) => ({ pid, start: now - mins * 60, what, place, cpu, mem, canEnd: true });
+  const bunLines = [
+    line(4120, "bun --watch server/index.ts", "storefront", 0.2, 180 * MB, 300),
+    line(4188, "bun run dev", "nimbus", 0.1, 140 * MB, 240),
+    ...Array.from({ length: 6 }, (_, i) => line(5200 + i, "bun test --test-worker --isolate --timeout=60000", "atlas", 5.4 + i * 0.6, (1.6 + i * 0.2) * GB, 4)),
+  ];
   const programs = [
+    prog("bun", "background", 38.5, 12.4 * GB, 8, { exe: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\bun\\bin\\bun.exe", procs: bunLines }),
     prog("ChatGPT", "app", 6.2, 2.4 * GB, 16, { inside: "3 Codex sessions", gpu: 2 }),
     prog("Chrome", "app", 3.1, 12.8 * GB, 70, { gpu: 4, age: 2 * 86400 }),
     prog("Claude", "app", 2.8, 3.8 * GB, 23, { inside: "2 Claude Code sessions", gpu: 7 }),
@@ -1143,6 +1152,17 @@
     },
     get_icons: async ({ exes }) => (await wait(120), Object.fromEntries(exes.map((x) => [x, mockIcon(x.split("\\").pop())]))),
     get_programs: async () => (await wait(250), JSON.parse(JSON.stringify(programs))),
+    program_end_one: async ({ id, pid }) => {
+      await wait(500);
+      const p = programs.find((x) => x.id === id);
+      const l = p && p.procs.find((x) => x.pid === pid);
+      if (!l) return { ok: false, message: "That process isn't running any more." };
+      p.procs.splice(p.procs.indexOf(l), 1);
+      p.count -= 1;
+      p.cpu = Math.max(0, p.cpu - l.cpu);
+      p.mem -= l.mem;
+      return { ok: true, message: `Stopped ${l.what.slice(0, 60)}.` };
+    },
     program_action: async ({ id, action }) => {
       await wait(action === "restart" ? 1800 : 700);
       const p = programs.find((x) => x.id === id);

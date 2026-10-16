@@ -39,9 +39,43 @@ pub struct Program {
     pub inside: Option<String>,
     /// What mom may do with it: "restart", "quit", "end".
     pub can: Vec<&'static str>,
+    /// Each of its processes, oldest first (at most MAX_LINES): what it runs, where, how busy.
+    pub procs: Vec<ProcLine>,
     /// Its processes.
     #[serde(skip)]
     pub pids: Vec<u32>,
+}
+
+/// One of a program's processes, as its row lists them.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcLine {
+    pub pid: u32,
+    pub start: u64,
+    /// What it's running: its command, without the folder of its file ("bun test --watch").
+    pub what: String,
+    /// The project it works in, when mom can tell.
+    pub place: Option<String>,
+    pub cpu: f32,
+    pub mem: u64,
+    /// Mom may end this one (and what it started).
+    pub can_end: bool,
+}
+
+/// Processes listed per program; the rest are counted.
+const MAX_LINES: usize = 40;
+
+/// A process's command in one plain line, its file named without its folder.
+fn what_runs(p: &Proc) -> String {
+    let line = match p.cmd.split_first() {
+        Some((file, rest)) => {
+            let file = file.rsplit(['\\', '/']).next().unwrap_or(file);
+            std::iter::once(file).chain(rest.iter().map(String::as_str)).collect::<Vec<_>>().join(" ")
+        }
+        None => p.name.clone(),
+    };
+    let one: String = line.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    crate::util::ellipsize(one.split_whitespace().collect::<Vec<_>>().join(" ").as_str(), 160)
 }
 
 // ------------------------------------------------------------------ grouping
@@ -179,6 +213,24 @@ pub fn list(table: &ProcTable) -> Vec<Program> {
         };
         let pids: HashSet<u32> = a.procs.iter().map(|p| p.pid).collect();
         let cores: f32 = a.procs.iter().filter_map(|p| avg.get(&(p.pid, p.start))).sum();
+        let mut lines: Vec<&Proc> = a.procs.clone();
+        lines.sort_by_key(|p| (p.start, p.pid)); // oldest first, so lines stay where they are
+        let procs = lines
+            .into_iter()
+            .take(MAX_LINES)
+            .map(|p| ProcLine {
+                pid: p.pid,
+                start: p.start,
+                what: what_runs(p),
+                place: p.cwd.as_deref().and_then(crate::scan::project_name),
+                cpu: p.cpu,
+                mem: p.mem,
+                can_end: can.contains(&"end")
+                    && !agent_work.contains(&p.pid)
+                    && !mine.contains(&p.pid)
+                    && actionable(p, paths.get(&p.pid).map(String::as_str), session, &win_dir),
+            })
+            .collect();
         out.push(Program {
             inside: if kind == "app" || kind == "background" { inside(table, &pids) } else { None },
             id: key,
@@ -194,6 +246,7 @@ pub fn list(table: &ProcTable) -> Vec<Program> {
             kind,
             started: root.start,
             can,
+            procs,
             pids: a.procs.iter().map(|p| p.pid).collect(),
         });
     }
@@ -451,7 +504,42 @@ fn gone_within(procs: &[Proc], secs: u64) -> bool {
 /// sessions are skipped, as everywhere else in mom; an app that hosts agents is the program
 /// itself here, so it may go (the widget said what runs inside it first).
 fn end_all(table: &ProcTable, prog: &Program) -> (usize, usize) {
-    let procs = members(table, prog);
+    end_these(table, &members(table, prog))
+}
+
+/// Ends one of a program's processes, and those it started that are part of the same program, by
+/// the line `list` gave for it. Refuses a line `list` doesn't offer to end, or a process that
+/// isn't the one it was (its number taken by another since).
+pub fn end_one(table: &ProcTable, id: &str, pid: u32, start: u64) -> ActReport {
+    let fail = |m: &str| ActReport { ok: false, message: m.into() };
+    let Some(prog) = list(table).into_iter().find(|p| p.id == id) else {
+        return fail("That program isn't running any more.");
+    };
+    let Some(line) = prog.procs.iter().find(|l| l.pid == pid && l.start.abs_diff(start) <= 2).cloned() else {
+        return fail("That process isn't running any more.");
+    };
+    if !line.can_end {
+        return fail("Mom leaves that one alone.");
+    }
+    let procs = members(table, &prog);
+    let own: HashSet<u32> = procs.iter().map(|p| p.pid).collect();
+    let mut chosen: HashSet<u32> = table.descendants(pid).into_iter().filter(|d| own.contains(d)).collect();
+    chosen.insert(pid);
+    let these: Vec<Proc> = procs.into_iter().filter(|p| chosen.contains(&p.pid)).collect();
+    if these.is_empty() {
+        return fail("That process isn't running any more.");
+    }
+    let (stopped, failed) = end_these(table, &these);
+    let what = crate::util::ellipsize(&line.what, 60);
+    match (stopped, failed) {
+        (0, 0) => fail("That process isn't running any more."),
+        (_, 0) => ActReport { ok: true, message: format!("Stopped {what}.") },
+        _ => ActReport { ok: false, message: format!("Stopped {stopped} of them; {failed} wouldn't budge.") },
+    }
+}
+
+/// Ends these processes, deepest first, checking each again right before.
+fn end_these(table: &ProcTable, procs: &[Proc]) -> (usize, usize) {
     let protected = crate::kill::untouchable(table);
     let asked = table.self_and_ancestors();
     let paths = os::image_paths(table);

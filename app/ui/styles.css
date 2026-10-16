@@ -927,6 +927,48 @@ button.row-name:hover {
   gap: 6px 14px;
 }
 
+/* A program's own processes, each with its own Stop. */
+.proc-lines {
+  display: grid;
+  margin: 2px 0 10px;
+  border-top: 1px solid var(--line);
+}
+
+.proc-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px 64px 62px;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.proc-what {
+  display: grid;
+  min-width: 0;
+}
+
+.proc-what code {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.proc-what small {
+  color: var(--ink-3);
+}
+
+.proc-line .num {
+  text-align: right;
+  color: var(--ink-2);
+}
+
+.proc-line .num.hot {
+  color: var(--red);
+}
+
 .link-btn {
   display: inline-flex;
   align-items: center;

@@ -1154,6 +1154,7 @@ mod tests {
             started: 0,
             inside: None,
             can,
+            procs: vec![],
             pids: vec![77],
         }
     }

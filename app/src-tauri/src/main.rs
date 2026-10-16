@@ -1309,6 +1309,22 @@ async fn program_action(id: String, action: String, s: State<'_, S>) -> Res<mom_
     .map_err(err)
 }
 
+/// Ends one process of a program, and what it started.
+#[tauri::command]
+async fn program_end_one(id: String, pid: u32, start: u64, s: State<'_, S>) -> Res<mom_core::programs::ActReport> {
+    let s = s.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let table = s.sampler.lk().sample();
+        let r = mom_core::programs::end_one(&table, &id, pid, start);
+        if r.ok {
+            history::did(&s.paths, kind::PROGRAM, r.message.clone());
+        }
+        r
+    })
+    .await
+    .map_err(err)
+}
+
 /// What starts with Windows.
 #[tauri::command]
 async fn get_startup(s: State<'_, S>) -> Res<Vec<mom_core::startup::Startup>> {
@@ -1999,6 +2015,7 @@ fn main() {
             add_files_place,
             get_system,
             program_action,
+            program_end_one,
             get_startup,
             set_startup,
             get_rooms,

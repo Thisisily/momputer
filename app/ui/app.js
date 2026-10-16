@@ -41,6 +41,8 @@
     progView: { sort: "cpu", q: "", rest: false }, // how Programs is sorted and filtered, and whether Windows' own show
     progOpen: null, // the program whose details are open
     progConfirm: null, // "id|action" waiting for its second press
+    procConfirm: null, // "id|pid|start": one process of a program, waiting for its second press
+    procBusy: null,
     progOrder: null, // the order rows are shown in, kept between refreshes so nothing moves under the pointer
     progOrderSort: null,
     filesPlaces: null, // where the Files scan looks (files_places)
@@ -848,7 +850,28 @@
         <dt>Running</dt><dd class="num">${plural(p.count, "process", "processes")} since ${esc(clock(p.started))}${p.avgSecs ? `, ${p.avgCpu.toFixed(1)}% of the processor over the last ${esc(ageLong(p.avgSecs))}` : ""}</dd>
         ${rows || `<dt>Hands off</dt><dd>${esc(HANDS_OFF[p.kind] || "Mom leaves this one alone.")}</dd>`}
       </dl>
+      ${procLines(p)}
 `;
+  }
+
+  /** Each of a program's processes: what it runs, where, how busy, and Stop for one at a time. */
+  function procLines(p) {
+    const list = p.procs || [];
+    if (list.length < 2) return "";
+    const lines = list
+      .map((l) => {
+        const key = `${p.id}|${l.pid}|${l.start}`;
+        const sure = state.procConfirm === key;
+        const busy = state.procBusy === key;
+        const stop = l.canEnd
+          ? `<button class="mini-btn${sure ? " sure" : ""}" data-act="proc-end" data-id="${esc(p.id)}" data-pid="${l.pid}" data-start="${l.start}" ${busy ? "disabled" : ""}>${busy ? "Stopping" : sure ? "Sure?" : "Stop"}</button>`
+          : "<span></span>";
+        return `<div class="proc-line"><span class="proc-what"><code title="${esc(l.what)}">${esc(l.what)}</code>${l.place ? `<small>${esc(l.place)}</small>` : ""}</span>
+          <span class="num${l.cpu >= 10 ? " hot" : ""}">${l.cpu >= 0.1 ? `${l.cpu < 10 ? l.cpu.toFixed(1) : Math.round(l.cpu)}%` : ""}</span><span class="num">${bytes(l.mem)}</span>${stop}</div>`;
+      })
+      .join("");
+    const more = p.count > list.length ? `<p class="list-hint">and ${plural(p.count - list.length, "more process", "more processes")}</p>` : "";
+    return `<div class="proc-lines" aria-label="${esc(p.name)}'s processes">${lines}</div>${more}`;
   }
 
   /** A program's or extension's own picture: grey until you point at its row. */
@@ -4388,6 +4411,35 @@ in ${x.cwd}`)}">
         state.progView.rest = !state.progView.rest;
         render();
         break;
+      case "proc-end": {
+        const key = `${el.dataset.id}|${el.dataset.pid}|${el.dataset.start}`;
+        if (state.procBusy) break;
+        if (state.procConfirm !== key) {
+          state.procConfirm = key;
+          render();
+          setTimeout(() => {
+            if (state.procConfirm === key) {
+              state.procConfirm = null;
+              render();
+            }
+          }, 6000);
+          break;
+        }
+        state.procConfirm = null;
+        state.procBusy = key;
+        render();
+        try {
+          const r = await invoke("program_end_one", { id: el.dataset.id, pid: Number(el.dataset.pid), start: Number(el.dataset.start) });
+          toast(r.message, !r.ok);
+          if (r.ok) react("cool");
+        } catch (e) {
+          toast(String(e), true);
+        }
+        state.procBusy = null;
+        await loadPrograms();
+        render();
+        break;
+      }
       case "prog-act": {
         if (state.progBusy) break;
         const key = `${el.dataset.id}|${el.dataset.action}`;
