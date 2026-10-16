@@ -53,7 +53,7 @@ One button and the widget becomes a full window with your PC on mom's desk, draw
 | **Programs, Startup, Browsers** | What's open, what starts with Windows, and every browser extension, with a switch for each. |
 | **Storage** | What can be deleted, and exactly what it is, before anything goes. |
 | **Checkup** | Drives, memory, graphics, screens, devices, network, sleep, sound, updates and Windows settings: what's wrong, and the button that fixes it. |
-| **Backups** | What isn't backed up, drives that keep needing repairs, and work that exists only on this PC. |
+| **Backups** | What isn't backed up, drives Windows keeps finding damage on, and work that exists only on this PC. |
 | **Files** | Copies of the same file, and big files nobody opened in a year. |
 | **Rooms** | Point her at a messy folder. She grades it and tidies it, with undo. |
 | **House rules** | One set of rules every agent is given, and checked against. |
