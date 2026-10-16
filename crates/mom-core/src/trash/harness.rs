@@ -1233,7 +1233,7 @@ fn chat_verdict(c: Cand, ctx: &TrashCtx, min_age: u64) -> Cand {
 mod tests {
     use crate::config::TrashConfig;
     use crate::paths::Paths;
-    use crate::trash::tests::{ctx, fixture, write};
+    use crate::trash::tests::{ctx, fixture, shared, write};
     use crate::trash::{clean, measure};
 
     #[test]
@@ -1605,6 +1605,7 @@ mod tests {
     #[test]
     fn windows_leftovers_are_found_at_the_top_of_every_drive() {
         let root = fixture("drives");
+        shared(&root);
         let mut paths = Paths::under(&root);
         let (c, d) = (paths.system_drive.clone(), root.join("d"));
         paths.other_drives = vec![d.clone()];
@@ -1750,6 +1751,7 @@ mod tests {
     fn unrelated_windows_leftovers_do_not_probe_update_state() {
         use crate::trash::windows_update::State;
         let root = fixture("windows-update-unrelated");
+        shared(&root);
         let paths = Paths::under(&root);
         let installer = paths.system_drive.join("AMD");
         let report = paths.program_data.join("Microsoft").join("Windows").join("WER").join("ReportArchive").join("old-report");

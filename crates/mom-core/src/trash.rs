@@ -2837,6 +2837,20 @@ mod tests {
         root
     }
 
+    /// Lets every signed-in account change `root`, the way the top of a drive is. Windows'
+    /// leftovers there are yours to clean without being administrator; whether the folder the
+    /// tests run in is like that depends on the machine (CI's build folder is for administrators
+    /// only), so the tests that count on it say so themselves.
+    pub(super) fn shared(root: &Path) {
+        std::fs::create_dir_all(root).unwrap();
+        #[cfg(windows)]
+        {
+            let icacls = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into())).join("System32").join("icacls.exe");
+            let out = std::process::Command::new(icacls).arg(root).args(["/grant", "*S-1-5-11:(OI)(CI)M", "/Q"]).output().unwrap();
+            assert!(out.status.success(), "icacls: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+
     fn item<'s>(spot: &'s Spot, name_part: &str) -> &'s Item {
         spot.items.iter().find(|i| i.name.contains(name_part)).unwrap_or_else(|| panic!("no item like {name_part:?} in {:#?}", spot.items))
     }
@@ -3510,6 +3524,7 @@ mod tests {
         // Windows leftovers go one at a time (as do old build folders and anything recycled). The
         // widget showed "0 of 116 items · 0 B" until the very last one was gone.
         let root = fixture("live-each");
+        shared(&root);
         let paths = Paths::under(&root);
         for (name, bytes) in [("AMD", 100), ("adobeTemp", 200), ("Windows10Upgrade", 300)] {
             write(&paths.system_drive.join(name).join("a.bin"), bytes, 200);
@@ -3574,6 +3589,7 @@ mod tests {
         use windows_update::State;
         for blocked in [State::Pending, State::Unknown] {
             let root = fixture(&format!("update-mid-clean-{blocked:?}"));
+            shared(&root);
             let paths = Paths::under(&root);
             let targets: Vec<_> = ["$GetCurrent", "Windows10Upgrade", "$WINDOWS.~TMP"]
                 .into_iter().map(|name| paths.system_drive.join(name)).collect();
