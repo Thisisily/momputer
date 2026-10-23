@@ -126,10 +126,14 @@ Privacy: momputer sends nothing about you or your PC anywhere. Once a day it ask
 
 ## Roadmap
 
-- winget.
-- macOS and Linux (the core is mostly portable already).
-- An MCP server, so agents can ask mom directly.
-- More mom: bedtime (a nightly tidy-up), screen time for agents, a nudge when a disk is nearly full.
+- **A Mac version**, then Linux. The core is mostly portable already.
+- **Out of date**: which apps and global packages (winget, npm, pip, uv, cargo, scoop, Chocolatey) have a newer version, and one button to update them.
+- **Known holes**: a vulnerability checker for versions with known security problems, the ones attackers already use first.
+- **winget**: install momputer with one command.
+- **An MCP server**, so agents can ask mom directly.
+- **More mom**: bedtime (a nightly tidy-up), screen time for agents, a nudge when a disk is nearly full.
+
+How each one would work: [docs/roadmap.md](docs/roadmap.md).
 
 ## Built with
 

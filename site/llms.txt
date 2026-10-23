@@ -22,6 +22,9 @@
 - Shows what goes and what stays before any clean-up; your own files go to the Recycle Bin.
 - Sends nothing about you or your PC. The one request it makes is a daily check with GitHub for a newer version, which a switch in Settings turns off.
 
+## What's next
+- Not built yet: a Mac version (then Linux); a check for apps and global packages that are out of date, with one button to update them; a vulnerability checker for versions with known security problems; installing with winget; an MCP server so agents can ask mom directly. [How each would work](https://github.com/Thisisily/momputer/blob/main/docs/roadmap.md).
+
 ## License
 - [PolyForm Noncommercial 1.0.0](https://github.com/Thisisily/momputer/blob/main/LICENSE): free at home, for hobby projects, for students, nonprofits and research. Work at a company needs a commercial license ([ask on GitHub](https://github.com/Thisisily/momputer/issues/new?template=commercial-license.yml)).
 

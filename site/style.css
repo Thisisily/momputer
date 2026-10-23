@@ -1166,6 +1166,12 @@ h1 {
   top: 24px;
 }
 
+/* what isn't built yet: a light that's off */
+.next li::before {
+  background: var(--led-off);
+  box-shadow: none;
+}
+
 .promises b {
   font-size: 17px;
   letter-spacing: -0.01em;
