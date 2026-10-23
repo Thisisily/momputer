@@ -768,21 +768,49 @@ fn measure_trash_now(app: AppHandle, s: S, only: Option<String>) {
     });
 }
 
+/// Measures everything again. With `admin` ("admin" ticked next to Measure), Windows asks first
+/// and an administrator copy of `mom` measures what only an administrator can see. Why it
+/// couldn't, if it couldn't.
 #[tauri::command(async)]
-fn measure_trash(app: AppHandle, s: State<'_, S>) {
+fn measure_trash(admin: Option<bool>, app: AppHandle, s: State<'_, S>) -> Option<String> {
+    let note = if admin == Some(true) { look_as_admin() } else { None };
     measure_trash_now(app, s.inner().clone(), None);
+    note
 }
 
 /// Measures one spot again (the refresh button on its sheet). With `more`, it lists four times
-/// as many items as it does now ("Show all").
+/// as many items as it does now ("Show all"); with `admin`, as for Measure.
 #[tauri::command(async)]
-fn measure_spot(id: String, more: Option<bool>, app: AppHandle, s: State<'_, S>) {
+fn measure_spot(id: String, more: Option<bool>, admin: Option<bool>, app: AppHandle, s: State<'_, S>) -> Option<String> {
     if more == Some(true) && trash::spot_ids().contains(&id.as_str()) {
         let mut scale = s.trash_scale.lk();
         let now = scale.get(&id).copied().unwrap_or(1);
         scale.insert(id.clone(), (now * trash::MORE).min(trash::MAX_SCALE));
     }
+    let note = if admin == Some(true) && trash::LOOKS.contains(&id.as_str()) { look_as_admin() } else { None };
     measure_trash_now(app, s.inner().clone(), Some(id));
+    note
+}
+
+/// Has Windows run `mom trash look` as administrator (it asks the person first). It only
+/// measures, and leaves what it saw where only an administrator can write; measuring as you
+/// reads it from there. Why not, when it didn't.
+fn look_as_admin() -> Option<String> {
+    if mom_core::elevate::is_elevated() {
+        return None;
+    }
+    let app = std::env::current_exe().unwrap_or_default();
+    let mom = app.with_file_name("mom.exe");
+    if !mom.is_file() {
+        return Some("mom.exe isn't next to the app, so it can't measure as an administrator.".into());
+    }
+    // Only a mom.exe nothing running as you could have swapped, or your "yes" goes to it.
+    match mom_core::elevate::safe_to_elevate(&mom, &app).and_then(|()| mom_core::elevate::run_as_admin(&mom, "trash look --elevated")) {
+        Ok(0) => None,
+        Ok(_) => Some("Measuring as administrator didn't finish, so some sizes stay unknown.".into()),
+        Err(why) if why == mom_core::elevate::SAID_NO => Some("You said no, so what only an administrator can see stays without a size.".into()),
+        Err(why) => Some(why),
+    }
 }
 
 /// Keeps one thing from now on, whatever clean-up finds it (or, with `keep` false, lets it go
@@ -893,11 +921,21 @@ fn clean_as_admin(s: &Shared, id: &str, pick: Option<&trash::Pick>) -> trash::Cl
         trash::clean(id, &ctx, pick);
         before
     };
-    let gone = |targets: &[std::path::PathBuf]| targets.iter().all(|t| std::fs::symlink_metadata(t).is_err());
+    let gone = |targets: &[std::path::PathBuf]| !targets.iter().any(|t| trash::still_there(t));
     let mut note = None;
     if before.iter().all(|(t, _)| gone(t)) {
-        return tally_gone(id, before, r, None);
+        return tally_gone(id, before, r, None, 0);
     }
+    // What only an administrator can measure is counted by the room it leaves on its drive,
+    // less what was measured there.
+    let left: Vec<bool> = before.iter().map(|(t, _)| !gone(t)).collect();
+    let drive = before
+        .iter()
+        .zip(&left)
+        .find(|((_, size), left)| size.is_none() && **left)
+        .and_then(|((t, _), _)| t.first().and_then(|t| t.ancestors().last()).map(std::path::Path::to_path_buf));
+    let room = |d: &std::path::Path| mom_core::archive::free_space(d);
+    let room_before = drive.as_deref().and_then(room);
     // Then the rest as administrator, told what you said to keep: an administrator who isn't you
     // (Windows asked for a password) reads their own settings, not yours.
     let mut args = format!("trash clean {id} --yes --elevated");
@@ -920,7 +958,19 @@ fn clean_as_admin(s: &Shared, id: &str, pick: Option<&trash::Pick>) -> trash::Cl
             note = Some(why);
         }
     }
-    tally_gone(id, before, r, note)
+    let unmeasured = match (drive, room_before) {
+        (Some(d), Some(was)) => {
+            let measured: u64 = before
+                .iter()
+                .zip(&left)
+                .filter(|((t, _), left)| **left && gone(t) && t.first().is_some_and(|t| t.starts_with(&d)))
+                .filter_map(|((_, size), _)| *size)
+                .sum();
+            room(&d).unwrap_or(was).saturating_sub(was).saturating_sub(measured)
+        }
+        _ => 0,
+    };
+    tally_gone(id, before, r, note, unmeasured)
 }
 
 // ------------------------------------------------------------ files: copies and big forgotten files
@@ -1075,15 +1125,21 @@ fn admin_check() -> Option<String> {
     mom_core::elevate::safe_to_elevate(&app.with_file_name("mom.exe"), &app).err()
 }
 
-/// What a clean-up took, from what's gone of what it planned to take.
-fn tally_gone(id: &str, before: Vec<(Vec<std::path::PathBuf>, u64)>, mut r: trash::CleanReport, note: Option<String>) -> trash::CleanReport {
+/// What an administrator clean-up took, from what's gone. `unmeasured` is the room freed by what
+/// only an administrator could measure, counted if any of that went.
+fn tally_gone(id: &str, before: Vec<(Vec<std::path::PathBuf>, Option<u64>)>, mut r: trash::CleanReport, note: Option<String>, unmeasured: u64) -> trash::CleanReport {
+    let mut took_unmeasured = false;
     for (targets, bytes) in before {
-        if targets.iter().all(|t| std::fs::symlink_metadata(t).is_err()) {
+        if !targets.iter().any(|t| trash::still_there(t)) {
             r.deleted += 1;
-            r.freed += bytes;
+            r.freed += bytes.unwrap_or(0);
+            took_unmeasured |= bytes.is_none();
         } else {
             r.skipped += 1;
         }
+    }
+    if took_unmeasured {
+        r.freed += unmeasured;
     }
     r.message = match (r.deleted, note) {
         (0, Some(why)) => why,

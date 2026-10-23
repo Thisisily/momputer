@@ -442,6 +442,105 @@ fn look(git: &Path, repo: &Path, now: u64) -> Option<Look> {
     Some(l)
 }
 
+// ------------------------------------------------------------------ work in a folder about to go
+
+/// Git work in a folder that may not be saved anywhere else.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Unsaved {
+    /// A checkout here with this many changed or new files.
+    Changes(PathBuf, usize),
+    /// A checkout here that git can't safely be asked about, or didn't answer.
+    Unknown(PathBuf),
+}
+
+/// How deep in a folder checkouts are looked for, and how many folders at most.
+const SCRATCH_DEPTH: usize = 5;
+const SCRATCH_DIRS: usize = 20_000;
+
+/// The first git checkout under `dir` whose work may not all be committed. One git says is clean
+/// can go: its work is in its project. Links are never followed, and a checkout's own folders
+/// aren't searched.
+pub(crate) fn unsaved_work(dir: &Path) -> Option<Unsaved> {
+    let checkouts = checkouts_in(dir);
+    if checkouts.is_empty() {
+        return None;
+    }
+    let git = git();
+    for co in checkouts {
+        let Some(git) = git.as_deref().filter(|_| askable_checkout(&co)) else { return Some(Unsaved::Unknown(co)) };
+        match ask(git, &co, &["status", "--porcelain=v1", "-z", "--ignore-submodules=all"]) {
+            Some(z) if changed_paths(&z).is_empty() => {}
+            Some(z) => return Some(Unsaved::Changes(co, changed_paths(&z).len())),
+            None => return Some(Unsaved::Unknown(co)),
+        }
+    }
+    None
+}
+
+/// Every folder under `dir` with a `.git` in it (a folder, or a worktree's pointer file).
+fn checkouts_in(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut queue: std::collections::VecDeque<(PathBuf, usize)> = std::collections::VecDeque::from([(dir.to_path_buf(), 0)]);
+    let mut left = SCRATCH_DIRS;
+    while let Some((d, depth)) = queue.pop_front() {
+        if !plain_dir(&d) {
+            continue;
+        }
+        if std::fs::symlink_metadata(d.join(".git")).is_ok() {
+            out.push(d);
+            continue;
+        }
+        if depth >= SCRATCH_DEPTH {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for e in entries.flatten() {
+            if !e.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().to_ascii_lowercase();
+            if name.starts_with('.') || SKIP.contains(&name.as_str()) {
+                continue;
+            }
+            let Some(l) = left.checked_sub(1) else { return out };
+            left = l;
+            queue.push_back((e.path(), depth + 1));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Whether git may be asked about a checkout: an ordinary project whose settings are plain data,
+/// or a worktree of one. A worktree's pointer must name, by a whole path, its own folder in a
+/// project's `.git\worktrees` that shares that project's settings and has none of its own.
+fn askable_checkout(co: &Path) -> bool {
+    let dot = co.join(".git");
+    let Ok(meta) = std::fs::symlink_metadata(&dot) else { return false };
+    if linked(&meta) {
+        return false;
+    }
+    if meta.is_dir() {
+        return askable(co);
+    }
+    if !meta.is_file() || meta.len() > 4096 {
+        return false;
+    }
+    let Ok(text) = std::fs::read_to_string(&dot) else { return false };
+    let Some(admin) = text.trim().strip_prefix("gitdir:").map(|p| PathBuf::from(p.trim().replace('/', "\\"))) else { return false };
+    if !admin.is_absolute() || admin.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir)) {
+        return false;
+    }
+    let (Some(worktrees), Some(common)) = (admin.parent(), admin.parent().and_then(Path::parent)) else { return false };
+    let named = |p: &Path, n: &str| p.file_name().is_some_and(|f| f.eq_ignore_ascii_case(n));
+    if !named(worktrees, "worktrees") || !named(common, ".git") || !plain_dir(&admin) {
+        return false;
+    }
+    let shares = std::fs::read_to_string(admin.join("commondir")).is_ok_and(|c| matches!(c.trim(), "../.." | "..\\.."));
+    let own_settings = std::fs::symlink_metadata(admin.join("config.worktree")).is_ok();
+    shares && !own_settings && common.parent().is_some_and(askable)
+}
+
 // ------------------------------------------------------------------ what's said
 
 /// A name or path from the disk, safe to put in a sentence or a prompt: one line, no

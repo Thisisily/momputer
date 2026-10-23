@@ -6,6 +6,7 @@
 //! Recycle Bin, and "review" spots ask the user to look first. Mom skips anything a running
 //! process is using and anything touched recently.
 
+mod admin_look;
 pub mod autopilot;
 pub(crate) mod bin;
 mod browsers;
@@ -14,15 +15,18 @@ mod claude;
 // 0.5.0 C1
 mod downloads;
 mod drivers;
+mod dumps;
 mod forgotten;
 mod harness;
 mod shader_owner;
 mod steam_shaders;
 mod steam_appinfo;
+mod steam_packages;
 mod programs;
 mod walk;
 mod windows_update;
 
+pub use admin_look::{look as look_as_admin, LOOKS};
 use crate::agents::AgentKind;
 use crate::config::{Config, TrashConfig};
 use crate::paths::Paths;
@@ -69,6 +73,10 @@ pub struct Spot {
     pub new_bytes: u64,
     #[serde(default)]
     pub new_items: u64,
+    /// Items that go but whose size only an administrator can see: `reclaimable_bytes` leaves
+    /// them out.
+    #[serde(default)]
+    pub unmeasured_items: u64,
     /// Only an administrator can clean it; Windows asks first.
     #[serde(default)]
     pub admin: bool,
@@ -119,6 +127,9 @@ pub struct Item {
     /// You said to keep it (`TrashConfig.keep`), so it stays until you say otherwise.
     #[serde(default)]
     pub kept: bool,
+    /// It's there, but only an administrator can see how big it is: `bytes` is 0, not its size.
+    #[serde(default)]
+    pub unmeasured: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -732,8 +743,9 @@ const DEFS: &[Def] = &[
         id: "game-junk",
         label: "Game logs and crash reports",
         detail: "Logs and crash reports games write every time they run.",
-        what: "Unity games write a Player.log every time they run, Unreal games keep logs and crash reports, and \
-               Godot games keep shader caches. Your saves and settings live next to them and are never touched.",
+        what: "Unity games write a Player.log every time they run, Unreal games keep logs and crash reports, \
+               Godot games keep shader caches, and Steam keeps its own logs, crash dumps and old update files. \
+               Your saves and settings live next to them and are never touched.",
         group: "windows",
         action: "delete",
         safety: "safe",
@@ -754,9 +766,10 @@ const DEFS: &[Def] = &[
     Def {
         id: "windows-junk",
         label: "Windows leftovers",
-        detail: "Windows update downloads, old error reports, and setup folders at the top of your drives.",
+        detail: "Windows update downloads, old error reports, memory snapshots, and setup folders at the top of your drives.",
         what: "Windows Update keeps downloaded files, and Windows keeps error reports \
-               about crashes. Windows setup and the update assistant leave their working folders at the top of \
+               about crashes. When something stops responding or the PC crashes, Windows saves a snapshot of its \
+               memory, sometimes tens of gigabytes; only an administrator can see how big. Windows setup and the update assistant leave their working folders at the top of \
                whichever drive had room, a disk check leaves the pieces it recovered there (found.000), and a few \
                installers (AMD, Adobe) leave a folder on C:. Mom looks at the top of every drive built into the PC. \
                Update and setup files stay while updates or a restart are pending, or their status cannot be checked. \
@@ -949,6 +962,14 @@ struct Cand {
     title_from: Option<(PathBuf, String)>,
     /// You said to keep it.
     kept: bool,
+    /// Only an administrator can see its size (`Item.unmeasured`).
+    unmeasured: bool,
+    /// Measured by an administrator when you asked (admin_look.rs): as you it can't be opened.
+    by_admin: bool,
+    /// A Claude Code session's scratch holding the session's own test browser (claude.rs). Its
+    /// sign-ins are the agent's, not yours: the usual age and session rules decide, and the
+    /// browser data goes with the folder. Everywhere else browser data never goes.
+    test_browser: bool,
 }
 
 impl Cand {
@@ -973,11 +994,14 @@ impl Cand {
             complete: t.complete,
             title_from: None,
             kept: false,
+            unmeasured: false,
+            by_admin: false,
+            test_browser: false,
         }
     }
 
     fn verdict(mut self, goes: bool, reason: impl Into<String>) -> Cand {
-        if self.browser_data {
+        if self.browser_data && !self.test_browser {
             self.goes = false;
             self.optional = false;
             self.reason = BROWSER_DATA.into();
@@ -1025,6 +1049,7 @@ impl Cand {
             reason: self.reason,
             kind: self.kind.map(str::to_string),
             kept: self.kept,
+            unmeasured: self.unmeasured,
         }
     }
 }
@@ -1204,15 +1229,33 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
     if id != "docker" && id != "recycle-bin" {
         let mut looked = crate::browser_data::Looked::default();
         for c in &mut found.cands {
-            if c.browser_data || c.targets.iter().any(|p| crate::browser_data::protects_path_with(p, &mut looked)) {
+            // What only an administrator can open can't be checked as you; the administrator
+            // run that cleans it measures it again, and checks it then.
+            if c.unmeasured || c.by_admin {
+                continue;
+            }
+            // An agent's own test browser is judged by claude.rs, but never in a real browser's
+            // folder, whatever links or names led there.
+            let browser = if c.test_browser {
+                c.targets.iter().chain(std::iter::once(&c.path)).any(|p| crate::browser_data::in_browser_home(p))
+            } else {
+                c.browser_data || c.targets.iter().any(|p| crate::browser_data::protects_path_with(p, &mut looked))
+            };
+            if browser {
                 c.browser_data = true;
                 c.goes = false;
                 c.optional = false;
                 c.reason = BROWSER_DATA.into();
             } else if !c.complete || c.links > 0 {
+                // Kept, whatever its own verdict. One already staying goes on saying why.
+                let why = if c.links > 0 { "holds links to other folders" } else { "could not safely check every file and folder" };
+                if c.goes {
+                    c.reason = format!("{}{}; kept", why[..1].to_uppercase(), &why[1..]);
+                } else if c.optional {
+                    c.reason = format!("{}; it also {why}, so it stays", c.reason);
+                }
                 c.goes = false;
                 c.optional = false;
-                c.reason = "Could not safely check every file and folder; kept".into();
             }
         }
     }
@@ -1789,6 +1832,7 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
     let (n_go, n_stay) = (goes.len() as u64, stays.len() as u64);
     let new_bytes = stays.iter().filter(|c| c.optional).map(|c| c.bytes).sum();
     let new_items = stays.iter().filter(|c| c.optional).count() as u64;
+    let unmeasured_items = goes.iter().filter(|c| c.unmeasured).count() as u64;
     let scale = ctx.list_scale.clamp(1, MAX_SCALE);
     let items = goes.into_iter().take(MAX_GOES * scale).chain(stays.into_iter().take(MAX_STAYS * scale)).map(Cand::into_item).collect();
     Spot {
@@ -1809,6 +1853,7 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
         kept_items: n_stay,
         new_bytes,
         new_items,
+        unmeasured_items,
         admin: needs_admin(def.id),
         exact,
         available: f.available,
@@ -1910,11 +1955,18 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
             if n == 0 {
                 nothing(&format!("no eligible leftovers qualify for the {kept} cutoff. Recent, in-use, protected or unverified items stay."))
             } else {
+                let unmeasured = goes.iter().filter(|c| c.unmeasured).count();
+                let dumps = goes.iter().any(|c| matches!(c.kind, Some("memory snapshots" | "crash dumps")));
                 format!(
-                    "Deletes {} that {} left behind with no recorded changes in {kept}, {forever}: {}. {} \
+                    "Deletes {} that {} left behind with no recorded changes in {kept}{}, {forever}: {}. {} \
                      Anything newer, or in use, stays.",
-                    count_size(n, "item", "items", bytes),
+                    match unmeasured {
+                        0 => count_size(n, "item", "items", bytes),
+                        u if u == n => format!("{} (size known only to an administrator)", plural(n as u64, "item")),
+                        u => format!("{} ({} plus {u} only an administrator can measure)", plural(n as u64, "item"), human_bytes(bytes)),
+                    },
                     harness::tools(goes),
+                    if dumps { " (crash dumps and memory snapshots: a day)" } else { "" },
                     harness::kinds(goes),
                     harness::untouched(id)
                 )
@@ -2314,10 +2366,12 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
             let targets: Vec<PathBuf> = chosen[start..end].iter().flat_map(|c| c.targets.iter().cloned()).collect();
             let safe: Vec<bool> = chosen[start..end].iter().flat_map(|c| {
                 let allowed = update_allowed(c);
-                c.targets.iter().map(move |t| allowed && (id == "recycle-bin" || crate::browser_data::tree_is_safe(t)))
+                c.targets.iter().map(move |t| allowed && (id == "recycle-bin" || c.test_browser || crate::browser_data::tree_is_safe(t)))
             }).collect();
             let allowed: Vec<PathBuf> = targets.iter().zip(&safe).filter(|(_, safe)| **safe).map(|(p, _)| p.clone()).collect();
-            let mut removed = remove_all(&allowed, live).into_iter();
+            // Only an agent's own test browser, in its finished session's scratch, goes with it.
+            let test_browsers: Vec<PathBuf> = chosen[start..end].iter().filter(|c| c.test_browser).flat_map(|c| c.targets.iter().cloned()).collect();
+            let mut removed = remove_all(&allowed, &test_browsers, live).into_iter();
             let mut done = safe.into_iter().map(|safe| safe && removed.next().unwrap_or(false));
             for (i, c) in chosen.iter().enumerate().take(end).skip(start) {
                 let ok = c.targets.iter().map(|_| done.next().unwrap_or(false)).fold(true, |a, b| a & b);
@@ -2425,7 +2479,7 @@ fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool], allow
             l.working_on(chosen[start]);
         }
         let targets: Vec<&PathBuf> = chosen[start..end].iter()
-            .filter(|c| c.targets.iter().all(|t| crate::browser_data::tree_is_safe(t)) && allowed(c))
+            .filter(|c| (c.test_browser || c.targets.iter().all(|t| crate::browser_data::tree_is_safe(t))) && allowed(c))
             .flat_map(|c| c.targets.iter()).collect();
         if !targets.is_empty() {
             // Whatever couldn't go (in use) shows up below as still there.
@@ -2543,7 +2597,7 @@ fn choose<'f>(f: &'f Found, pick: Option<&Pick>) -> Vec<&'f Cand> {
     f.cands
         .iter()
         .filter(|c| {
-            if c.browser_data { return false; }
+            if c.browser_data && !c.test_browser { return false; }
             if c.age_required && (!c.age_known || !c.complete) { return false; }
             let starts_ticked = match (c.goes, c.optional) {
                 (true, _) => pick.goes,
@@ -2621,10 +2675,10 @@ fn move_chosen(chosen: &[&Cand], ctx: &TrashCtx, mut r: CleanReport, update_bloc
     r
 }
 
-/// What cleaning a spot would take right now: each item's paths and size. The app checks these
-/// afterwards to tell what an administrator clean-up did, so the elevated `mom` never has to
-/// write anything back.
-pub fn plan(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> Vec<(Vec<PathBuf>, u64)> {
+/// What cleaning a spot would take right now: each item's paths and size (None when only an
+/// administrator can see it). The app checks these afterwards to tell what an administrator
+/// clean-up did, so the elevated `mom` never has to write anything back.
+pub fn plan(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> Vec<(Vec<PathBuf>, Option<u64>)> {
     let Some(def) = def(id) else { return vec![] };
     if pick.is_some_and(|p| p.discard_error(id).is_some()) {
         return vec![];
@@ -2634,7 +2688,7 @@ pub fn plan(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> Vec<(Vec<PathBuf>,
     }
     let pick = pick.filter(|p| !p.is_default());
     let f = find_for(id, ctx, pick);
-    choose(&f, pick).into_iter().map(|c| (c.targets.clone(), c.bytes)).collect()
+    choose(&f, pick).into_iter().map(|c| (c.targets.clone(), (!c.unmeasured).then_some(c.bytes))).collect()
 }
 
 /// The sentence for a clean-up's result.
@@ -2713,16 +2767,27 @@ pub fn describe(s: &Spot) -> String {
     if !s.available {
         return "not found".into();
     }
-    if s.total_bytes == 0 && s.reclaimable_bytes == 0 {
+    if s.total_bytes == 0 && s.reclaimable_bytes == 0 && !s.items.iter().any(|i| i.unmeasured) {
         return "empty".into();
     }
     let (go, total) = (human_bytes(s.reclaimable_bytes), human_bytes(s.total_bytes));
     if s.action == "tool" {
         format!("up to {go} can go of {total} (the tool decides)")
+    } else if s.exact && s.unmeasured_items > 0 {
+        format!("{go} can go of {total}, plus {} of unknown size", plural(s.unmeasured_items, "item"))
     } else if s.exact {
         format!("{go} can go of {total}")
     } else {
         format!("{go}+ can go of {total}+ (too many files to count them all)")
+    }
+}
+
+/// Is something still at `path`? A file only an administrator may open still counts: asking for
+/// one says "access denied", not "not found".
+pub fn still_there(path: &Path) -> bool {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => true,
+        Err(e) => e.kind() == std::io::ErrorKind::PermissionDenied,
     }
 }
 
@@ -2952,6 +3017,244 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    /// A Chrome profile the way an agent's test browser leaves one: sign-ins, site storage and
+    /// the marks that say it's a browser's.
+    fn chrome_profile(dir: &Path, days: u64) {
+        for (file, bytes) in [
+            ("Local State", 50),
+            ("Default/Preferences", 40),
+            ("Default/Cookies", 300),
+            ("Default/Login Data", 200),
+            ("Default/Network/TransportSecurity", 30),
+            ("Default/Network/Cookies", 120),
+            ("Default/Local Storage/leveldb/000003.log", 80),
+            ("Default/IndexedDB/https_app.example_0.indexeddb.leveldb/000001.ldb", 90),
+            ("Default/Cache/Cache_Data/data_0", 500),
+        ] {
+            write(&dir.join(file), bytes, days);
+        }
+    }
+
+    fn firefox_profile(dir: &Path, days: u64) {
+        for (file, bytes) in [("prefs.js", 40), ("cookies.sqlite", 200), ("storage/default/https+++app.example/ls/data.sqlite", 60)] {
+            write(&dir.join(file), bytes, days);
+        }
+    }
+
+    fn files_under(dir: &Path) -> usize {
+        walkdir::WalkDir::new(dir).into_iter().flatten().filter(|e| e.file_type().is_file()).count()
+    }
+
+    #[test]
+    fn a_finished_sessions_test_browser_goes_with_it_and_no_other_browser_data_does() {
+        let root = fixture("test-browser");
+        let paths = Paths::under(&root);
+        let scratch = paths.temp.join("claude").join("C--Workspace-storefront");
+        let session = |id: &str| scratch.join(id);
+        // Old and over: QA personas' Chrome profiles and a Firefox one, beside a screenshot.
+        chrome_profile(&session("aaaaaaaa-0000-0000-0000-000000000001").join("scratchpad").join("qa").join("b1").join("profile"), 20);
+        chrome_profile(&session("aaaaaaaa-0000-0000-0000-000000000001").join("scratchpad").join("qa").join("b2").join("profile"), 20);
+        write(&session("aaaaaaaa-0000-0000-0000-000000000001").join("scratchpad").join("shot.png"), 1000, 20);
+        firefox_profile(&session("bbbbbbbb-0000-0000-0000-000000000002").join("scratchpad").join("ff"), 20);
+        // Over, but only 3 days old: kept, and can be ticked.
+        chrome_profile(&session("cccccccc-0000-0000-0000-000000000003").join("scratchpad").join("profile"), 3);
+        // Still running, and over but its browser is still open: kept, and can't be ticked.
+        chrome_profile(&session("dddddddd-0000-0000-0000-000000000004").join("scratchpad").join("profile"), 20);
+        chrome_profile(&session("eeeeeeee-0000-0000-0000-000000000005").join("scratchpad").join("profile"), 20);
+        // Your own browsers, and a browser's profile in Temp outside Claude's scratch: never.
+        let chrome = paths.local_appdata.join("Google").join("Chrome").join("User Data");
+        chrome_profile(&chrome, 400);
+        let loose = paths.temp.join("scoped_dir4242_1");
+        chrome_profile(&loose, 30);
+
+        let cfg = TrashConfig::default();
+        let mut ctx = ctx(&paths, &cfg);
+        ctx.live_sessions.insert("dddddddd-0000-0000-0000-000000000004".into());
+        let open = session("eeeeeeee-0000-0000-0000-000000000005").join("scratchpad").join("profile");
+        ctx.in_use = norm_path(&format!("chrome.exe --user-data-dir=\"{}\" --headless", open.display()));
+
+        let spot = measure("claude-temp", &ctx).unwrap();
+        let old = item(&spot, "Session aaaaaaaa");
+        assert!(old.goes && old.reason.starts_with("Last changed 20 days ago"), "{old:?}");
+        assert!(item(&spot, "Session bbbbbbbb").goes, "a Firefox profile too");
+        let young = item(&spot, "Session cccccccc");
+        assert!(!young.goes && young.optional && young.reason.contains("(kept for 7 days)"), "{young:?}");
+        let live = item(&spot, "Session dddddddd");
+        assert!(!live.goes && !live.optional && live.reason == "Session is still running", "{live:?}");
+        let busy = item(&spot, "Session eeeeeeee");
+        assert!(!busy.goes && !busy.optional && busy.reason == IN_USE, "{busy:?}");
+        assert_eq!(spot.reclaimable_items, 2);
+        let temp = measure("old-temp", &ctx).unwrap();
+        let elsewhere = item(&temp, "scoped_dir4242_1");
+        assert!(!elsewhere.goes && !elsewhere.optional && elsewhere.reason == BROWSER_DATA, "outside an agent's scratch, browser data stays: {elsewhere:?}");
+
+        // Cleaning takes the finished ones whole, browser data and all, and nothing else.
+        let r = clean("claude-temp", &ctx, None);
+        assert_eq!((r.deleted, r.skipped), (2, 0), "{}", r.message);
+        assert!(!session("aaaaaaaa-0000-0000-0000-000000000001").exists() && !session("bbbbbbbb-0000-0000-0000-000000000002").exists());
+        for stays in ["cccccccc-0000-0000-0000-000000000003", "dddddddd-0000-0000-0000-000000000004", "eeeeeeee-0000-0000-0000-000000000005"] {
+            assert_eq!(files_under(&session(stays)), 9, "{stays}");
+        }
+        assert_eq!(files_under(&chrome), 9, "your own Chrome is never touched");
+        assert_eq!(files_under(&loose), 9);
+        clean("old-temp", &ctx, None);
+        assert_eq!(files_under(&loose), 9, "nor a browser profile loose in Temp");
+
+        // Ticking: the young one goes; the running one and the open one can't be taken however
+        // they're ticked.
+        let p = |id: &str| session(id).to_string_lossy().to_string();
+        let ticked = vec![p("cccccccc-0000-0000-0000-000000000003"), p("dddddddd-0000-0000-0000-000000000004"), p("eeeeeeee-0000-0000-0000-000000000005"), chrome.to_string_lossy().to_string()];
+        let pick = Pick { goes: false, new: false, ticked, ..Default::default() };
+        let r = clean("claude-temp", &ctx, Some(&pick));
+        assert_eq!(r.deleted, 1, "{}", r.message);
+        assert!(!session("cccccccc-0000-0000-0000-000000000003").exists());
+        assert_eq!(files_under(&session("dddddddd-0000-0000-0000-000000000004")), 9);
+        assert_eq!(files_under(&session("eeeeeeee-0000-0000-0000-000000000005")), 9);
+        assert_eq!(files_under(&chrome), 9);
+
+        // A session that started running again between measuring and cleaning stays.
+        chrome_profile(&session("ffffffff-0000-0000-0000-000000000006").join("scratchpad").join("profile"), 20);
+        assert!(item(&measure("claude-temp", &ctx).unwrap(), "Session ffffffff").goes);
+        ctx.live_sessions.insert("ffffffff-0000-0000-0000-000000000006".into());
+        let r = clean("claude-temp", &ctx, None);
+        assert_eq!(r.deleted, 0, "{}", r.message);
+        assert_eq!(files_under(&session("ffffffff-0000-0000-0000-000000000006")), 9);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_test_browser_reached_through_a_link_is_never_followed() {
+        let root = fixture("test-browser-link");
+        let paths = Paths::under(&root);
+        let session = paths.temp.join("claude").join("C--Workspace-storefront").join("aaaaaaaa-0000-0000-0000-000000000001");
+        // A profile somewhere else, linked into an old session's scratch.
+        let real = paths.local_appdata.join("Google").join("Chrome").join("User Data");
+        chrome_profile(&real, 400);
+        write(&session.join("scratchpad").join("notes.md"), 100, 20);
+        link(&session.join("scratchpad").join("profile"), &real);
+        // Making the link changed its folder: that was 20 days ago too.
+        touch_directory(&session.join("scratchpad"), 20 * 86_400);
+        touch_directory(&session, 20 * 86_400);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("claude-temp", &ctx).unwrap();
+        let it = item(&spot, "Session aaaaaaaa");
+        assert!(!it.goes && !it.optional, "a folder with a link in it isn't taken: {it:?}");
+        assert_eq!(it.reason, "Holds links to other folders; kept");
+        let pick = Pick { goes: false, new: false, ticked: vec![session.to_string_lossy().to_string()], ..Default::default() };
+        clean("claude-temp", &ctx, Some(&pick));
+        clean("claude-temp", &ctx, None);
+        assert_eq!(files_under(&real), 9, "what the link leads to is never touched");
+        assert!(session.join("scratchpad").join("notes.md").exists());
+        // A running session with a link in it says it's running; a young one says both things.
+        let mut ctx = ctx;
+        ctx.live_sessions.insert("aaaaaaaa-0000-0000-0000-000000000001".into());
+        assert_eq!(item(&measure("claude-temp", &ctx).unwrap(), "Session aaaaaaaa").reason, "Session is still running");
+        ctx.live_sessions.clear();
+        touch_directory(&session.join("scratchpad"), 2 * 86_400);
+        let young = measure("claude-temp", &ctx).unwrap();
+        let young = item(&young, "Session aaaaaaaa");
+        assert!(!young.optional && young.reason.ends_with("(kept for 7 days); it also holds links to other folders, so it stays"), "{young:?}");
+        unlink(&session.join("scratchpad").join("profile"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Ages everything under `dir`, folders included, as if nobody had touched it in `days`.
+    /// (Git's objects are read-only, so only the times are opened for writing.)
+    fn age_tree(dir: &Path, days: u64) {
+        let at = std::time::SystemTime::now() - Duration::from_secs(days * 86_400);
+        let mut all: Vec<(usize, PathBuf)> = walkdir::WalkDir::new(dir).into_iter().flatten().map(|e| (e.depth(), e.into_path())).collect();
+        all.sort_by(|a, b| b.0.cmp(&a.0));
+        for (_, p) in all {
+            let mut o = std::fs::OpenOptions::new();
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                o.access_mode(0x100).custom_flags(0x0200_0000); // FILE_WRITE_ATTRIBUTES, BACKUP_SEMANTICS
+            }
+            #[cfg(not(windows))]
+            o.read(true);
+            let times = std::fs::FileTimes::new().set_modified(at);
+            #[cfg(windows)]
+            let times = {
+                use std::os::windows::fs::FileTimesExt;
+                times.set_created(at)
+            };
+            o.open(&p).unwrap().set_times(times).unwrap();
+        }
+    }
+
+    #[test]
+    fn work_nobody_committed_in_scratch_stays_until_you_tick_it() {
+        let Some(git) = crate::repos::git() else {
+            eprintln!("git isn't installed here: skipped");
+            return;
+        };
+        let root = fixture("scratch-git");
+        // git takes ordinary paths, the way Claude Code's scratch is spelled.
+        #[cfg(windows)]
+        let root = PathBuf::from(root.to_string_lossy().strip_prefix(r"\\?\").unwrap().to_string());
+        let paths = Paths::under(&root);
+        let scratch = paths.temp.join("claude").join("C--Workspace-storefront");
+        let run = |dir: &Path, args: &[&str]| {
+            let out = std::process::Command::new(&git)
+                .args(["-c", "user.name=mom", "-c", "user.email=mom@example.com", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=NUL", "-C"])
+                .arg(dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        let repo = |dir: &Path| {
+            std::fs::create_dir_all(dir).unwrap();
+            run(dir, &["init", "-q"]);
+            std::fs::write(dir.join("app.ts"), "export const a = 1;\n").unwrap();
+            run(dir, &["add", "."]);
+            run(dir, &["commit", "-qm", "first"]);
+        };
+        // A checkout with a change nobody committed, and one with everything committed.
+        let changed = scratch.join("aaaaaaaa-0000-0000-0000-000000000001").join("scratchpad").join("fix");
+        repo(&changed);
+        std::fs::write(changed.join("app.ts"), "export const a = 2;\n").unwrap();
+        let tidy = scratch.join("bbbbbbbb-0000-0000-0000-000000000002").join("scratchpad").join("check");
+        repo(&tidy);
+        // A worktree of a project elsewhere, with a change in it, the way agents make them.
+        let main = root.join("projects").join("storefront");
+        repo(&main);
+        let worktree = scratch.join("cccccccc-0000-0000-0000-000000000003").join("scratchpad").join("wt-head");
+        std::fs::create_dir_all(worktree.parent().unwrap()).unwrap();
+        run(&main, &["worktree", "add", "-q", "-b", "wt", &worktree.to_string_lossy()]);
+        std::fs::write(worktree.join("app.ts"), "export const a = 3;\n").unwrap();
+        // A checkout mom can't ask git about (its pointer is relative, so it isn't followed).
+        let odd = scratch.join("dddddddd-0000-0000-0000-000000000004").join("scratchpad").join("odd");
+        write(&odd.join("app.ts"), 10, 0);
+        std::fs::write(odd.join(".git"), "gitdir: ../../elsewhere/.git/worktrees/odd\n").unwrap();
+        for id in ["aaaaaaaa-0000-0000-0000-000000000001", "bbbbbbbb-0000-0000-0000-000000000002", "cccccccc-0000-0000-0000-000000000003", "dddddddd-0000-0000-0000-000000000004"] {
+            age_tree(&scratch.join(id), 20);
+        }
+
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("claude-temp", &ctx).unwrap();
+        let a = item(&spot, "Session aaaaaaaa");
+        assert!(!a.goes && a.optional && a.reason == r"1 change in scratchpad\fix nobody committed", "{a:?}");
+        assert!(item(&spot, "Session bbbbbbbb").goes, "all committed: its work is in its project");
+        let c = item(&spot, "Session cccccccc");
+        assert!(!c.goes && c.optional && c.reason == r"1 change in scratchpad\wt-head nobody committed", "{c:?}");
+        let d = item(&spot, "Session dddddddd");
+        assert!(!d.goes && d.optional && d.reason.starts_with("Holds a git checkout mom couldn't check"), "{d:?}");
+
+        clean("claude-temp", &ctx, None);
+        assert!(changed.join("app.ts").exists() && worktree.join("app.ts").exists() && odd.join("app.ts").exists());
+        assert!(!tidy.exists());
+        // Ticked, it goes: the choice is yours.
+        let pick = Pick { goes: false, new: false, ticked: vec![scratch.join("aaaaaaaa-0000-0000-0000-000000000001").to_string_lossy().to_string()], ..Default::default() };
+        clean("claude-temp", &ctx, Some(&pick));
+        assert!(!changed.exists());
+        run(&main, &["worktree", "remove", "--force", &worktree.to_string_lossy()]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn claude_scratch_of_dead_sessions_goes_live_sessions_stay() {
         let root = fixture("claude");
@@ -3002,7 +3305,7 @@ mod tests {
         assert_eq!(running.reason, "Session is still running");
         let new = item(&spot, "Session 11111111");
         assert!(!new.goes);
-        assert!(new.reason.contains("(kept for 67 days)"), "{}", new.reason);
+        assert!(new.reason.contains("(kept for 7 days)"), "{}", new.reason);
         assert_eq!(spot.items[0].name, gone.name, "what goes is listed first");
 
         let codex = measure("codex-temp", &ctx).unwrap();
@@ -3440,7 +3743,7 @@ mod tests {
             write(&dir.join("node_modules").join(dep).join("index.js"), 100, days);
         };
         package("aaa", "storefront-cli", 90); // old, and nothing runs it
-        package("bbb", "nimbus-lint", 20); // fetched recently: kept while new
+        package("bbb", "nimbus-lint", 3); // fetched recently: kept while new
         package("ccc", "atlas-gen", 90); // old, but you run it
         let history = paths.appdata.join("Microsoft").join("Windows").join("PowerShell").join("PSReadLine");
         std::fs::create_dir_all(&history).unwrap();

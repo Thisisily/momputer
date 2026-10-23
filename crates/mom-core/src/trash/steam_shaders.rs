@@ -30,13 +30,24 @@ const UNKNOWN: &str = "Installation status unknown";
 /// The fixture layout has a folder standing in for the system drive. It must never read
 /// this PC's registry or discover libraries outside the supplied layout.
 pub(super) fn discover(paths: &Paths) -> Vec<Cache> {
+    let Some((root, allowed)) = located(paths) else { return vec![] };
+    discover_at(&root, &allowed)
+}
+
+/// Steam's own folder, when it's on a drive built into this PC.
+pub(super) fn root(paths: &Paths) -> Option<PathBuf> {
+    located(paths).map(|(root, _)| root)
+}
+
+/// Steam's folder, and the drives its libraries may be on.
+fn located(paths: &Paths) -> Option<(PathBuf, Vec<PathBuf>)> {
     let fixture = paths.system_drive.parent().is_some();
     let root = if fixture {
         Some(paths.program_files_x86.join("Steam"))
     } else {
         steam_root()
     };
-    let Some(root) = root.and_then(|p| normalized(&p)) else { return vec![] };
+    let root = root.and_then(|p| normalized(&p))?;
     let mut allowed = vec![paths.system_drive.clone()];
     allowed.extend(paths.other_drives.iter().cloned());
     if fixture {
@@ -44,10 +55,7 @@ pub(super) fn discover(paths: &Paths) -> Vec<Cache> {
         allowed.push(paths.program_files_x86.clone());
     }
     let allowed: Vec<PathBuf> = allowed.into_iter().filter_map(|p| normalized(&p)).collect();
-    if !allowed.iter().any(|d| beneath(&root, d)) {
-        return vec![];
-    }
-    discover_at(&root, &allowed)
+    allowed.iter().any(|d| beneath(&root, d)).then_some((root, allowed))
 }
 
 /// What Steam says is installed: its own folder, and each installed game by app id with its

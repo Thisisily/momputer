@@ -1041,6 +1041,36 @@ button.row-name:hover {
   margin-top: 2px;
 }
 
+/* Measure, and under it whether to measure as administrator too. */
+.measure-acts {
+  flex: none;
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+  margin-top: 2px;
+}
+
+.admin-tick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.admin-tick input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--ink);
+}
+
+.admin-tick:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* The quieter line under a lead's headline. */
 .lead p small {
   display: block;

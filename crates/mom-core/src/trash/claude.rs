@@ -44,10 +44,24 @@ pub(super) fn find(ctx: &TrashCtx, min_age: u64) -> Found {
         c.age_known &= transcripts_complete && (transcript.is_none() || talked > 0);
         c.age = if c.age_known { ctx.now.saturating_sub(t.recency.max(talked)) } else { 0 };
         c.title_from = transcript.map(|p| (p, project.clone()));
+        // A test browser the session's agent made in its own scratch (QA personas, say): its
+        // sign-ins are the agent's, so it goes with the folder by the same rules. Only for a real
+        // folder of scratch; a running session, a browser still using it, or a link inside it
+        // keeps it (below, and in `trash::find`).
+        c.test_browser = c.browser_data && real_dirs(&root, &session);
+        let unsaved = || (!ctx.session_live(&id) && !ctx.in_use(&session) && c.files > 0).then(|| crate::repos::unsaved_work(&session)).flatten();
         let c = if ctx.session_live(&id) {
             c.verdict(false, "Session is still running")
         } else if ctx.in_use(&session) {
             c.verdict(false, IN_USE)
+        } else if let Some(work) = unsaved() {
+            // Code nobody committed is never junk by age: it can go only if you tick it.
+            let at = |co: &Path| co.strip_prefix(&session).map(|r| r.display().to_string()).unwrap_or_default();
+            let why = match work {
+                crate::repos::Unsaved::Changes(co, n) => format!("{} in {} nobody committed", crate::util::plural(n as u64, "change"), at(&co)),
+                crate::repos::Unsaved::Unknown(co) => format!("Holds a git checkout mom couldn't check for uncommitted work ({})", at(&co)),
+            };
+            c.kept_but_tickable(why)
         } else if c.age < min_age {
             let r = too_fresh(c.age, min_age);
             c.kept_but_tickable(r)
@@ -58,6 +72,18 @@ pub(super) fn find(ctx: &TrashCtx, min_age: u64) -> Found {
         f.cands.push(c);
     }
     f
+}
+
+/// `session` and every folder from `root` down to it are real folders, not links.
+fn real_dirs(root: &Path, session: &Path) -> bool {
+    let Ok(rest) = session.strip_prefix(root) else { return false };
+    let mut at = root.to_path_buf();
+    std::iter::once(None).chain(rest.components().map(Some)).all(|part| {
+        if let Some(part) = part {
+            at.push(part);
+        }
+        std::fs::symlink_metadata(&at).is_ok_and(|m| m.is_dir() && !crate::repos::linked(&m))
+    })
 }
 
 /// Every transcript by session id, with when it was last written. A session's scratch folder

@@ -64,6 +64,12 @@ fn protected_boundary(path: &Path) -> bool {
     known_profile_home(path).is_some_and(|home| !path.strip_prefix(home).is_ok_and(cache_relative))
 }
 
+/// Is `path` in (or at) a real browser's own folder, such as Chrome's User Data or a Firefox
+/// profile, by its name and place?
+pub(crate) fn in_browser_home(path: &Path) -> bool {
+    known_profile_home(path).is_some()
+}
+
 fn known_profile_home(path: &Path) -> Option<PathBuf> {
     let parts: Vec<String> = path.components().map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase()).collect();
     known_profile_boundary(&parts).map(|home| path.components().take(home + 1).collect())

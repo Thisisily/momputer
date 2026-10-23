@@ -116,7 +116,8 @@ pub struct TrashConfig {
     /// Items in %TEMP% older than this many days are fair game.
     pub temp_min_age_days: u64,
     /// What agents leave behind (scratch, logs, snapshots, worktrees) is kept this many days
-    /// before mom suggests clearing it. Anything in use is always kept.
+    /// before mom suggests clearing it. Anything in use is always kept. A week covers a session
+    /// left alone while you work on something else (or another account) for a few days.
     pub agent_scratch_days: u64,
     /// Where old conversations are moved to (a folder on another drive). Unset until the user
     /// picks one.
@@ -135,7 +136,7 @@ impl Default for TrashConfig {
     fn default() -> Self {
         TrashConfig {
             temp_min_age_days: 7,
-            agent_scratch_days: 67,
+            agent_scratch_days: 7,
             archive_dir: None,
             conversations_after_days: 67,
             keep: vec![],
@@ -169,6 +170,9 @@ pub struct UiConfig {
     pub cpu_alert_percent: f32,
     /// Ask GitHub once a day whether there's a newer momputer. The only thing she asks the internet.
     pub check_updates: bool,
+    /// Measure as administrator too: pressing Measure asks Windows first, so mom can see the size
+    /// of what only an administrator can open (Windows' memory snapshots, say).
+    pub measure_as_admin: bool,
 }
 
 impl Default for UiConfig {
@@ -186,6 +190,7 @@ impl Default for UiConfig {
             scan_interval_secs: 3,
             cpu_alert_percent: 25.0,
             check_updates: true,
+            measure_as_admin: false,
         }
     }
 }

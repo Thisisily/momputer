@@ -70,10 +70,13 @@ struct Source {
     remade: bool,
     /// Visible for accounting, but only the owning tool can safely clean it.
     manual_cleanup: Option<&'static str>,
+    /// Goes after this long, whatever the clean-up's usual wait: nothing ever opens a crash dump
+    /// again, so there's no session to wait out.
+    min_age: Option<u64>,
 }
 
 fn src(dir: PathBuf, kind: (&'static str, &'static str), pick: fn(&str) -> bool) -> Source {
-    Source { dir, kind, pick, name: |_, rel| rel.join(" / "), depth: 0, files_only: false, keep_newest: 0, sessions: false, empty_only: false, together: false, remade: false, manual_cleanup: None }
+    Source { dir, kind, pick, name: |_, rel| rel.join(" / "), depth: 0, files_only: false, keep_newest: 0, sessions: false, empty_only: false, together: false, remade: false, manual_cleanup: None, min_age: None }
 }
 
 impl Source {
@@ -113,10 +116,19 @@ impl Source {
         self.manual_cleanup = Some(reason);
         self
     }
+    /// A dump: it goes after a day, like the crash reports in your profile.
+    fn dump(mut self) -> Source {
+        self.min_age = Some(super::CRASH_MIN_AGE);
+        self
+    }
 }
 
 fn any(_: &str) -> bool {
     true
+}
+
+fn is_dump(n: &str) -> bool {
+    n.to_ascii_lowercase().ends_with(".dmp")
 }
 
 /// "D:\$WINDOWS.~TMP": something at the top of a drive, named with its drive.
@@ -642,6 +654,15 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
             .map(|g| src(g, ("Shader cache", "shader caches"), |n| n == "shader_cache" || n == "vulkan").named(|dir, rel| format!("{} · {}", name_of(dir), rel[0])))
             .collect(),
     ));
+    // Steam's own logs, crash dumps, and the files an update of Steam replaced (steam.exe.old).
+    // Its update packages are listed in `find`.
+    if let Some(steam) = super::steam_shaders::root(p) {
+        list.push(agent("Steam", Spot::Games, vec![steam.clone()]).junk(vec![
+            src(steam.join("logs"), ("Log", "logs"), any).files(),
+            src(steam.join("dumps"), ("Crash dump", "crash dumps"), any).files().dump(),
+            src(steam.clone(), ("Replaced file", "files a Steam update replaced"), |n| n.to_ascii_lowercase().ends_with(".old")).files(),
+        ]));
+    }
 
     // ---- Developer tools' caches without a clean-up of their own.
     let cache = home.join(".cache");
@@ -678,9 +699,17 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
         any,
     )
     .named(|_, rel| format!("update files {}", rel[0].chars().take(12).collect::<String>()))]));
-    list.push(agent("Windows", Spot::Windows, vec![wer.clone()]).junk(vec![
+    // Memory snapshots: what Windows saves when something stops responding (LiveKernelReports:
+    // big ones at the top, small ones in a folder for each sort) or the PC crashes (Minidump,
+    // MEMORY.DMP). Only .dmp files, only in these places.
+    let reports = win.join("LiveKernelReports");
+    list.push(agent("Windows", Spot::Windows, vec![wer.clone(), reports.clone(), win.join("Minidump")]).junk(vec![
         src(wer.join("ReportArchive"), ("Error report", "error reports"), any),
         src(wer.join("ReportQueue"), ("Error report", "error reports"), any),
+        src(reports.clone(), ("Memory snapshot", "memory snapshots"), is_dump).files().dump(),
+        src(reports, ("Small memory snapshot", "memory snapshots"), is_dump).depth(1).files().dump(),
+        src(win.join("Minidump"), ("Crash dump", "crash dumps"), is_dump).files().named(|_, rel| format!("Minidump / {}", rel.join(" / "))).dump(),
+        src(win.clone(), ("Crash dump", "crash dumps"), |n| n.eq_ignore_ascii_case("MEMORY.DMP")).files().dump(),
     ]));
     list.push(agent("Installers", Spot::Windows, vec![root.join("AMD"), root.join("adobeTemp")]).junk(vec![src(
         root.clone(),
@@ -791,6 +820,24 @@ pub(super) fn homes(ctx: &TrashCtx) -> Vec<PathBuf> {
 
 // ------------------------------------------------------------------ leftovers
 
+/// What the administrator saw in a folder you can't open: the entries `s` would find there if
+/// you could, that are still there.
+fn seen_in(s: &Source, seen: &HashMap<String, super::admin_look::Seen>) -> Vec<(PathBuf, Vec<String>)> {
+    let dir = super::norm_path(&s.dir.to_string_lossy());
+    let skip = s.dir.components().count();
+    let mut out: Vec<(PathBuf, Vec<String>)> = seen
+        .iter()
+        .filter(|(key, x)| key.strip_prefix(&dir).is_some_and(|rest| rest.starts_with('\\')) && (x.file || !s.files_only))
+        .map(|(_, x)| PathBuf::from(&x.path))
+        .filter_map(|path| {
+            let rel: Vec<String> = path.components().skip(skip).map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+            (rel.len() == s.depth + 1 && (s.pick)(&rel[s.depth]) && super::still_there(&path)).then_some((path, rel))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// Entries `depth` levels under `dir`, with their path under it.
 fn walk(dir: &Path, depth: usize, files_only: bool) -> Vec<(PathBuf, Vec<String>)> {
     let mut level: Vec<(PathBuf, Vec<String>)> = vec![(dir.to_path_buf(), vec![])];
@@ -835,13 +882,20 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
     // point the clean-up anywhere (and the elevated clean checks again before deleting).
     let careful = matches!(spot, Spot::Windows | Spot::AdminApps);
     let linked = |d: &Path| d.ancestors().any(|a| std::fs::symlink_metadata(a).map(|m| m.is_symlink()).unwrap_or(false));
+    // What an administrator measured when you last asked (admin_look.rs), for what you can't open.
+    let look = if careful { super::admin_look::seen() } else { None };
+    let closed = |d: &Path| matches!(std::fs::read_dir(d), Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied);
     for a in &all {
         for s in &a.junk {
-            if careful && linked(&s.dir) {
+            // Steam's folder is often one anyone on the PC can change, so the same care there.
+            if (careful || a.name == "Steam") && linked(&s.dir) {
                 continue;
             }
             let mut picked: Vec<(PathBuf, Vec<String>)> =
                 walk(&s.dir, s.depth, s.files_only).into_iter().filter(|(_, rel)| (s.pick)(rel.last().map(String::as_str).unwrap_or(""))).collect();
+            if let Some((_, seen)) = look.as_ref().filter(|_| closed(&s.dir)) {
+                picked.extend(seen_in(s, seen));
+            }
             if s.together {
                 picked.sort();
             }
@@ -852,7 +906,19 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             }
         }
     }
-    let each: Vec<(Cand, &Agent, &Source)> = super::cands(list, ctx.now).into_iter().zip(from).map(|(c, (a, s))| (c.age_sensitive(), a, s)).collect();
+    let mut each: Vec<(Cand, &Agent, &Source)> = super::cands(list, ctx.now).into_iter().zip(from).map(|(c, (a, s))| (c.age_sensitive(), a, s)).collect();
+    // What you couldn't measure yourself, as the administrator saw it.
+    if let Some((at, seen)) = &look {
+        for (c, _, _) in each.iter_mut().filter(|(c, _, _)| !c.complete || c.files == 0) {
+            let Some(x) = seen.get(&super::norm_path(&c.path.to_string_lossy())) else { continue };
+            if std::fs::read_dir(&c.path).is_ok() || std::fs::metadata(&c.path).is_ok_and(|m| m.is_file()) {
+                continue; // you can open it after all: what you measured stands
+            }
+            (c.bytes, c.files, c.complete, c.by_admin) = (x.bytes, x.files, true, true);
+            (c.age_known, c.age) = (x.recency > 0, ctx.now.saturating_sub(x.recency));
+            c.sub = Some(format!("{}, measured as administrator {} ago", super::plural(x.files, "file"), ago(ctx.now.saturating_sub(*at))));
+        }
+    }
     // What a source keeps together becomes one item: everything it found, named from the first to
     // the last, as new as its newest part. Cleaning it takes them all.
     let mut found: Vec<(Cand, &Agent, &Source)> = Vec::new();
@@ -923,7 +989,7 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
         });
         // A folder only an administrator may open measures as nothing. Say that, not "0 B".
         let shut = |t: &PathBuf| std::fs::symlink_metadata(t).map(|m| m.is_dir()).unwrap_or(false) && std::fs::read_dir(t).is_err();
-        if careful && c.files == 0 && c.targets.iter().any(shut) {
+        if careful && c.files == 0 && !c.by_admin && c.targets.iter().any(shut) {
             c.sub = Some(format!("{label}, size unknown: only an administrator can look inside"));
         }
         c.kind = Some(s.kind.1);
@@ -997,11 +1063,69 @@ pub(super) fn find(id: &str, ctx: &TrashCtx, min_age: u64) -> Found {
             });
             continue;
         }
-        c = judge(c, ctx, min_age, s.sessions);
+        c = judge(c, ctx, s.min_age.unwrap_or(min_age), s.sessions);
         if spot == Spot::Shaders && c.goes {
             c.reason = format!("Last changed {} ago", ago(c.age));
         }
         f.cands.push(uninstalled(c, gone));
+    }
+    if spot == Spot::Windows {
+        // As you, LiveKernelReports won't open, but the big snapshots Windows noted can be named
+        // (see dumps.rs). They're listed with their size unknown, for the administrator to clean.
+        let reports = ctx.paths.windows.join("LiveKernelReports");
+        let shut = matches!(std::fs::read_dir(&reports), Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied);
+        if shut && !linked(&reports) {
+            for (path, at) in super::dumps::noted(&reports) {
+                if f.cands.iter().any(|c| c.path == path) {
+                    continue;
+                }
+                let mut t = super::walk::Tally::of(0, 1);
+                (t.newest, t.recency) = (at, at);
+                let mut c = Cand::new(path.clone(), format!("Windows · {}", name_of(&path)), &t, ctx.now).age_sensitive();
+                c.sub = Some("Memory snapshot, size unknown: only an administrator can look inside".into());
+                c.kind = Some("memory snapshots");
+                c.tool = Some("Windows");
+                c.unmeasured = true;
+                f.cands.push(judge(c, ctx, super::CRASH_MIN_AGE, false));
+            }
+        }
+    }
+    if spot == Spot::Games {
+        // Steam's update packages: each set it uses stays, as one item, and a zip none of its
+        // manifests names is left over.
+        let package = super::steam_shaders::root(ctx.paths).map(|r| r.join("package")).filter(|p| !linked(p));
+        if let Some(packages) = package.as_deref().and_then(super::steam_packages::read) {
+            for (set, manifest, zips) in packages.sets {
+                let mut parts = super::cands(zips.into_iter().map(|z| (z, String::new())).collect(), ctx.now).into_iter();
+                let Some(mut c) = parts.next() else { continue };
+                for p in parts {
+                    (c.bytes, c.files, c.links) = (c.bytes + p.bytes, c.files + p.files, c.links + p.links);
+                    c.age = c.age.min(p.age);
+                    c.complete &= p.complete;
+                    c.targets.extend(p.targets);
+                }
+                let (name, why) = match set {
+                    super::steam_packages::Set::Installed => ("the version you have", "Steam's own; it clears them after its next update"),
+                    super::steam_packages::Set::Waiting => ("an update waiting for a restart", "Steam installs it when it restarts"),
+                };
+                c.path = manifest;
+                c.name = format!("Steam · update files for {name}");
+                c.sub = Some(format!("Update package, {}", super::plural(c.files, "file")));
+                c.kind = Some("update packages");
+                c.tool = Some("Steam");
+                f.cands.push(c.verdict(false, why));
+            }
+            let old = packages.leftovers.into_iter().map(|z| {
+                let n = format!("Steam · {}", name_of(&z));
+                (z, n)
+            });
+            for mut c in super::cands(old.collect(), ctx.now) {
+                c.sub = Some("Old update package".into());
+                c.kind = Some("old update packages");
+                c.tool = Some("Steam");
+                f.cands.push(judge(c, ctx, min_age, false));
+            }
+        }
     }
     if spot == Spot::Shaders {
         let caches = super::steam_shaders::discover(ctx.paths);
@@ -1304,7 +1428,7 @@ mod tests {
         );
         assert!(!agents.items.iter().any(|i| i.name.contains(".moltbot")), "a folder holding a link isn't empty");
         assert!(agents.items.iter().any(|i| i.name == "Hermes · gateway.log" && i.optional), "today's log can be ticked");
-        assert!(agents.effect.contains("Hermes, OpenClaw, OpenCode and Pi") || agents.effect.contains("67 days"), "{}", agents.effect);
+        assert!(agents.effect.contains("Hermes, OpenClaw, OpenCode and Pi") || agents.effect.contains("7 days"), "{}", agents.effect);
 
         let claude = measure("claude-leftovers", &ctx).unwrap();
         assert_eq!((claude.reclaimable_items, claude.reclaimable_bytes), (2, 530));
@@ -1772,6 +1896,134 @@ mod tests {
         let result = clean("windows-junk", &ctx, None);
         assert_eq!(result.deleted, 2);
         assert_eq!(calls.get(), 0);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn memory_snapshots_and_crash_dumps_go_and_nothing_else_of_windows() {
+        let root = fixture("snapshots");
+        shared(&root);
+        let paths = Paths::under(&root);
+        let w = paths.windows.clone();
+        let reports = w.join("LiveKernelReports");
+        // A graphics freeze last month: the full snapshot, and the small one beside it.
+        write(&reports.join("WATCHDOG-20260901-1316.dmp"), 9000, 50);
+        write(&reports.join("WATCHDOG").join("WATCHDOG-20260901-1315.dmp"), 300, 50);
+        // Today's: kept for a day, in case you want to send it to someone, but it can be ticked.
+        write(&reports.join("WATCHDOG-20261022-0900.dmp"), 700, 0);
+        // Three days old: nothing ever opens one again, so it goes after a day, not a week.
+        write(&reports.join("WATCHDOG-20261019-1316.dmp"), 800, 3);
+        write(&w.join("Minidump").join("090126-1234-01.dmp"), 200, 50);
+        write(&w.join("MEMORY.DMP"), 5000, 50);
+        // Never these: what isn't a .dmp file, and the rest of Windows.
+        write(&reports.join("WATCHDOG").join("notes.txt"), 10, 50);
+        write(&w.join("explorer.exe"), 10, 400);
+        write(&w.join("System32").join("crash.dmp"), 10, 400);
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("windows-junk", &ctx).unwrap();
+        let mut items: Vec<(String, bool, bool, u64)> = spot.items.iter().map(|i| (i.name.clone(), i.goes, i.optional, i.bytes)).collect();
+        items.sort();
+        assert_eq!(
+            items,
+            vec![
+                ("Windows · MEMORY.DMP".into(), true, false, 5000),
+                ("Windows · Minidump / 090126-1234-01.dmp".into(), true, false, 200),
+                ("Windows · WATCHDOG / WATCHDOG-20260901-1315.dmp".into(), true, false, 300),
+                ("Windows · WATCHDOG-20260901-1316.dmp".into(), true, false, 9000),
+                ("Windows · WATCHDOG-20261019-1316.dmp".into(), true, false, 800),
+                ("Windows · WATCHDOG-20261022-0900.dmp".into(), false, true, 700),
+            ]
+        );
+        assert!(spot.items.iter().all(|i| !i.unmeasured) && spot.unmeasured_items == 0, "a folder mom can open is measured");
+        clean("windows-junk", &ctx, None);
+        assert!(!reports.join("WATCHDOG-20260901-1316.dmp").exists() && !w.join("MEMORY.DMP").exists());
+        assert!(!w.join("Minidump").join("090126-1234-01.dmp").exists());
+        assert!(reports.join("WATCHDOG-20261022-0900.dmp").exists() && reports.join("WATCHDOG").join("notes.txt").exists());
+        assert!(w.join("explorer.exe").exists() && w.join("System32").join("crash.dmp").exists());
+        assert!(crate::trash::still_there(&w) && !crate::trash::still_there(&w.join("MEMORY.DMP")));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn what_an_administrator_saw_fills_in_only_the_folder_it_was_seen_in() {
+        use crate::trash::admin_look::Seen;
+        let root = fixture("admin-seen");
+        let reports = root.join("LiveKernelReports");
+        write(&reports.join("WATCHDOG-20261018-1316.dmp"), 10, 5);
+        write(&reports.join("WATCHDOG").join("WATCHDOG-20261018-0248.dmp"), 10, 5);
+        write(&reports.join("notes.txt"), 10, 5);
+        write(&root.join("elsewhere.dmp"), 10, 5);
+        let seen: std::collections::HashMap<String, Seen> = [
+            reports.join("WATCHDOG-20261018-1316.dmp"),
+            reports.join("WATCHDOG").join("WATCHDOG-20261018-0248.dmp"),
+            reports.join("notes.txt"),
+            reports.join("deleted-since.dmp"),
+            root.join("elsewhere.dmp"),
+        ]
+        .into_iter()
+        .map(|p| {
+            let path = p.to_string_lossy().to_string();
+            (crate::util::norm_path(&path), Seen { path, bytes: 9, files: 1, recency: 1, file: true })
+        })
+        .collect();
+        let names = |v: Vec<(std::path::PathBuf, Vec<String>)>| v.into_iter().map(|(_, rel)| rel.join("/")).collect::<Vec<_>>();
+        let top = super::src(reports.clone(), ("Memory snapshot", "memory snapshots"), super::is_dump).files();
+        assert_eq!(names(super::seen_in(&top, &seen)), vec!["WATCHDOG-20261018-1316.dmp"], "only .dmp files, only there, only if still there");
+        let deeper = super::src(reports, ("Small memory snapshot", "memory snapshots"), super::is_dump).depth(1).files();
+        assert_eq!(names(super::seen_in(&deeper, &seen)), vec!["WATCHDOG/WATCHDOG-20261018-0248.dmp"]);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn steams_logs_dumps_and_replaced_files_go_and_the_updates_it_uses_stay() {
+        let root = fixture("steam-client");
+        // Steam's own folder is only found at an ordinary drive path (see the shader test).
+        #[cfg(windows)]
+        let root = std::path::PathBuf::from(root.to_string_lossy().strip_prefix(r"\\?\").unwrap().to_string());
+        let paths = Paths::under(&root);
+        let steam = paths.program_files_x86.join("Steam");
+        write(&steam.join("logs").join("content_log.txt"), 400, 30);
+        write(&steam.join("logs").join("connection_log.txt"), 100, 0);
+        write(&steam.join("dumps").join("crash_20260920.dmp"), 300, 30);
+        write(&steam.join("steam.exe.old"), 600, 50);
+        write(&steam.join("steam.exe"), 600, 2);
+        write(&steam.join("config").join("config.vdf"), 50, 30);
+        // The version Steam runs, an update waiting for a restart, and a zip neither names.
+        let package = steam.join("package");
+        let manifest = |zip: &str| format!("\"win64\"\n{{\n\t\"bins\"\n\t{{\n\t\t\"file\"\t\t\"bins.zip.x\"\n\t\t\"zipvz\"\t\t\"{zip}\"\n\t}}\n}}\n");
+        write(&package.join("bins.zip.vz.aaa_1"), 3000, 30);
+        write(&package.join("bins.zip.vz.ccc_1"), 3100, 1);
+        write(&package.join("bins.zip.vz.old_1"), 2900, 60);
+        std::fs::write(package.join("steam_client_win64.manifest"), manifest("bins.zip.vz.aaa_1")).unwrap();
+        std::fs::write(package.join("steam_client_win64"), manifest("bins.zip.vz.ccc_1")).unwrap();
+        let cfg = TrashConfig::default();
+        let ctx = ctx(&paths, &cfg);
+        let spot = measure("game-junk", &ctx).unwrap();
+        let mut steam_items: Vec<(String, bool, u64)> =
+            spot.items.iter().filter(|i| i.name.starts_with("Steam · ")).map(|i| (i.name.clone(), i.goes, i.bytes)).collect();
+        steam_items.sort();
+        assert_eq!(
+            steam_items,
+            vec![
+                ("Steam · bins.zip.vz.old_1".into(), true, 2900),
+                ("Steam · connection_log.txt".into(), false, 100),
+                ("Steam · content_log.txt".into(), true, 400),
+                ("Steam · crash_20260920.dmp".into(), true, 300),
+                ("Steam · steam.exe.old".into(), true, 600),
+                ("Steam · update files for an update waiting for a restart".into(), false, 3100),
+                ("Steam · update files for the version you have".into(), false, 3000),
+            ]
+        );
+        let theirs = spot.items.iter().filter(|i| i.name.starts_with("Steam · update files")).collect::<Vec<_>>();
+        assert!(theirs.iter().all(|i| !i.optional), "Steam's update sets can't be ticked");
+        clean("game-junk", &ctx, None);
+        for gone in [package.join("bins.zip.vz.old_1"), steam.join("logs").join("content_log.txt"), steam.join("steam.exe.old")] {
+            assert!(!gone.exists(), "{}", gone.display());
+        }
+        for stays in [package.join("bins.zip.vz.aaa_1"), package.join("bins.zip.vz.ccc_1"), steam.join("steam.exe"), steam.join("config").join("config.vdf")] {
+            assert!(stays.exists(), "{}", stays.display());
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 

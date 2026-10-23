@@ -223,6 +223,14 @@ enum TrashCmd {
         #[arg(long, hide = true)]
         pick_hex: Option<String>,
     },
+    /// Measure, as administrator, what only an administrator can see (Windows' memory
+    /// snapshots, say), so the widget can show their sizes. Run by the widget when "admin" is
+    /// ticked next to Measure; it only measures.
+    #[command(hide = true)]
+    Look {
+        #[arg(long)]
+        elevated: bool,
+    },
     /// Keep a file or folder from now on: no clean-up takes it. With no path, lists what's kept.
     Keep {
         paths: Vec<String>,
@@ -720,6 +728,13 @@ fn run(cli: Cli) -> Result<i32> {
                     } else {
                         print_spot(&st, &spot);
                     }
+                }
+                (Some(TrashCmd::Look { elevated }), _) => {
+                    if !elevated || !mom_core::elevate::is_elevated() {
+                        bail!("This is the widget's: it asks Windows to run it as administrator when \"admin\" is ticked next to Measure.");
+                    }
+                    trash::look_as_admin(&ctx).map_err(anyhow::Error::msg)?;
+                    return Ok(0);
                 }
                 (Some(TrashCmd::Keep { paths: which, release }), _) => {
                     let mut cfg = cfg.clone();
@@ -1414,7 +1429,8 @@ fn print_spot(st: &Style, s: &trash::Spot) {
         let shown = if (items.len() as u64) < count { format!(", biggest {} shown", items.len()) } else { String::new() };
         println!("\n  {}  {}", st.bold(title), st.dim(&format!("{count} · {}{shown}", human_bytes(bytes))));
         for i in items {
-            let line = format!("    {}{}{}", pad(&human_bytes(i.bytes), 10), pad(&i.name, 46), pad(i.sub.as_deref().unwrap_or(""), 34));
+            let size = if i.unmeasured { "unknown".to_string() } else { human_bytes(i.bytes) };
+            let line = format!("    {}{}{}", pad(&size, 10), pad(&i.name, 46), pad(i.sub.as_deref().unwrap_or(""), 34));
             println!("{line}{}", st.dim(&i.reason));
         }
     };
@@ -1707,6 +1723,7 @@ mod tests {
         assert!(ok(&[]));
         assert!(ok(&["ps", "--all"]));
         assert!(ok(&["trash", "clean", "windows-junk", "--yes", "--elevated"]));
+        assert!(ok(&["trash", "look", "--elevated"]), "measuring as administrator is looking");
         assert!(ok(&["stop", "leftovers", "--dry-run"]));
         assert!(ok(&["rules", "show"]));
         assert!(ok(&["tidy", "--json"]));

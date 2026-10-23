@@ -1833,10 +1833,13 @@ in ${x.cwd}`)}">
 
   function spotRow(s) {
     // Empty folders free no space, but they're still clutter.
-    const empties = s.reclaimableBytes === 0 && s.reclaimableItems > 0;
-    const gone = s.reclaimableBytes === 0 && !empties;
-    const led = gone ? "green" : s.reclaimableBytes >= 512 * 1024 ** 2 ? "red" : "off";
-    const size = s.exact ? (gone ? "Clean" : empties ? `${s.reclaimableItems.toLocaleString("en-US")} empty` : bytes(s.reclaimableBytes)) : "Tool decides";
+    // Some things only an administrator can measure: they aren't empty, their size is unknown.
+    const unknown = s.unmeasuredItems || 0;
+    const empties = s.reclaimableBytes === 0 && s.reclaimableItems > 0 && !unknown;
+    const gone = s.reclaimableBytes === 0 && !empties && !unknown;
+    const led = gone ? "green" : s.reclaimableBytes >= 512 * 1024 ** 2 || unknown ? "red" : "off";
+    const sized = unknown && !s.reclaimableBytes ? "Size unknown" : `${bytes(s.reclaimableBytes)}${unknown ? "+" : ""}`;
+    const size = s.exact ? (gone ? "Clean" : empties ? `${s.reclaimableItems.toLocaleString("en-US")} empty` : sized) : "Tool decides";
     const of = s.exact ? `of ${bytes(s.totalBytes)}` : bytes(s.totalBytes);
     return `<div class="row spot-row" id="spot-${s.id}" role="button" tabindex="0" data-act="open-spot" data-spot="${esc(s.id)}" data-led="${led}"
         aria-label="${esc(`${s.label}: ${size} can go. Show details`)}">
@@ -1914,7 +1917,7 @@ in ${x.cwd}`)}">
     const shown = shownFree === null ? "" : sizeDots(shownFree);
     let html = upkeepTabs();
     html += `<div class="lead" id="upkeep-lead"><div class="lead-text">${spots.length ? `<div class="big" id="free-big">${shown}</div>` : ""}<p>${esc(said)}${small ? `<small>${esc(small)}</small>` : ""}</p></div>
-      <button class="secondary" data-act="measure" ${t.busy ? "disabled" : ""}>${t.busy ? `<span class="led green blink"></span>Measuring` : spots.length ? "Measure again" : "Measure"}</button></div>`;
+      <div class="measure-acts"><button class="secondary" data-act="measure" ${t.busy ? "disabled" : ""}>${t.busy ? `<span class="led green blink"></span>Measuring` : spots.length ? "Measure again" : "Measure"}</button>${adminTick()}</div></div>`;
     for (const [key, title] of GROUPS) {
       const list = spots.filter((x) => (x.group || "dev") === key).sort((a, b) => b.reclaimableBytes - a.reclaimableBytes || b.totalBytes - a.totalBytes);
       if (!list.length) continue;
@@ -2549,6 +2552,17 @@ in ${x.cwd}`)}">
   /** "F:" for "F:\momputer-archive". */
   const driveOf = (dir) => (dir && /^[a-z]:/i.test(dir) ? dir.slice(0, 2).toUpperCase() : "the other drive");
 
+  /** "admin" under Measure: measure as administrator too (Windows asks first). */
+  function adminTick() {
+    loadAdminCheck();
+    const on = !!(state.settings && state.settings.config.ui.measureAsAdmin) && !state.adminBlock;
+    const why = state.adminBlock || "Measure as administrator too. Windows asks first, then mom can see the size of what only an administrator can open.";
+    return `<label class="admin-tick" title="${esc(why)}"><input type="checkbox" data-act="measure-admin" ${on ? "checked" : ""} ${state.adminBlock || state.trash.busy ? "disabled" : ""}>admin</label>`;
+  }
+
+  /** Whether Measure asks Windows to measure as administrator too. */
+  const measuresAsAdmin = () => !!(state.settings && state.settings.config.ui.measureAsAdmin) && !state.adminBlock;
+
   async function loadAdminCheck() {
     if (state.adminBlock !== undefined) return;
     try {
@@ -2607,25 +2621,27 @@ in ${x.cwd}`)}">
       newN,
       count: goN + newN,
       bytesChosen: goB + newB,
+      // Ticked things only an administrator can measure: their bytes aren't in bytesChosen.
+      unknown: [...goes, ...fresh].filter((i) => i.unmeasured && isTicked(pk, i)).length,
       partial: !pk.goes || pk.new || pk.ticked.size > 0 || pk.unticked.size > 0,
     };
   }
 
   /** "12 items (3.4 GB)", or "(all empty)" when they're empty folders. */
-  const itemsSize = (n, b) => `${plural(n, "item")} (${b ? bytes(b) : n === 1 ? "empty" : "all empty"})`;
+  const itemsSize = (n, b, unknown = 0) => `${plural(n, "item")} (${unknown ? (b ? `${bytes(b)} and more` : "size unknown") : b ? bytes(b) : n === 1 ? "empty" : "all empty"})`;
 
   /** The spot's own explanation, adjusted for what the user ticked and unticked. */
   function effectNow(s, p) {
     if (discarding(s)) {
       if (!p.count) return "Nothing is ticked, so the button does nothing.";
-      const what = itemsSize(p.count, p.bytesChosen);
+      const what = itemsSize(p.count, p.bytesChosen, p.unknown);
       return recycling(s)
         ? `Moves the ${what} you ticked to the Recycle Bin, including their saved settings and history. You can restore them from there. Folders too big for the bin stay put.`
         : `Permanently deletes the ${what} you ticked, including their saved settings and history. No archive copy is made. This cannot be undone.`;
     }
     if (!p.partial) return s.effect;
     if (p.count === 0) return "Nothing is ticked, so the button does nothing.";
-    const what = itemsSize(p.count, p.bytesChosen);
+    const what = itemsSize(p.count, p.bytesChosen, p.unknown);
     if (p.goN === 0) {
       // Only things from Stays: the spot's own text doesn't cover them, so say it plainly.
       const one = p.count === 1;
@@ -2662,6 +2678,7 @@ in ${x.cwd}`)}">
         return `Move ${plural(p.count, "folder")} to ${drive}`;
       default:
         if (toBin) return p.bytesChosen ? `Recycle ${bytes(p.bytesChosen)}` : `Recycle ${plural(p.count, "empty item")}`;
+        if (p.unknown) return `Delete ${plural(p.count, "item")}`;
         return p.bytesChosen ? `Delete ${bytes(p.bytesChosen)}` : `Delete ${plural(p.count, "empty item")}`;
     }
   }
@@ -2682,7 +2699,7 @@ in ${x.cwd}`)}">
     const reveal = s.action === "empty-bin"
       ? `<button class="mini-btn" data-act="open-recycle-bin" title="Open Recycle Bin" aria-label="Open Recycle Bin to find ${esc(i.name)}">${ICON.folder}</button>`
       : i.path && s.action !== "tool" && !i.path.startsWith("docker:") ? `<button class="mini-btn" data-act="reveal-path" data-path="${esc(i.path)}" title="Show in File Explorer" aria-label="Show ${esc(i.name)} in File Explorer">${ICON.folder}</button>` : "";
-    const size = `<span class="item-size num">${bytes(i.bytes)}</span>`;
+    const size = `<span class="item-size num">${i.unmeasured ? "unknown" : bytes(i.bytes)}</span>`;
     const gone = state.gone.has(i.path) ? " gone" : "";
     const keep = canKeep(s, i)
       ? `<button class="mini-btn keep" data-act="keep-item" data-spot="${esc(s.id)}" data-path="${esc(i.path)}" aria-pressed="${!!i.kept}" title="${
@@ -2835,7 +2852,7 @@ in ${x.cwd}`)}">
     else if (s.action === "recycle") card(ICON.undo, `Recycles ${plural(n, "file")}`, `${bytes(b)}, and you can restore ${n === 1 ? "it" : "them"}`, "go");
     else if (recycling(s)) card(ICON.undo, `Recycles ${plural(n, "item")}`, `${b ? bytes(b) : "all empty"}, and you can restore ${n === 1 ? "it" : "them"}`, "go");
     else if (s.action === "move") card(ICON.archive, `Moves ${plural(n, "folder")}`, `${bytes(b)} to ${drive}; ${n === 1 ? "it still opens" : "they still open"} from here`, "go");
-    else card(ICON.trash, `Deletes ${plural(n, "item")}`, `${b ? bytes(b) : "all empty"}, for good`, "go");
+    else card(ICON.trash, `Deletes ${plural(n, "item")}`, `${p.unknown ? (b ? `${bytes(b)} and more` : "size unknown") : b ? bytes(b) : "all empty"}, for good`, "go");
     const keptN = s.keptItems || 0;
     if (keptN) card(ICON.lock, `${plural(keptN, "item")} stay`, s.newItems ? `${s.newItems.toLocaleString("en-US")} you can tick` : "in use, or not old enough", "stay");
     if (s.safety === "review") card(ICON.eye, "Look first", "untick anything you want to keep");
@@ -2937,7 +2954,7 @@ in ${x.cwd}`)}">
           ${s.admin ? `<span class="pill"><span class="led red"></span>${state.adminBlock ? "Needs an all-users install" : "Windows asks first"}</span>` : ""}
           <span class="pill">${recycling(s) ? ACTION_WORD.recycle : ACTION_WORD[s.action] || "Deleted"}</span></div></div>
         <div class="head-acts">
-          <button class="icon-btn${busy ? " spinning" : ""}" data-act="refresh-spot" data-spot="${esc(s.id)}" title="${busy ? "Measuring…" : "Check again"}" aria-label="Check again" ${busy || state.cleaning ? "disabled" : ""}>${ICON.refresh}</button>
+          <button class="icon-btn${busy ? " spinning" : ""}" data-act="refresh-spot" data-spot="${esc(s.id)}" data-admin="${s.admin ? 1 : 0}" title="${busy ? "Measuring…" : "Check again"}" aria-label="Check again" ${busy || state.cleaning ? "disabled" : ""}>${ICON.refresh}</button>
           <button class="icon-btn" data-act="close-sheet" aria-label="Close">${ICON.close}</button>
         </div>
       </div>
@@ -2945,7 +2962,7 @@ in ${x.cwd}`)}">
       ${
         s.exact
           ? `<div class="split"><div class="split-bar"><span class="go" style="flex:${go || 0.0001}"></span><span class="stay" style="flex:${kept || 0.0001}"></span></div>
-        <div class="split-legend num"><span><span class="led red"></span><strong>${bytes(go)}</strong> ${moves ? "can move" : "can go"}</span><span><span class="led green"></span>${bytes(kept)} ${moves ? "stays here" : "stays"}</span><span class="dim">${bytes(s.totalBytes)} in all</span></div></div>`
+        <div class="split-legend num"><span><span class="led red"></span><strong>${bytes(go)}${s.unmeasuredItems ? "+" : ""}</strong> ${moves ? "can move" : "can go"}</span><span><span class="led green"></span>${bytes(kept)} ${moves ? "stays here" : "stays"}</span><span class="dim">${bytes(s.totalBytes)} in all</span></div></div>`
           : `<div class="split-legend num"><span>${bytes(s.totalBytes)} in all. The tool works out what's safe to drop.</span></div>`
       }
       ${doesBox(s, p)}
@@ -4234,12 +4251,23 @@ in ${x.cwd}`)}">
         el.disabled = true;
         await act(invoke("stop_wsl", { name: null }), () => "WSL is asleep. Memory's back.");
         break;
-      case "measure":
-        invoke("measure_trash");
+      case "measure": {
+        const admin = measuresAsAdmin();
+        const asked = invoke("measure_trash", { admin });
         state.trash.busy = true;
         loadHealth(true);
         render();
+        // Windows asks first; a "no" or a problem is said, a yes just shows in the sizes.
+        if (admin) act(asked, (note) => note);
         break;
+      }
+      case "measure-admin": {
+        const on = el.checked;
+        if (!state.settings) state.settings = await invoke("get_settings");
+        await saveSettings((c) => (c.ui.measureAsAdmin = on));
+        render();
+        break;
+      }
       case "open-spot":
         openSheet({ kind: "spot", id: el.dataset.spot });
         break;
@@ -4503,11 +4531,14 @@ in ${x.cwd}`)}">
         render();
         openUpkeepTab(state.upkeepTab);
         break;
-      case "refresh-spot":
-        invoke("measure_spot", { id: el.dataset.spot });
+      case "refresh-spot": {
+        const admin = measuresAsAdmin() && el.dataset.admin === "1";
+        const asked = invoke("measure_spot", { id: el.dataset.spot, admin });
         state.trash.busy = true;
         renderSheet();
+        if (admin) act(asked, (note) => note);
         break;
+      }
       case "show-more":
         invoke("measure_spot", { id: el.dataset.spot, more: true });
         state.trash.busy = true;

@@ -4,6 +4,9 @@
 
 use std::path::Path;
 
+/// What `run_as_admin` says when the person said no to Windows' question.
+pub const SAID_NO: &str = "You said no, so nothing was cleaned.";
+
 /// Runs `exe args` as an administrator, hidden, and waits for it. Its exit code, or why it
 /// didn't run (the person said no, say).
 pub fn run_as_admin(exe: &Path, args: &str) -> Result<u32, String> {
@@ -18,7 +21,7 @@ pub fn run_as_admin(exe: &Path, args: &str) -> Result<u32, String> {
             // SAFETY: no arguments.
             let e = unsafe { GetLastError() };
             return Err(if e == ERROR_CANCELLED {
-                "You said no, so nothing was cleaned.".into()
+                SAID_NO.into()
             } else {
                 format!("Windows couldn't run it as administrator (error {e}).")
             });

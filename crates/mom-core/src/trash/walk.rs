@@ -236,13 +236,17 @@ pub(super) fn tally_many(paths: &[PathBuf], cap: u64, budget: u64) -> Vec<Tally>
 /// folders from the deepest up. Links and junctions are removed, never followed. Says, for each
 /// path, whether it's completely gone (something in use stays behind). Counts each file to
 /// `live` as it goes, and stops going deeper once `live` is told to stop.
-pub(super) fn remove_all(paths: &[PathBuf], live: Option<&super::Live>) -> Vec<bool> {
+///
+/// Browser data is left alone, except inside `test_browsers` (some of `paths`): a finished agent
+/// session's scratch, whose own test browser goes with it (see claude.rs).
+pub(super) fn remove_all(paths: &[PathBuf], test_browsers: &[PathBuf], live: Option<&super::Live>) -> Vec<bool> {
+    let browser_ok = |p: &Path| test_browsers.iter().any(|t| p.starts_with(t));
     let mut start = Vec::new();
     for p in paths {
         match std::fs::symlink_metadata(p) {
             Ok(m) if m.is_dir() => start.push((0usize, p.clone())),
             Ok(m) if m.is_symlink() => remove_link(p),
-            Ok(_) => remove_file(p),
+            Ok(_) => remove_file(p, browser_ok(p)),
             Err(_) => {}
         }
     }
@@ -260,7 +264,8 @@ pub(super) fn remove_all(paths: &[PathBuf], live: Option<&super::Live>) -> Vec<b
             } else if ft.is_symlink() {
                 remove_link(&e.path());
             } else {
-                remove_file(&e.path());
+                let p = e.path();
+                remove_file(&p, browser_ok(&p));
                 if let Some(l) = live {
                     l.file_gone();
                 }
@@ -299,7 +304,7 @@ pub(super) fn remove_without_following(p: &Path) -> bool {
         }
         Ok(_) => {
             if crate::browser_data::protects_path(p) { return false; }
-            remove_file(p);
+            remove_file(p, false);
         },
         Err(_) => {}
     }
@@ -417,7 +422,7 @@ fn empty(dir: &std::sync::Arc<Held>, live: Option<&super::Live>, more: &mut Vec<
         } else if kind.is_symlink() {
             remove_link(&e.path());
         } else {
-            remove_file(&e.path());
+            remove_file(&e.path(), false);
             if let Some(l) = live {
                 l.file_gone();
             }
@@ -447,8 +452,10 @@ pub(super) fn remove_owned(p: &Path, live: Option<&super::Live>) -> bool {
     remove_without_following(p)
 }
 
-fn remove_file(p: &Path) {
-    if crate::browser_data::protects_entry_name(p, false) { return; }
+/// Deletes a file, never one that holds browser data unless `browser_ok` (an agent's own test
+/// browser, going with its finished session).
+fn remove_file(p: &Path, browser_ok: bool) {
+    if !browser_ok && crate::browser_data::protects_entry_name(p, false) { return; }
     if std::fs::remove_file(p).is_ok() {
         return;
     }
@@ -568,10 +575,41 @@ mod tests {
             .unwrap_or(false);
         #[cfg(unix)]
         let made = std::os::unix::fs::symlink(root.join("keep"), &link).is_ok();
-        let gone = remove_all(&[root.join("tree"), root.join("loose.log"), root.join("missing")], None);
+        let gone = remove_all(&[root.join("tree"), root.join("loose.log"), root.join("missing")], &[], None);
         assert_eq!(gone, vec![true, true, true]);
         assert!(made, "couldn't make a link to test with");
         assert!(root.join("keep").join("precious.txt").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn browser_data_goes_only_inside_a_test_browser_and_links_are_still_never_followed() {
+        let root = fixture("remove-browser");
+        let profile = |dir: &Path| {
+            for f in ["Local State", "Default/Cookies", "Default/Network/TransportSecurity", "Default/Local Storage/leveldb/000003.log", "prefs.js"] {
+                write(&dir.join(f), 10, 1);
+            }
+        };
+        profile(&root.join("agent").join("profile"));
+        profile(&root.join("other").join("profile"));
+        profile(&root.join("yours"));
+        // A link inside the test browser's folder, to a profile that must survive.
+        let link = root.join("agent").join("profile").join("Default").join("linked");
+        #[cfg(windows)]
+        junction::create(root.join("yours"), &link).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("yours"), &link).unwrap();
+        let gone = remove_all(&[root.join("agent"), root.join("other")], &[root.join("agent")], None);
+        assert_eq!(gone, vec![true, false], "only the test browser goes whole");
+        assert!(!root.join("agent").exists());
+        // Everywhere else the per-file backstop still holds: a browser's marks and site storage
+        // stay (the check of the whole folder before any delete is what keeps the rest).
+        for f in ["Local State", "Default/Network/TransportSecurity", "Default/Local Storage/leveldb/000003.log", "prefs.js"] {
+            assert!(root.join("other").join("profile").join(f).exists(), "{f}");
+        }
+        for f in ["Local State", "Default/Cookies", "Default/Network/TransportSecurity", "Default/Local Storage/leveldb/000003.log", "prefs.js"] {
+            assert!(root.join("yours").join(f).exists(), "{f} behind the link");
+        }
         std::fs::remove_dir_all(&root).unwrap();
     }
 

@@ -248,13 +248,14 @@
     }),
     spot({
       id: "windows-junk", label: "Windows leftovers", group: "windows", action: "delete", safety: "review", admin: true,
-      what: "Windows keeps update downloads, setup folders and error reports. Update downloads and setup folders stay while an update is pending, running, or waiting for a restart, or when update status cannot be checked. Cleaning other eligible leftovers needs an administrator, so Windows asks you first.",
-      effect: "Deletes 1 old error report (100 MB) permanently. Update downloads and setup folders stay because Windows is waiting for a restart.",
-      totalBytes: 1.2 * GB + 700 * MB, reclaimableBytes: 100 * MB, reclaimableItems: 1, keptItems: 2,
+      what: "Windows keeps update downloads, setup folders, error reports and memory snapshots. Update downloads and setup folders stay while an update is pending, running, or waiting for a restart, or when update status cannot be checked. Cleaning other eligible leftovers needs an administrator, so Windows asks you first.",
+      effect: "Deletes 2 items (100 MB plus 1 only an administrator can measure) permanently. Update downloads and setup folders stay because Windows is waiting for a restart.",
+      totalBytes: 1.2 * GB + 700 * MB, reclaimableBytes: 100 * MB, reclaimableItems: 2, unmeasuredItems: 1, keptItems: 2,
       items: [
         item("Windows Update · update files 8d2a1c0f9e7b", "Downloaded update, 412 files", 1.2 * GB, false, "Windows is waiting for a restart; update files stay", 88 * D2, 412),
         item("Windows setup · C:\\Windows10Upgrade", "Setup leftovers, 28 files", 600 * MB, false, "Windows is waiting for a restart; setup files stay", 1200 * D2, 28),
         item("Windows · AppCrash_atlas.exe_1f2e", "Error report", 100 * MB, true, "Last changed 90 days ago", 90 * D2, 3),
+        { ...item("Windows · WATCHDOG-20260918-1316.dmp", "Memory snapshot, size unknown: only an administrator can look inside", 0, true, "Last changed 35 days ago", 35 * D2, 1), unmeasured: true },
       ],
     }),
     spot({
@@ -662,8 +663,8 @@
       leftovers: { forgottenAfterHours: 12, includeUnknownOrphans: true, autoStop: false, autoStopAfterMinutes: 20, autoStopOrphans: false },
       hooks: { enabled: true, nagProcesses: true, nagClutter: true, shareRules: true, stopOnSessionEnd: false, minAgeSecs: 5 },
       tidy: { reportsFolder: "Documents", minFamily: 3, screenshotPile: 10 },
-      trash: { tempMinAgeDays: 7, agentScratchDays: 67, archiveDir: null, conversationsAfterDays: 67, keep: [], autopilot: false },
-      ui: { alwaysOnTop: false, notifications: true, notifyLeftovers: true, notifyMeltdown: true, notifyCleanups: true, notifySkills: true, notifyLetter: true, notifyAfterMinutes: 10, notifyEveryMinutes: 30, scanIntervalSecs: 3, cpuAlertPercent: 25, checkUpdates: true },
+      trash: { tempMinAgeDays: 7, agentScratchDays: 7, archiveDir: null, conversationsAfterDays: 67, keep: [], autopilot: false },
+      ui: { alwaysOnTop: false, notifications: true, notifyLeftovers: true, notifyMeltdown: true, notifyCleanups: true, notifySkills: true, notifyLetter: true, notifyAfterMinutes: 10, notifyEveryMinutes: 30, scanIntervalSecs: 3, cpuAlertPercent: 25, checkUpdates: true, measureAsAdmin: false },
       protect: [],
       kept: [],
     },

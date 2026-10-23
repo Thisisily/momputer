@@ -461,7 +461,7 @@ pub(crate) fn reboot_pending() -> bool {
 /// Reading the registry, for other parts of mom (installed programs, say).
 #[cfg(windows)]
 pub(crate) mod reg {
-    pub(crate) use super::os::{binary_values, dword_value, string_values, subkeys, Hive};
+    pub(crate) use super::os::{binary_values, dword_value, qword_value, string_values, subkeys, Hive};
 }
 
 #[cfg(windows)]
@@ -472,7 +472,7 @@ mod os {
     use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ,
-        REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_SZ,
+        REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_QWORD, REG_SZ,
     };
 
     #[derive(Clone, Copy)]
@@ -553,6 +553,16 @@ mod os {
             let rc = unsafe { RegQueryValueExW(self.0, w.as_ptr(), std::ptr::null(), &mut kind, (&mut data as *mut u32).cast(), &mut len) };
             (rc == 0 && kind == REG_DWORD).then_some(data)
         }
+
+        fn qword(&self, value: &str) -> Option<u64> {
+            let w = wide(value);
+            let mut kind = 0u32;
+            let mut data = 0u64;
+            let mut len = 8u32;
+            // SAFETY: `data` is 8 bytes, as `len` says.
+            let rc = unsafe { RegQueryValueExW(self.0, w.as_ptr(), std::ptr::null(), &mut kind, (&mut data as *mut u64).cast(), &mut len) };
+            (rc == 0 && kind == REG_QWORD && len == 8).then_some(data)
+        }
     }
 
     impl Drop for Key {
@@ -570,6 +580,11 @@ mod os {
     /// A number value of a key.
     pub fn dword_value(hive: Hive, path: &str, value: &str) -> Option<u32> {
         Key::open(hive, path)?.dword(value)
+    }
+
+    /// A 64-bit number value of a key (a time, say).
+    pub fn qword_value(hive: Hive, path: &str, value: &str) -> Option<u64> {
+        Key::open(hive, path)?.qword(value)
     }
 
     /// Names of the keys inside a key.
