@@ -325,10 +325,14 @@ try:
     check("the builder works out the coverage: every counted byte in one of four shares",
           sum(cov.values()) == sum(p["own_bytes"] for p in survey["places"] if p["counts"]) and cov.get("ok") and cov.get("old") and cov.get("none"), cov)
     m = dash.get("months") or {}
-    # Pictures' copy is from 200 days ago: the photos of the 4 months before that month are in it, the rest only here
+    # Pictures' copy is from 200 days ago: the photos of the chart's months before that month are in
+    # it, the rest only here. How many that is depends on today's date (4 or 5 of them).
+    month = lambda ts: time.strftime("%Y-%m", time.localtime(ts))
+    shown = [month(NOW - (i * 30 + 3) * DAY) for i in range(14) if month(NOW - (i * 30 + 3) * DAY) in (m.get("keys") or [])]
+    copied = sum(1 for k in shown if k < month(fh_when))
     check("the months chart has 12 months; photos since Pictures' copy are only on this PC, older ones are in it",
-          len(m.get("keys") or []) == 12 and sum(m.get("only_here") or []) >= 7 * 60 * MB
-          and 4 * 60 * MB <= sum(m.get("copied") or []) < 5 * 60 * MB, m)
+          len(m.get("keys") or []) == 12 and copied >= 4 and sum(m.get("only_here") or []) >= (len(shown) - copied) * 60 * MB
+          and copied * 60 * MB <= sum(m.get("copied") or []) < (copied + 1) * 60 * MB, (copied, m))
     fresh = {x["name"]: x for x in dash.get("fresh") or []}
     check("how fresh each copy is: File History 200 days, the folder named like a backup, Git's newest push",
           (fresh.get("File History") or {}).get("days") == FH_DAYS and "Backup 2023" in fresh and (fresh.get("Git remotes") or {}).get("days") == 10,
