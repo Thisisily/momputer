@@ -528,7 +528,9 @@ fn askable_checkout(co: &Path) -> bool {
     }
     let Ok(text) = std::fs::read_to_string(&dot) else { return false };
     let Some(admin) = text.trim().strip_prefix("gitdir:").map(|p| PathBuf::from(p.trim().replace('/', "\\"))) else { return false };
-    if !admin.is_absolute() || admin.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir)) {
+    // Before anything looks there: only a folder on this PC's own disks. A pointer to a share or
+    // a device would have Windows reach out to another computer, as you, just to look.
+    if !crate::util::local_disk(&admin) || !admin.is_absolute() || admin.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir)) {
         return false;
     }
     let (Some(worktrees), Some(common)) = (admin.parent(), admin.parent().and_then(Path::parent)) else { return false };

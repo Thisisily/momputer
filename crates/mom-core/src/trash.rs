@@ -3229,7 +3229,11 @@ mod tests {
         let odd = scratch.join("dddddddd-0000-0000-0000-000000000004").join("scratchpad").join("odd");
         write(&odd.join("app.ts"), 10, 0);
         std::fs::write(odd.join(".git"), "gitdir: ../../elsewhere/.git/worktrees/odd\n").unwrap();
-        for id in ["aaaaaaaa-0000-0000-0000-000000000001", "bbbbbbbb-0000-0000-0000-000000000002", "cccccccc-0000-0000-0000-000000000003", "dddddddd-0000-0000-0000-000000000004"] {
+        // One whose pointer leads to another computer: never looked at, so it can't be checked.
+        let shared = scratch.join("eeeeeeee-0000-0000-0000-000000000005").join("scratchpad").join("shared");
+        write(&shared.join("app.ts"), 10, 0);
+        std::fs::write(shared.join(".git"), "gitdir: //build-box/projects/storefront/.git/worktrees/shared\n").unwrap();
+        for id in ["aaaaaaaa-0000-0000-0000-000000000001", "bbbbbbbb-0000-0000-0000-000000000002", "cccccccc-0000-0000-0000-000000000003", "dddddddd-0000-0000-0000-000000000004", "eeeeeeee-0000-0000-0000-000000000005"] {
             age_tree(&scratch.join(id), 20);
         }
 
@@ -3243,6 +3247,9 @@ mod tests {
         assert!(!c.goes && c.optional && c.reason == r"1 change in scratchpad\wt-head nobody committed", "{c:?}");
         let d = item(&spot, "Session dddddddd");
         assert!(!d.goes && d.optional && d.reason.starts_with("Holds a git checkout mom couldn't check"), "{d:?}");
+        let e = item(&spot, "Session eeeeeeee");
+        assert!(!e.goes && e.optional && e.reason.starts_with("Holds a git checkout mom couldn't check"), "{e:?}");
+        assert!(!crate::util::local_disk(Path::new(r"\\build-box\projects\storefront\.git\worktrees\shared")));
 
         clean("claude-temp", &ctx, None);
         assert!(changed.join("app.ts").exists() && worktree.join("app.ts").exists() && odd.join("app.ts").exists());
