@@ -9,21 +9,21 @@ edition = "2021"
 license = "PolyForm-Noncommercial-1.0.0"
 authors = ["momputer contributors"]
 repository = "https://github.com/Thisisily/momputer"
-rust-version = "1.90"
+rust-version = "1.95"
 
 [workspace.dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 toml = "1"
-sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 regex = "1"
 dirs = "7"
 walkdir = "2"
 trash = "5"
-junction = "1"
+junction = "2"
 blake3 = "1"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.42", features = ["bundled"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }
 windows-sys = { version = "0.61", features = [

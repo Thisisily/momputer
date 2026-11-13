@@ -85,7 +85,7 @@ cd momputer
 .\scripts\build.ps1
 ```
 
-You need Rust 1.90+, the MSVC build tools and WebView2 (already on Windows 11). The script builds `mom.exe` and the installer (`target\release\bundle\`). To try it without installing:
+You need Rust 1.95+, the MSVC build tools and WebView2 (already on Windows 11). The script builds `mom.exe` and the installer (`target\release\bundle\`). To try it without installing:
 
 ```powershell
 cargo build --release -p mom-cli -p momputer

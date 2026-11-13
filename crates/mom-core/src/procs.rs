@@ -322,10 +322,16 @@ fn details_of(p: &sysinfo::Process) -> Details {
     }
 }
 
+/// An empty sysinfo `System`. Since sysinfo 0.40 `System::new` returns a `Result`, but on
+/// Windows (and Linux) it only fills in empty fields and never fails.
+fn new_system() -> sysinfo::System {
+    sysinfo::System::new().expect("sysinfo's System::new doesn't fail on Windows")
+}
+
 impl Sampler {
     pub fn new() -> Self {
         Sampler {
-            sys: sysinfo::System::new(),
+            sys: new_system(),
             details: HashMap::new(),
             prev_cpu: HashMap::new(),
             prev_at: None,
@@ -404,7 +410,7 @@ impl Sampler {
         self.samples += 1;
         if self.samples.is_multiple_of(500) {
             // sysinfo remembers every process it was ever asked about; start it fresh now and then.
-            self.sys = sysinfo::System::new();
+            self.sys = new_system();
         }
 
         let mut cpu_now = HashMap::with_capacity(raw.len());
@@ -574,7 +580,7 @@ pub fn command_lines(table: &ProcTable, pids: &[u32]) -> HashMap<u32, String> {
     if unread.is_empty() {
         return out;
     }
-    let mut sys = sysinfo::System::new();
+    let mut sys = new_system();
     sys.refresh_processes_specifics(ProcessesToUpdate::Some(&unread), true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
     for pid in unread {
         let (Some(p), Some(known)) = (sys.process(pid), table.get(pid.as_u32())) else { continue };

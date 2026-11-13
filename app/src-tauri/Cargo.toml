@@ -31,4 +31,4 @@ custom-protocol = ["tauri/custom-protocol"]
 [target.'cfg(windows)'.dependencies]
 # Notifications that say they're from mom, not from Windows PowerShell.
 tauri-winrt-notification = "0.8"
-windows-registry = "0.6"
+windows-registry = "0.100"
