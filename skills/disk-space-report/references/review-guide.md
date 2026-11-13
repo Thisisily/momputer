@@ -89,6 +89,8 @@ These are all the commands `run_plan.py` can start. A plan item appears only whe
 
 Tools are looked up on PATH (never in the current folder) and started without a shell. A tool that is a `.cmd` file in an oddly named folder is skipped, and `run_plan.py` prints the line for the user to run themselves.
 
+`uv cache clean` waits while any other uv program runs, so `run_plan.py` checks first. If uv is in use it starts nothing and prints `BUSY #n`: tell the user to close the program that uses uv (often a server started with `uv run`), then approve that item again.
+
 If the user wants something that isn't here (deleting a folder, a different flag, another tool's cleanup), say this skill doesn't do it and tell them how to do it themselves. Don't run it for them from this skill.
 
 ## Judgement calls

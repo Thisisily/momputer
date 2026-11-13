@@ -4,7 +4,7 @@ description: Surveys a Windows PC's local drives read-only and shows where the d
 license: Apache-2.0 (complete terms in LICENSE.txt)
 compatibility: Windows 10 or 11 with Python 3.8+ (standard library only). Survey and page work offline.
 metadata:
-  version: "1.3.0"
+  version: "1.3.1"
 ---
 
 # Disk space report
@@ -110,6 +110,7 @@ python scripts/run_plan.py "<out>/diskspace-plan.json" --approve "DISKSPACE-APPR
 
 - Commands are started without a shell, from the table, with nothing from the plan file in them. A plan edited after approval is refused.
 - A cleanup can take minutes (allow up to 30). Docker's commands need Docker Desktop running.
+- `BUSY #n` means a program running now uses that tool (often a server started with `uv run`), so nothing was started. Tell the user to close it, then approve that item again.
 - `wsl --shutdown` stops every Linux distribution and Docker's engine. Run it only if ticked, after the user has saved their work there.
 
 ### 6. Report and clean up

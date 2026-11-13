@@ -8,7 +8,10 @@ big files are sparse, so they take almost no room), surveys it with survey.py --
 the page with notes, and checks: the survey only read the folder and wrote one file; no folder
 or file name reaches a command; what notes.json says stays text; the plan id is a fingerprint
 run_plan.py checks; the dry run starts nothing and refuses a wrong id, a changed plan and a
-malformed line. Then the page in a headless browser. run_plan.py is never given --run.
+malformed line. Then uv's lock: with a made-up uv first on PATH (it only writes files in the
+work folder), run_plan.py --run starts its "cache clean" when the cache's lock is free or absent,
+and starts nothing but prints BUSY while a helper process holds that lock. Then the page in a
+headless browser. No real tool is ever given --run.
 
 --keep leaves the work folder (fixture, survey, page, plan, screenshots) for a look.
 Windows only. Python 3.8+, standard library only.
@@ -17,6 +20,7 @@ import argparse
 import ctypes
 import json
 import os
+import subprocess
 import sys
 import time
 
@@ -103,6 +107,28 @@ def stamps(root):
 
 def actions_by(plan):
     return {a.get("command_id") or a.get("list_id"): a for a in plan["actions"]}
+
+
+# A made-up uv: notes each call, answers "cache dir" with the folder the test names, and for anything
+# else writes a marker file. It touches nothing outside the work folder.
+FAKE_UV = "\r\n".join([
+    "@echo off",
+    '>>"%FAKE_UV_CALLS%" echo(%*',
+    'if /i not "%~1 %~2"=="cache dir" goto clean',
+    "echo(%FAKE_UV_CACHE%",
+    "exit /b 0",
+    ":clean",
+    '>"%FAKE_UV_MARK%" echo cleaned',
+    "exit /b 0", ""])
+# Holds a lock on one byte of the file it is given, the way a running uv holds its cache's .lock,
+# until its stdin is closed.
+HOLD_LOCK = ("import msvcrt, os, sys\n"
+             "fd = os.open(sys.argv[1], os.O_RDWR | os.O_BINARY)\n"
+             "msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)\n"
+             "print('held', flush=True)\n"
+             "sys.stdin.read()\n"
+             "msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)\n"
+             "os.close(fd)\n")
 
 
 def every_text(obj):
@@ -236,6 +262,70 @@ try:
     r = py(RUN, save(changed, os.path.join(OUT, "changed-plan.json")), "--approve", "DISKSPACE-APPROVE plan=%s ids=%d" % (changed["plan_id"], first["id"]))
     check("a command that isn't in the table is refused even with a matching id", "REFUSED #%d" % first["id"] in r.stdout and r.returncode != 0,
           r.stdout + r.stderr)
+
+    # ---------------------------------------------------------------- 4b. uv's lock, with a made-up uv
+    print("\n-- 4b. uv cache clean waits for nobody: a held lock is BUSY and starts nothing")
+    fake_dir, cache = os.path.join(T, "fake-uv"), os.path.join(T, "uv-cache")
+    fake_exe = write(os.path.join(fake_dir, "uv.cmd"), FAKE_UV)
+    os.makedirs(cache)
+    calls, mark, lock = os.path.join(T, "uv-calls.txt"), os.path.join(T, "uv-cleaned.txt"), os.path.join(cache, ".lock")
+    uv_actions = [{"id": 1, "kind": "command", "command_id": "uv-cache-clean"}]
+    uv_plan = save({"schema": run_plan.PLAN_SCHEMA, "actions": uv_actions, "plan_id": run_plan.plan_id(uv_actions)},
+                   os.path.join(OUT, "uv-plan.json"))
+    uv_approve = "DISKSPACE-APPROVE plan=%s ids=1" % run_plan.plan_id(uv_actions)
+    uv_env = dict(os.environ, PATH=os.pathsep.join([fake_dir, os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")]),
+                  FAKE_UV_CACHE=cache, FAKE_UV_CALLS=calls, FAKE_UV_MARK=mark)
+
+    def uv_run(*more):
+        for p in (calls, mark):
+            if os.path.exists(p):
+                os.remove(p)
+        r = run([PY, "-I", RUN, uv_plan, "--approve", uv_approve, "--log", os.path.join(OUT, "uv-run-log.txt"), "--timeout", "60"]
+                + list(more), env=uv_env)
+        asked = []
+        if os.path.exists(calls):
+            with open(calls, encoding="utf-8", errors="replace") as f:
+                asked = [l.strip() for l in f if l.strip()]
+        return r, asked, os.path.exists(mark)
+
+    if not run_plan.plain_enough(fake_exe):
+        note("uv's lock was not checked: the scratch folder's name is not one run_plan.py hands to cmd.exe (%s)" % fake_exe)
+    else:
+        r, asked, cleaned = uv_run("--run")
+        check("no .lock file: the answer is unknown and uv cache clean runs as before",
+              r.returncode == 0 and "RAN #1: uv cache clean -> exit code 0" in r.stdout and cleaned and asked == ["cache dir", "cache clean"],
+              (r.stdout + r.stderr)[-600:] + " calls=%s" % asked)
+        write(lock, b"")
+        r, asked, cleaned = uv_run("--run")
+        check("a .lock nobody holds: uv is free and uv cache clean runs",
+              r.returncode == 0 and "RAN #1: uv cache clean" in r.stdout and cleaned and asked == ["cache dir", "cache clean"],
+              (r.stdout + r.stderr)[-600:] + " calls=%s" % asked)
+        holder = subprocess.Popen([PY, "-I", "-c", HOLD_LOCK, lock], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL)
+        try:
+            held = holder.stdout.readline().strip() == b"held"
+            check("a helper process holds the cache's lock", held)
+            r, asked, cleaned = uv_run()
+            check("the dry run doesn't ask uv anything, even while its lock is held",
+                  r.returncode == 0 and "WOULD RUN #1: uv cache clean" in r.stdout and not asked and not cleaned,
+                  (r.stdout + r.stderr)[-600:] + " calls=%s" % asked)
+            r, asked, cleaned = uv_run("--run")
+            busy = [l for l in r.stdout.splitlines() if l.startswith("BUSY #1:")]
+            check("while the lock is held: one BUSY line, uv is only asked where its cache is, and nothing is cleaned",
+                  held and busy and asked == ["cache dir"] and not cleaned and "RAN #" not in r.stdout,
+                  (r.stdout + r.stderr)[-600:] + " calls=%s" % asked)
+            check("BUSY says what to do and names the command", busy and "Close it, then approve this item again: uv cache clean" in busy[0], busy)
+            check("BUSY is a skip, not a failure: the exit code stays 0", r.returncode == 0, r.returncode)
+            with open(os.path.join(OUT, "uv-run-log.txt"), encoding="utf-8") as f:
+                check("the BUSY line is in the run log", busy and busy[0] in f.read())
+        finally:
+            try:
+                holder.stdin.close()
+                holder.wait(timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                holder.kill()
+                holder.wait(timeout=10)
+            holder.stdout.close()
 
     # ---------------------------------------------------------------- 5. the page in a browser
     print("\n-- 5. the page in a headless browser")

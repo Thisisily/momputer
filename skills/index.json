@@ -57,8 +57,8 @@
       "Where did my disk space go?",
       "Why is C: full?"
     ],
-    "version": "1.3.0",
-    "hash": "2800736c145e5f21"
+    "version": "1.3.1",
+    "hash": "0286f29f586bab54"
   },
   {
     "name": "backup-checkup",

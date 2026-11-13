@@ -32,6 +32,8 @@ PLAIN_PATH_RX = re.compile(r"^[A-Za-z]:(\\[\w .\-~+@#()]+)+$")
 
 # id -> a constant command. "covers" names the survey findings the command cleans (see survey.py RULES).
 # kind "command": the owning tool's own cleanup, found on PATH. kind "open": a Windows tool, for the person.
+# "busy": the command waits without end while another program holds the tool's lock; it is checked first
+# (see busy_state) and not started while held. Never answered with --force.
 TABLE = {
     "npm-cache-clean": {
         "kind": "command", "argv": ["npm", "cache", "clean", "--force"], "covers": ["npm-cache"], "risk": "low",
@@ -51,7 +53,7 @@ TABLE = {
         "title": "Clear pip's cache",
         "removes": "Downloaded and locally built Python packages. Installed packages stay; pip downloads again when needed."},
     "uv-cache-clean": {
-        "kind": "command", "argv": ["uv", "cache", "clean"], "covers": ["uv-cache"], "risk": "low",
+        "kind": "command", "argv": ["uv", "cache", "clean"], "covers": ["uv-cache"], "risk": "low", "busy": "uv-cache",
         "title": "Clear uv's cache",
         "removes": "Everything in uv's cache. Existing virtual environments keep working; uv downloads again when needed."},
     "nuget-locals-clear": {
@@ -179,6 +181,50 @@ def plain_enough(path):
     return " " in path or not ("(" in path or ")" in path)
 
 
+def busy_state(entry, exe, home, env):
+    """"busy", "free" or "unknown" for an entry marked "busy" in TABLE. Starts only the tool's own
+    read-only question, with nothing from the plan in it. Anything unexpected is "unknown"."""
+    if entry.get("busy") != "uv-cache" or os.name != "nt":
+        return "unknown"
+    import msvcrt
+    import stat
+    # uv answers "cache dir" at once even while its cache is locked. A lock held by any other uv process
+    # (a server started with "uv run" holds one for as long as it lives) makes "uv cache clean" wait.
+    try:
+        r = subprocess.run([exe, "cache", "dir"], cwd=home, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, timeout=20, shell=False)
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if r.returncode != 0:
+        return "unknown"
+    folder = next((x.strip() for x in r.stdout.decode("utf-8", "replace").splitlines() if x.strip()), "")
+    if not folder or not os.path.splitdrive(folder)[0] or not os.path.isabs(folder) or not os.path.isdir(folder):
+        return "unknown"
+    lock = os.path.join(folder, ".lock")
+    try:
+        st = os.lstat(lock)
+    except OSError:
+        return "unknown"
+    if not stat.S_ISREG(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:   # a link is never opened
+        return "unknown"
+    try:
+        fd = os.open(lock, os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOINHERIT", 0))
+    except OSError:
+        return "unknown"
+    try:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return "busy"
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        return "free"
+    finally:
+        os.close(fd)
+
+
 def clean(text, limit=160):
     """Plan text for printing: one line, no control characters."""
     return re.sub(r"[\x00-\x1f\x7f  ]+", " ", str(text))[:limit]
@@ -280,6 +326,10 @@ def main(argv=None):
             continue
         if not args.run:
             say("WOULD %s #%d: %s\n      %s" % (verb.upper(), i, shown(entry), entry["removes"]))
+            continue
+        if entry.get("busy") and busy_state(entry, exe, home, env) == "busy":
+            say("BUSY #%d: %s is in use by a program that is running now (for example a server started with %s). "
+                "Close it, then approve this item again: %s" % (i, entry["argv"][0], entry["argv"][0], shown(entry)))
             continue
         cmd = [exe] + entry["argv"][1:]
         try:
