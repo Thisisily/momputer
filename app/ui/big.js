@@ -19,7 +19,7 @@
    something changes (you look around, point at a part, a short tween runs) and at no other
    time; shadows are only recalculated when something in the scene moves. Drawn with three.js,
    moved with GSAP. */
-import * as THREE from "./vendor/three.module.min.js";
+import * as THREE from "./vendor/three.module.js";
 
 const G = window.gsap;
 const calm = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -163,7 +163,7 @@ export function open(host, screenEl, model, on = {}) {
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap; // soft since three r182, which retired PCFSoftShadowMap
   // Shadows are worked out again only when something in the scene moves, not when you look around.
   renderer.shadowMap.autoUpdate = false;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;

@@ -5,7 +5,7 @@
    play(host, on) draws the room into `host` and returns { act(chore), close() }. Tap things in the
    room, or call act() (the checklist buttons do, for the keyboard). on.chore(id, done, of) after
    each step and on.done() at the end. Drawn with three.js, moved with GSAP. */
-import * as THREE from "./vendor/three.module.min.js";
+import * as THREE from "./vendor/three.module.js";
 
 const G = window.gsap;
 const calm = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -55,7 +55,7 @@ export function play(host, on = {}) {
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap; // soft since three r182, which retired PCFSoftShadowMap
   host.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();

@@ -10,8 +10,10 @@ const files = {
   "gsap.min.js": "node_modules/gsap/dist/gsap.min.js",
   "MorphSVGPlugin.min.js": "node_modules/gsap/dist/MorphSVGPlugin.min.js",
   "idiomorph.min.js": "node_modules/idiomorph/dist/idiomorph.min.js",
-  // three.js (MIT), only for mom's room; loaded when someone gets in.
-  "three.module.min.js": "node_modules/three/build/three.module.min.js",
+  // three.js (MIT), for mom's room (loaded when someone gets in) and the desk in BIG MODE.
+  // Two files: three.module.js imports the rest of three from ./three.core.js.
+  "three.module.js": "node_modules/three/build/three.module.js",
+  "three.core.js": "node_modules/three/build/three.core.js",
   // Fonts (SIL Open Font License): Geist for words, Geist Mono for paths and commands,
   // Doto, a dot-matrix face, for numbers and mom's name.
   "fonts/geist.woff2": "node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2",
