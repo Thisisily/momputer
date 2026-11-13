@@ -28,7 +28,7 @@ jobs:
       SIGN: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       # No build cache here, signed or not: what people download is built from scratch, from this
       # commit and the libraries Cargo.lock names. A cache would be quicker, but any job that runs
       # on main (ci, pages) can write to the repository's caches under any key, so one bad run
@@ -41,8 +41,8 @@ jobs:
       - name: Get the Tauri CLI
         shell: pwsh
         env:
-          TAURI_CLI: 2.12.2
-          TAURI_CLI_SHA256: bef439eb1a0edd5192ed0009945e5de660b642a51519efe7d6953d70c5ab1939
+          TAURI_CLI: 2.12.4
+          TAURI_CLI_SHA256: 3e8687fb184bd7f10ebd8642f7715f79f4a605c0694c142a21507e8a24dc0f8b
         run: |
           $zip = Join-Path $env:RUNNER_TEMP 'cargo-tauri.zip'
           Invoke-WebRequest "https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v$env:TAURI_CLI/cargo-tauri-x86_64-pc-windows-msvc.zip" -OutFile $zip

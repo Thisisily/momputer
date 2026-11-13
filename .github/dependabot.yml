@@ -5,3 +5,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # CodeQL's steps must all be the same version, so they move in one pull request.
+      codeql:
+        patterns:
+          - "github/codeql-action/*"
