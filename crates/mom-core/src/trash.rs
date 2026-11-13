@@ -23,6 +23,7 @@ mod steam_shaders;
 mod steam_appinfo;
 mod steam_packages;
 mod programs;
+mod uv;
 mod walk;
 mod windows_update;
 
@@ -281,6 +282,8 @@ pub struct TrashCtx<'a> {
     pub live: Option<&'a Live>,
     /// How many times the usual number of items a spot lists (1, unless someone asked to see more).
     pub list_scale: usize,
+    /// Who is using uv's cache, from the same process sample.
+    pub uv: uv::Seen,
     /// Isolated tests supply update transitions without querying or changing the host PC.
     #[cfg(test)]
     windows_update_probe: Option<&'a dyn Fn() -> windows_update::State>,
@@ -321,6 +324,7 @@ impl<'a> TrashCtx<'a> {
             installed: None,
             live: None,
             list_scale: 1,
+            uv: uv::seen(table, &uv::cache_dir(paths)),
             #[cfg(test)]
             windows_update_probe: None,
         }
@@ -579,9 +583,8 @@ const DEFS: &[Def] = &[
     Def {
         id: "uv-cache",
         label: "uv cache",
-        detail: "Runs `uv cache prune`, which keeps what your environments still use.",
-        what: "uv's shared store of Python packages. Your virtual environments use some of it; \
-               the rest is old downloads.",
+        detail: "Runs uv's own cache clean-up. uv downloads packages again when it needs them.",
+        what: "Python packages uv has downloaded and built, kept so the next install is faster.",
         group: "dev",
         action: "tool",
         safety: "safe",
@@ -1354,17 +1357,19 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
         "bun-cache" => whole_dir(ctx.paths.home.join(".bun").join("install").join("cache"), "bun package cache", ctx),
         "pip-cache" => whole_dir(la.join("pip").join("cache"), "pip download cache", ctx),
         "uv-cache" => {
-            let root = la.join("uv").join("cache");
+            let root = uv::cache_dir(ctx.paths);
             if !root.is_dir() {
                 return Found::none();
             }
-            let t = tally(&root);
+            let bytes = tally(&root).bytes.saturating_sub(uv::marker_bytes(&root));
             let mut f = Found::at(root);
             f.exact = false;
-            f.tool = Some((t.bytes, t.bytes));
-            if crate::util::on_path("uv").is_none() {
-                f.note = Some("uv isn't on your PATH, so mom can't run it.".into());
-            }
+            f.tool = Some((bytes, bytes));
+            f.note = if crate::util::on_path("uv").is_none() {
+                Some("uv isn't on your PATH, so mom can't run it.".into())
+            } else {
+                uv::note(&ctx.uv, uv::linked_here(ctx.paths))
+            };
             f
         }
         "cargo-cache" => {
@@ -2017,9 +2022,14 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
              the unpacked sources builds use aren't touched; Cargo downloads crates again when a build needs them.",
             human_bytes(bytes)
         ),
-        "uv-cache" => format!(
+        "uv-cache" if uv::linked_here(ctx.paths) => format!(
             "Runs `uv cache prune`, which deletes cache entries no environment uses any more (up to {}). uv decides \
              exactly what goes; your virtual environments keep working.",
+            human_bytes(bytes)
+        ),
+        "uv-cache" => format!(
+            "Runs `uv cache clean`, which empties uv's cache (up to {}), permanently (it doesn't go to the Recycle Bin). \
+             Environments uv already made keep working; uv downloads packages again when it needs them.",
             human_bytes(bytes)
         ),
         "pnpm-store" => format!(
@@ -2729,14 +2739,26 @@ fn cleaned_message(def: &Def, r: &CleanReport) -> String {
 }
 
 fn run_tool(id: &str, ctx: &TrashCtx, mut r: CleanReport) -> CleanReport {
+    if id == "uv-cache" {
+        // uv counts only what really came back, not the folder's size before and after.
+        match uv::clean(ctx) {
+            Ok(done) => {
+                r.freed = done.freed;
+                r.deleted = u64::from(r.freed > 0);
+                r.message = match (done.linked, r.freed) {
+                    (true, 0) => "Ran it. Nothing needed pruning; already spotless.".to_string(),
+                    (true, f) => format!("uv tidied its cache: {} back.", human_bytes(f)),
+                    (false, 0) => "Ran it. uv's cache was already empty.".to_string(),
+                    (false, f) => format!("uv emptied its cache: {} back.", human_bytes(f)),
+                };
+            }
+            Err(e) => r.message = e,
+        }
+        return r;
+    }
     let before = find(id, ctx).tool.map(|t| t.0).unwrap_or(0);
     let after_total = |ctx: &TrashCtx| find(id, ctx).tool.map(|t| t.0).unwrap_or(0);
     let result: Result<(), String> = match id {
-        "uv-cache" => match crate::util::run("uv", &["cache", "prune"], Duration::from_secs(600)) {
-            Ok(out) if out.ok() => Ok(()),
-            Ok(out) => Err(format!("uv cache prune failed: {}", out.err_text().trim())),
-            Err(e) => Err(format!("couldn't run uv: {e}")),
-        },
         "pnpm-store" => match crate::util::on_path("pnpm") {
             Some(pnpm) => match crate::util::run(&pnpm.to_string_lossy(), &["store", "prune"], Duration::from_secs(600)) {
                 Ok(out) if out.ok() => Ok(()),
@@ -2753,7 +2775,6 @@ fn run_tool(id: &str, ctx: &TrashCtx, mut r: CleanReport) -> CleanReport {
             r.deleted = u64::from(r.freed > 0);
             r.message = match (id, r.freed) {
                 (_, 0) => "Ran it. Nothing needed pruning; already spotless.".to_string(),
-                ("uv-cache", f) => format!("uv tidied its cache: {} back.", human_bytes(f)),
                 (_, f) => format!("pnpm pruned its store: {} back.", human_bytes(f)),
             };
         }
@@ -2874,6 +2895,7 @@ mod tests {
             installed: Some(crate::installed::Installed::with(&[])), // nothing, unless a test says otherwise
             live: None,
             list_scale: 1,
+            uv: Default::default(),
             windows_update_probe: None,
         }
     }

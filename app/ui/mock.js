@@ -217,8 +217,8 @@
     }),
     spot({
       id: "uv-cache", label: "uv cache", group: "dev", action: "tool", safety: "safe", exact: false,
-      what: "Python packages uv has downloaded and built.",
-      effect: "Runs uv cache prune, which removes only what none of your environments use. Your virtual environments keep working.",
+      what: "Python packages uv has downloaded and built, kept so the next install is faster.",
+      effect: "Runs uv cache clean, which empties uv's cache. Environments uv already made keep working; uv downloads packages again when it needs them.",
       totalBytes: 3.4 * GB, reclaimableBytes: 3.4 * GB, reclaimableItems: 0, keptItems: 0, items: [],
     }),
     spot({

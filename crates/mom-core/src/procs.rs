@@ -539,6 +539,22 @@ pub(crate) fn running_names_now() -> Option<HashSet<String>> {
     { None }
 }
 
+/// The (PID, start time) of every process running now under one of `names` ("uv" or "uv.exe",
+/// any case). Failure means unknown, never "none running".
+pub(crate) fn running_named_now(names: &[&str]) -> Option<HashSet<(u32, u64)>> {
+    #[cfg(windows)]
+    {
+        let stem = |n: &str| {
+            let n = n.to_ascii_lowercase();
+            n.strip_suffix(".exe").map(str::to_string).unwrap_or(n)
+        };
+        let wanted: HashSet<String> = names.iter().map(|n| stem(n)).collect();
+        nt::processes().map(|list| list.into_iter().filter(|r| wanted.contains(&stem(&r.name))).map(|r| (r.pid, r.start)).collect())
+    }
+    #[cfg(not(windows))]
+    { let _ = names; None }
+}
+
 /// The command lines of a few processes, read now. The table only reads them for processes
 /// worth a look (opening every process is slow with some antivirus), so this is for the odd
 /// one more: a browser's newest tabs, say. A PID now running something else is left out.
