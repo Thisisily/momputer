@@ -3417,9 +3417,13 @@ mod tests {
         for id in ONLY_ON_A_MAC {
             assert!(!measure(id, &on_windows).unwrap().available, "{id}");
         }
-        // Cleaning takes what it said, and leaves the link's target alone.
+        // Cleaning takes what it said, and leaves the link's target alone. Only where links are
+        // a Mac's: on Windows a link inside a folder keeps mom out of it whatever the layout
+        // says, because there a link can be a way out of the folder.
         write(&paths.downloads.join("precious.txt"), 9, 1);
-        assert_eq!(clean("bun-cache", &ctx, None).freed, 250);
+        if cfg!(unix) {
+            assert_eq!(clean("bun-cache", &ctx, None).freed, 250);
+        }
         assert!(paths.downloads.join("precious.txt").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
