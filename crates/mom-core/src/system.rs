@@ -7,7 +7,7 @@
 //! several seconds), so they're gathered on a thread of their own and kept for half an hour.
 
 use crate::speed::Fix;
-use crate::util::{human_bytes, now_secs, run, windows_powershell};
+use crate::util::{human_bytes, now_secs, run};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -134,6 +134,13 @@ $o.net = @(Get-NetAdapter -Physical | Select-Object -First 16 | ForEach-Object {
 $o | ConvertTo-Json -Depth 4 -Compress
 "#;
 
+/// On a Mac, macOS's own tools are asked instead (see macos.rs).
+#[cfg(target_os = "macos")]
+fn gather() -> System {
+    crate::macos::system()
+}
+
+#[cfg(not(target_os = "macos"))]
 fn gather() -> System {
     // Keys in shell histories and work only on this PC are looked for meanwhile.
     let yours = std::thread::spawn(|| {
@@ -145,7 +152,7 @@ fn gather() -> System {
         })
     });
     let ask = |script: &'static str| {
-        windows_powershell()
+        crate::util::windows_powershell()
             .and_then(|program| run(&program, &["-NoProfile", "-NonInteractive", "-Command", script], Duration::from_secs(40)))
             .ok()
             .filter(|o| o.ok())
@@ -1557,7 +1564,7 @@ try {{ {command} }} catch {{ $failed = $true; $message = $_.Exception.Message }}
 "#);
             let file = home.join("run.ps1");
             std::fs::write(&file, script).unwrap();
-            let output = std::process::Command::new(windows_powershell().unwrap())
+            let output = std::process::Command::new(crate::util::windows_powershell().unwrap())
                 .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
                 .arg(&file)
                 .env("USERPROFILE", home)
@@ -1569,7 +1576,7 @@ try {{ {command} }} catch {{ $failed = $true; $message = $_.Exception.Message }}
             serde_json::from_slice(&output.stdout).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&output.stdout)))
         }
 
-        let temp = std::env::temp_dir();
+        let temp = crate::util::temp_dir();
         let root = temp.join(format!("mom-reg-command-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir(&root).unwrap();
         let list: Vec<Leftover> = ["first.exe", "second.exe"].iter().map(|name| Leftover {

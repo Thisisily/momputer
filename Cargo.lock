@@ -2325,7 +2325,7 @@ dependencies = [
 
 [[package]]
 name = "mom-cli"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2338,13 +2338,14 @@ dependencies = [
 
 [[package]]
 name = "mom-core"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "blake3",
  "chrono",
  "dirs 7.0.0",
  "junction",
+ "libc",
  "regex",
  "rusqlite",
  "serde",
@@ -2358,7 +2359,7 @@ dependencies = [
 
 [[package]]
 name = "momputer"
-version = "0.5.4"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "mom-core",

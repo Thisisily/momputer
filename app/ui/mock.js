@@ -851,6 +851,98 @@
   // "?waiting" shows an agent waiting for you (off by default so the pictures don't change).
   const waiting = [{ agent: "claude", session: "0191f20b", cwd: "C:\\Workspace\\storefront", project: "storefront", kind: "needs-you", at: now - 12 * 60, transcript: null, told: true }];
 
+  // ---------------------------------------------------------------- the same Tuesday, on a Mac
+  //
+  // Opened on a Mac, the sample machine is a MacBook: its own disk, its own apps, what a Mac keeps
+  // that a PC doesn't, and the Mac's checkup. The agents' mess is the same on both.
+  const told = /[?&]as=(mac|windows)\b/.exec(location.search);
+  const browser = typeof navigator === "undefined" ? {} : navigator;
+  const MAC = told ? told[1] === "mac" : /Mac/i.test(browser.platform || "") || /Macintosh/.test(browser.userAgent || "");
+  const macSystem = () => ({
+    at: Math.floor(Date.now() / 1000),
+    pc: [
+      ["Processor", "Apple M3 Pro, 12 cores"],
+      ["Memory", "36 GB"],
+      ["Graphics", "Apple M3 Pro, 18 cores"],
+      ["Disks", "APPLE SSD AP1024Z (1 TB, NVMe SSD, macOS)"],
+      ["Screen", "Built-in display, 3456 × 2234"],
+      ["Sound", "MacBook Pro Speakers"],
+      ["Model", "MacBook Pro (Mac15,6)"],
+      ["Battery", "212 cycles, holds 91% of what it held new, condition: normal"],
+      ["macOS", "macOS 26.1 (25B78)"],
+    ],
+    screens: [],
+    checks: [
+      { id: "filevault", area: "Security", level: "ok", title: "The disk is locked with FileVault", detail: "If this Mac is lost or stolen, nobody reads what's on it without your password.", fix: null },
+      { id: "gatekeeper", area: "Security", level: "ok", title: "Gatekeeper is on", detail: "macOS checks an app you downloaded before it first opens.", fix: null },
+      { id: "sip", area: "Security", level: "ok", title: "System Integrity Protection is on", detail: "Nothing can change macOS's own files, not even with your password.", fix: null },
+      { id: "firewall", area: "Security", level: "tip", title: "The firewall is off", detail: "It ships off. At home behind a router that's fine; on a network you share with strangers (a café, a hotel), switch it on so nothing there can reach the servers you run.", fix: { label: "Open Network settings", kind: "open", value: "x-apple.systempreferences:com.apple.Network-Settings.extension?Firewall", hint: null } },
+      { id: "sharing", area: "Security", level: "tip", title: "File Sharing is on", detail: "Other computers on the same network can open this Mac's shared folders. Your Public folder opens for anyone, without a password. Handy at home. On a network you share with strangers it's a way in, so switch off what you don't use.", fix: { label: "Open Sharing settings", kind: "open", value: "x-apple.systempreferences:com.apple.Sharing-Settings.extension", hint: null } },
+      { id: "screen-lock", area: "Security", level: "ok", title: "Waking this Mac takes your password", detail: "It asks as soon as the screen goes dark.", fix: null },
+      { id: "updates-auto", area: "Updates", level: "ok", title: "macOS keeps itself up to date", detail: "It checks for updates by itself, and nothing is waiting.", fix: null },
+      { id: "time-machine", area: "Backups", level: "tip", title: "Time Machine isn't set up", detail: "Nothing on this Mac is being backed up by macOS. With a disk plugged in (or one on your network), Time Machine keeps a copy of everything, hour by hour. If you back up another way, never mind.", fix: { label: "Open Time Machine settings", kind: "open", value: "x-apple.systempreferences:com.apple.Time-Machine-Settings.extension", hint: null } },
+      { id: "disk-health-1", area: "Hardware", level: "ok", title: "APPLE SSD AP1024Z is healthy", detail: "The disk checks itself and reports no problems.", fix: null },
+      { id: "battery", area: "Hardware", level: "ok", title: "The battery is in good shape", detail: "212 cycles, holds 91% of what it held new, condition: normal.", fix: null },
+      ...yourChecks(),
+    ],
+  });
+  if (MAC) {
+    const home = (rest) => `/Users/sam/${rest}`;
+    health.drives = [{ root: "/", label: "Macintosh HD", total: 994 * GB, free: 96 * GB, system: true, fullInDays: 41 }];
+    health.memory = { total: 36 * GB, used: 27 * GB };
+    health.checks = health.checks
+      .filter((c) => !["storage-sense", "drive-C"].includes(c.id))
+      .map((c) => (c.id === "unused-apps" ? { ...c, title: "6 apps and games with no sign of use in a year", detail: "Each shows the newest sign of use mom could find. They're listed under Apps, with a button to uninstall each." } : c))
+      .concat([{ id: "drive-/", level: "ok", title: "Macintosh HD has room", detail: "96 GB free of 994 GB.", action: null }]);
+    health.topMemory = health.topMemory.filter((t) => !/vmmem|webview/.test(t.name)).map((t) => ({ ...t, name: { "chrome.exe": "Google Chrome", "node.exe": "node", "Code.exe": "Visual Studio Code", "claude.exe": "Claude" }[t.name] || t.name }));
+    health.unusedApps = [
+      { key: "/Applications/Nimbus Movie.app", name: "Nimbus Movie", publisher: "", version: "", size: 4.1 * GB, lastUsed: now - 1703 * D2, lastUsedSource: "activity", dir: "/Applications/Nimbus Movie.app", from: null },
+      { key: "/Applications/Atlas 3D.app", name: "Atlas 3D", publisher: "", version: "", size: 2.7 * GB, lastUsed: now - 1290 * D2, lastUsedSource: "activity", dir: "/Applications/Atlas 3D.app", from: null },
+      { key: "/Applications/Copperline Publisher.app", name: "Copperline Publisher", publisher: "", version: "", size: 2.4 * GB, lastUsed: now - 1067 * D2, lastUsedSource: "updated", dir: "/Applications/Copperline Publisher.app", from: null },
+      { key: "/Applications/Quiet Notes.app", name: "Quiet Notes", publisher: "", version: "", size: 140 * MB, lastUsed: now - 1880 * D2, lastUsedSource: "activity", dir: "/Applications/Quiet Notes.app", from: null },
+      { key: "steam://uninstall/900001", name: "Lanternfall Tactics", publisher: "", version: "", size: 9.2 * GB, lastUsed: now - 1290 * D2, lastUsedSource: "played", dir: home("Library/Application Support/Steam/steamapps/common/Lanternfall Tactics"), from: "Steam" },
+      { key: "steam://uninstall/900002", name: "Retro Racer", publisher: "", version: "", size: 4.7 * GB, lastUsed: now - 840 * D2, lastUsedSource: "played", dir: home("Library/Application Support/Steam/steamapps/common/Retro Racer"), from: "Steam" },
+    ];
+    // What a PC keeps and a Mac doesn't goes; what only a Mac keeps comes.
+    const onlyWindows = ["game-junk", "windows-junk", "forgotten-apps", "old-temp", "recycle-bin", "old-drivers"];
+    for (let i = spots.length - 1; i >= 0; i--) if (onlyWindows.includes(spots[i].id)) spots.splice(i, 1);
+    const macItem = (name, sub, bytes, goes, reason, ageSecs, files = 1) => ({ ...item(name, sub, bytes, goes, reason, ageSecs, files), path: home(`Library/Developer/${name.replace(/\W+/g, "-")}`) });
+    spots.push(
+      spot({
+        id: "xcode-builds", label: "Xcode build data", group: "dev", action: "delete", safety: "safe",
+        what: "What Xcode builds and indexes for each project (DerivedData). It makes it again the next time you open the project.",
+        effect: "Deletes the build data of 3 projects with no recorded activity in the last month, permanently. Your code isn't touched; the first build afterwards takes longer.",
+        totalBytes: 14.6 * GB, reclaimableBytes: 11.2 * GB, reclaimableItems: 3, keptItems: 1,
+        items: [
+          macItem("Storefront-bqkz", "Build data", 6.4 * GB, true, "Last built 52 days ago", 52 * D2),
+          macItem("Nimbus-fhty", "Build data", 3.1 * GB, true, "Last built 97 days ago", 97 * D2),
+          macItem("GardenKit-aapl", "Build data", 1.7 * GB, true, "Last built 140 days ago", 140 * D2),
+          recent(macItem("Storefront-iOS-czzm", "Build data", 3.4 * GB, false, "Built 3 hours ago", 3 * 3600)),
+        ],
+      }),
+      spot({
+        id: "simulators", label: "Dead simulators", group: "dev", action: "tool", safety: "safe",
+        what: "iPhone and iPad simulators made for a version of iOS that Xcode no longer has. They can't start any more.",
+        effect: "Asks Xcode to delete the 9 simulators it can no longer start. The ones that work stay.",
+        totalBytes: 7.9 * GB, reclaimableBytes: 7.9 * GB, reclaimableItems: 9, keptItems: 0, items: [],
+      }),
+      spot({
+        id: "homebrew-cache", label: "Homebrew's downloads", group: "dev", action: "delete", safety: "safe",
+        what: "The installers Homebrew downloaded for what it has already installed.",
+        effect: "Deletes Homebrew's downloads permanently. Nothing installed changes; Homebrew downloads again when you install or upgrade.",
+        totalBytes: 2.3 * GB, reclaimableBytes: 2.3 * GB, reclaimableItems: 1, keptItems: 0,
+        items: [macItem("Homebrew", "212 downloads", 2.3 * GB, true, "Cache", 9 * D2, 212)],
+      })
+    );
+    // In a browser there is no Mac window around her, so she draws its three lights herself.
+    document.documentElement.classList.add("mac-window");
+    const lights = document.createElement("style");
+    lights.textContent = `.mac-window .titlebar { position: relative; }
+      .mac-window .titlebar::before { content: ""; position: absolute; left: 16px; top: 50%; width: 12px; height: 12px; margin-top: -6px; border-radius: 50%;
+        background: #ff5f57; box-shadow: 20px 0 0 #febc2e, 40px 0 0 #28c840; }`;
+    document.head.appendChild(lights);
+  }
+
   const handlers = {
     get_snapshot: () => JSON.parse(JSON.stringify(snapshot)),
     refresh: () => null,
@@ -1067,11 +1159,11 @@
       archive.moved = archive.moved.filter((x) => x.from !== from);
       return `Deleted ${m.name} for good.`;
     },
-    uninstall_app: async () => (await wait(200), "Atlas Recorder's uninstaller is open. Follow it to the end."),
+    uninstall_app: async ({ key }) => (await wait(200), MAC ? (String(key).startsWith("steam:") ? "Steam is open. It asks before it removes the game." : "It's in the Trash. Empty the Trash to get its space back, or put it back from there.") : "Atlas Recorder's uninstaller is open. Follow it to the end."),
     get_health: async () => (await wait(150), JSON.parse(JSON.stringify(health))),
     get_system: async () => (
       await wait(900),
-      {
+      MAC ? macSystem() : {
         at: Math.floor(Date.now() / 1000),
         pc: [
           ["Processor", "AMD Ryzen 7 3800X 8-Core Processor, 8 cores, 16 threads"],

@@ -1,10 +1,11 @@
 //! Claude Code's scratch folders: which project and session each belongs to, and what the
 //! session was about.
 //!
-//! Claude keeps scratch space in %TEMP%\claude\<slug>\<session id> and the session's transcript
-//! in ~/.claude/projects/<slug>/<session id>.jsonl. The slug is the project's path with every
+//! Claude keeps scratch space in %TEMP%\claude\<slug>\<session id> (on a Mac,
+//! /tmp/claude-<your user number>/<slug>/<session id>) and the session's transcript in
+//! ~/.claude/projects/<slug>/<session id>.jsonl. The slug is the project's path with every
 //! character that isn't a letter or digit turned into '-': C:\Workspace\storefront becomes
-//! "C--Workspace-storefront".
+//! "C--Workspace-storefront", and /Users/me/code/storefront "-Users-me-code-storefront".
 
 use super::{ago, cands, entries, judge, name_of, tally_many, too_fresh, Cand, Found, TrashCtx, ENTRY_CAP, IN_USE};
 use crate::util::ellipsize;
@@ -13,7 +14,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub(super) fn find(ctx: &TrashCtx, min_age: u64) -> Found {
-    let root = ctx.paths.temp.join("claude");
+    let root = ctx.paths.claude_scratch();
     if !root.is_dir() {
         return Found::none();
     }
@@ -124,7 +125,7 @@ fn slugify(name: &str) -> String {
 
 /// A short, human name for the project a slug stands for: "storefront", or
 /// "Desktop-Client (worktree fix-dates)". Checks the disk so names with dashes survive.
-pub(super) fn project_name(slug: &str) -> String {
+pub(crate) fn project_name(slug: &str) -> String {
     match resolve(slug) {
         Some(parts) if !parts.is_empty() => name_from_parts(&parts),
         _ => guess(slug),
@@ -134,11 +135,12 @@ pub(super) fn project_name(slug: &str) -> String {
 /// Walks the disk from the drive down, matching folder names against the slug. Returns the
 /// folder names it found, plus whatever was left over (a folder that's gone now) as the last part.
 fn resolve(slug: &str) -> Option<Vec<String>> {
-    let (drive, rest) = slug.split_once("--")?;
-    if drive.len() != 1 || !drive.chars().all(|c| c.is_ascii_alphabetic()) {
-        return None;
-    }
-    let mut cur = PathBuf::from(format!("{drive}:\\"));
+    let (mut cur, rest) = match slug.split_once("--") {
+        Some((drive, rest)) if drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic()) => (PathBuf::from(format!("{drive}:\\")), rest),
+        // A Mac's paths start at "/", so its slugs start with "-".
+        _ if cfg!(unix) && slug.starts_with('-') => (PathBuf::from("/"), &slug[1..]),
+        _ => return None,
+    };
     if !cur.is_dir() {
         return None;
     }
@@ -197,7 +199,7 @@ fn name_from_parts(parts: &[String]) -> String {
 
 /// When the folders are gone: drop the drive and the usual workspace prefixes.
 fn guess(slug: &str) -> String {
-    let rest = slug.split_once("--").map(|(_, r)| r).unwrap_or(slug);
+    let rest = slug.split_once("--").map(|(_, r)| r).unwrap_or(slug).trim_start_matches('-');
     for prefix in ["Workspace-", "workspace-", "Projects-", "projects-", "Code-", "code-", "dev-", "src-", "repos-"] {
         if let Some(r) = rest.strip_prefix(prefix) {
             return r.to_string();
@@ -370,6 +372,9 @@ mod tests {
         assert_eq!(guess("C--Workspace-storefront"), "storefront");
         assert_eq!(guess("C--Users-me-side-project"), "side-project");
         assert_eq!(guess("C--Users-me"), "home folder");
+        // A Mac's slugs start at "/".
+        assert_eq!(guess("-Users-me-side-project"), "side-project");
+        assert_eq!(guess("-Users-me"), "home folder");
         // Same answer whether or not C:\Workspace exists on this machine.
         assert_eq!(project_name("C--Workspace-nosuchproject-mom"), "nosuchproject-mom");
         let parts = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();

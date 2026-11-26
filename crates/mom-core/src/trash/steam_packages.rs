@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn sets_steam_uses_stay_and_a_zip_no_manifest_names_is_left_over() {
-        let dir = std::env::temp_dir().join(format!("mom-steam-packages-{}", std::process::id()));
+        let dir = crate::util::temp_dir().join(format!("mom-steam-packages-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let w = |n: &str, s: &str| std::fs::write(dir.join(n), s).unwrap();

@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn noted_finds_nothing_in_an_empty_folder() {
-        let dir = std::env::temp_dir().join(format!("mom-dumps-{}", std::process::id()));
+        let dir = crate::util::temp_dir().join(format!("mom-dumps-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(noted(&dir).is_empty(), "only files that are there");
         std::fs::remove_dir_all(&dir).unwrap();

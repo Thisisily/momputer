@@ -296,6 +296,14 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
         src(claude.join("paste-cache"), ("Pasted text", "pasted text"), any),
         src(home.clone(), ("Half-written settings", "half-written copies of .claude.json"), |n| n.starts_with(".claude.json.tmp.")).files(),
         src(temp.clone(), ("Temp folder", "temp folders"), |n| n.to_ascii_lowercase().starts_with("claude-")),
+        // Claude Code keeps each version it updated to (a few hundred megabytes apiece). The
+        // newest stays, and so does any that a session still open was started from.
+        src(home.join(".local").join("share").join("claude").join("versions"), ("Older Claude Code version", "older Claude Code versions"), |n| {
+            n.starts_with(|c: char| c.is_ascii_digit())
+        })
+        .files()
+        .keep_newest(1)
+        .named(|_, rel| format!("version {}", rel[0])),
     ];
     for project in subdirs(&nodejs_cache, &[]) {
         claude_junk.push(
@@ -604,6 +612,16 @@ fn agents(ctx: &TrashCtx) -> Vec<Agent> {
     }
     // Epic's webcache and overlay BrowserCache are complete browser profiles, including sign-ins.
     // Only their disposable subcaches are collected by browser-cache.
+    // Docker Desktop unpacks an update here before putting it in place. One that never finished
+    // (the Mac slept, the update was cancelled) stays for good.
+    if p.is_mac() {
+        let docker = roaming.join("com.docker.install");
+        list.push(agent("Docker Desktop", Spot::Apps, vec![docker.clone()]).junk(vec![src(docker, ("Unfinished update", "an update that never finished"), |n| n == "in_progress")
+            .named(|_, _| "update that never finished".into())]));
+        // Adobe's apps write a log for every start and never clear them.
+        let adobe_logs = p.library().join("Logs").join("CreativeCloud");
+        list.push(agent("Adobe", Spot::Apps, vec![adobe_logs.clone()]).junk(vec![src(adobe_logs, ("Old log", "old logs"), any).named(|_, rel| format!("Creative Cloud logs, {}", rel[0]))]));
+    }
     list.push(agent("PowerToys", Spot::Apps, vec![local.join("Microsoft").join("PowerToys")]).junk(vec![src(
         local.join("Microsoft").join("PowerToys").join("Updates"),
         ("Downloaded update", "downloaded update installers"),
@@ -1215,7 +1233,8 @@ fn uninstalled(mut c: Cand, program: Option<String>) -> Cand {
 
 fn judge(c: Cand, ctx: &TrashCtx, min_age: u64, sessions: bool) -> Cand {
     let c = c.age_sensitive();
-    if c.links > 0 {
+    // (On a Mac a link inside a folder is ordinary, and never followed: see `trash::find`.)
+    if c.links > 0 && !ctx.paths.is_mac() {
         c.verdict(false, LINKED)
     } else if sessions && ctx.session_live(&name_of(&c.path)) {
         c.verdict(false, "Session is still running")
@@ -1726,6 +1745,8 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
+    // About Windows' own folders, read by Windows' own rules for paths.
+    #[cfg(windows)]
     #[test]
     fn windows_leftovers_are_found_at_the_top_of_every_drive() {
         let root = fixture("drives");

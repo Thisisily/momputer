@@ -33,9 +33,13 @@
     }
   };
 
-  // Phones, Macs and Linux get a gentle note: momputer is for Windows.
+  // A Mac is told how to get her there (no download yet). Phones and Linux get a gentle note.
   const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
-  if (!/^win/i.test(platform) && !/Windows NT/i.test(navigator.userAgent)) $("not-windows").hidden = false;
+  const windows = /^win/i.test(platform) || /Windows NT/i.test(navigator.userAgent);
+  // An iPad says it's a Mac too; a Mac has no touch screen.
+  const mac = !windows && /mac/i.test(platform) && !(navigator.maxTouchPoints > 1);
+  if (mac && $("on-mac")) $("on-mac").hidden = false;
+  else if (!windows) $("not-windows").hidden = false;
 
   function ready(release, main, msi, sums) {
     const version = String(release.tag_name || "").replace(/^v/i, "");

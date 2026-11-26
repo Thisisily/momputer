@@ -4,8 +4,10 @@
 //! * She checks each process's start time right before stopping it, so a recycled PID is
 //!   never mistaken for the original.
 //! * She never stops herself, whoever ran her (the agent and its shell), agents themselves,
-//!   or Windows' own processes.
+//!   or the system's own processes.
 //! * Children go first, then the parent, so nothing gets re-spawned by a watcher.
+//! * On a Mac she asks first (the signal a program gets to close its files and free its port
+//!   on), and only ends what's still there a moment later.
 
 use crate::agents;
 use crate::classify;
@@ -148,13 +150,107 @@ pub fn terminate(pid: u32, expected_start: u64) -> Result<bool, String> {
     }
 }
 
-#[cfg(not(windows))]
-pub fn terminate(pid: u32, _expected_start: u64) -> Result<bool, String> {
-    let out = std::process::Command::new("kill")
-        .args(["-9", &pid.to_string()])
-        .output()
-        .map_err(|e| e.to_string())?;
-    Ok(out.status.success())
+#[cfg(unix)]
+pub fn terminate(pid: u32, expected_start: u64) -> Result<bool, String> {
+    use std::time::{Duration, Instant};
+    // PID 0 and negative numbers mean "a whole group of processes" to `kill`. Never.
+    let Some(target) = i32::try_from(pid).ok().filter(|p| *p > 1) else {
+        return Err("not a process mom may stop".into());
+    };
+    // Still the one that was asked about? (None where mom can't tell: then it's taken on trust,
+    // as it always was off Windows.)
+    let same = || crate::procs::started(pid).map(|s| s.is_some_and(|s| expected_start == 0 || s.abs_diff(expected_start) <= 2));
+    if same() == Some(false) {
+        return Ok(false);
+    }
+    let send = |signal: i32| -> Result<bool, String> {
+        // SAFETY: a signal to one process of ours, by number.
+        if unsafe { libc::kill(target, signal) } == 0 {
+            return Ok(true);
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ESRCH) => Ok(false),
+            Some(libc::EPERM) => Err("not allowed (it may be running as root, or as someone else)".into()),
+            _ => Err(format!("couldn't signal it ({})", std::io::Error::last_os_error())),
+        }
+    };
+    let gone_within = |wait: Duration| {
+        let until = Instant::now() + wait;
+        loop {
+            let there = match same() {
+                Some(there) => there,
+                // SAFETY: signal 0 only asks whether the process is there.
+                None => unsafe { libc::kill(target, 0) == 0 },
+            };
+            if !there {
+                return true;
+            }
+            if Instant::now() >= until {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    // Asked first: a server gets to close what it has open and let go of its port.
+    if !send(libc::SIGTERM)? {
+        return Ok(false);
+    }
+    if gone_within(Duration::from_millis(1500)) {
+        return Ok(true);
+    }
+    // It didn't listen (or is busy shutting down). Checked once more, then ended.
+    if same() == Some(false) || !send(libc::SIGKILL)? {
+        return Ok(true);
+    }
+    if gone_within(Duration::from_secs(2)) {
+        Ok(true)
+    } else {
+        Err("it's still there after being told to stop".into())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use super::*;
+
+    #[test]
+    fn stops_a_real_child_process_and_respects_start_times() {
+        let mut child = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        let pid = child.id();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let t = crate::procs::Sampler::new().sample();
+        let p = t.get(pid).expect("child should be visible").clone();
+        assert_eq!(p.session, 1, "it's ours");
+
+        // Wrong start time: mom must refuse to touch it (where she can tell when it started).
+        if crate::procs::started(pid).is_some() {
+            assert_eq!(terminate(pid, p.start + 1000), Ok(false));
+            assert!(child.try_wait().unwrap().is_none(), "still running");
+        }
+        // Collected as it ends, the way a shell collects what it started.
+        let waiter = std::thread::spawn(move || child.wait());
+        assert_eq!(terminate(pid, p.start), Ok(true));
+        assert!(waiter.join().unwrap().is_ok());
+        // Gone already: not an error.
+        assert_eq!(terminate(pid, p.start), Ok(false));
+    }
+
+    #[test]
+    fn a_program_that_ignores_being_asked_is_ended_anyway() {
+        let mut child = std::process::Command::new("sh").args(["-c", "trap '' TERM; while :; do sleep 1; done"]).spawn().unwrap();
+        let pid = child.id();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let waiter = std::thread::spawn(move || child.wait());
+        assert_eq!(terminate(pid, 0), Ok(true));
+        assert!(waiter.join().unwrap().is_ok());
+    }
+
+    #[test]
+    fn never_signals_a_group_or_the_first_process() {
+        assert!(terminate(0, 0).is_err());
+        assert!(terminate(1, 0).is_err());
+        assert!(terminate(u32::MAX, 0).is_err());
+    }
 }
 
 #[cfg(all(test, windows))]

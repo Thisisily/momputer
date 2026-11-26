@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn install_and_remove_in_a_fake_home() {
-        let root = std::env::temp_dir().join(format!("mom-rules-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-rules-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         std::fs::create_dir_all(paths.claude_dir()).unwrap();

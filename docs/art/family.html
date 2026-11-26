@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- The README's second picture: the widget on a Mac, BIG MODE, and the widget on Windows, all
+     three the app itself, running with its sample data. Rendered to PNG by scripts/images.py,
+     which presses the buttons that put each one on the view it shows. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>momputer: on a Mac, in BIG MODE, on Windows</title>
+<link rel="stylesheet" href="/app/ui/styles.css">
+<style>
+  html, body { height: 100%; margin: 0; overflow: hidden; }
+  body {
+    position: relative;
+    perspective: 2600px;
+    background:
+      radial-gradient(ellipse at 50% 40%, rgba(255, 255, 255, 0.11), transparent 60%),
+      radial-gradient(ellipse at 4% 96%, rgba(47, 224, 122, 0.07), transparent 40%),
+      radial-gradient(ellipse at 97% 6%, rgba(255, 59, 71, 0.08), transparent 40%),
+      radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.075) 1px, transparent 1.6px) 0 0 / 24px 24px,
+      #050505;
+    font-family: "Geist", "Segoe UI", sans-serif;
+  }
+  /* Each window is the app at its real size, made smaller here. (The names start with "pane":
+     the app's stylesheet, linked for its fonts, has a .big of its own.) */
+  .window { position: absolute; overflow: hidden; background: #000; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 60px 110px -30px rgba(0, 0, 0, 0.95), 0 0 120px -40px rgba(255, 255, 255, 0.16); }
+  .window iframe { display: block; border: 0; max-width: none; transform-origin: 0 0; }
+  .pane-big { left: 315px; top: 44px; width: 870px; height: 558px; border-radius: 21px; }
+  .pane-big iframe { width: 1280px; height: 820px; transform: scale(0.68); }
+  .pane-side { top: 128px; width: 280px; height: 448px; border-radius: 18px; z-index: 2; }
+  .pane-side iframe { width: 500px; height: 800px; transform: scale(0.56); }
+  .pane-mac { left: 22px; transform: rotateY(13deg); transform-origin: 100% 50%; }
+  .pane-win { right: 22px; transform: rotateY(-13deg); transform-origin: 0 50%; }
+  .label { position: absolute; top: 640px; text-align: center; color: #8c8c8c; font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600; white-space: nowrap; }
+  .label b { font-family: "Doto", monospace; font-variation-settings: "ROND" 100; font-weight: 900; color: #fff; letter-spacing: 0.13em; }
+  .label.l { left: 22px; width: 280px; }
+  .label.c { left: 315px; width: 870px; }
+  .label.r { right: 22px; width: 280px; }
+</style>
+</head>
+<body>
+  <div class="window pane-big"><iframe id="big" src="/app/ui/index.html?as=windows" title="BIG MODE"></iframe></div>
+  <div class="window pane-side pane-mac"><iframe id="mac" src="/app/ui/index.html?as=mac" title="The widget on a Mac"></iframe></div>
+  <div class="window pane-side pane-win"><iframe id="win" src="/app/ui/index.html?as=windows" title="The widget on Windows"></iframe></div>
+  <div class="label l">On a Mac, in the menu bar</div>
+  <div class="label c"><b>BIG MODE</b> · your computer on mom's desk</div>
+  <div class="label r">On Windows, by the clock</div>
+</body>
+</html>

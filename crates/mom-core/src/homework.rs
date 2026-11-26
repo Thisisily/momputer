@@ -1126,10 +1126,20 @@ impl Places {
         let mut temps = vec![norm_path(&paths.temp.to_string_lossy())];
         // A made-up layout (tests) has only its own Temp.
         let fixture = paths.system_drive.parent().is_some();
-        for t in [std::env::temp_dir(), paths.local_appdata.join("Temp")].into_iter().filter(|_| !fixture) {
+        for t in [crate::util::temp_dir(), paths.local_appdata.join("Temp")].into_iter().filter(|_| !fixture) {
             let n = norm_path(&t.to_string_lossy());
             if !temps.contains(&n) {
                 temps.push(n);
+            }
+        }
+        // A Mac has two: its own, and the one everyone shares. Each also goes by a shorter name
+        // (/tmp and /var are links to /private/tmp and /private/var), and agents use both.
+        if paths.is_mac() {
+            temps.push(norm_path(&paths.shared_temp.to_string_lossy()));
+            for t in temps.clone() {
+                if let Some(short) = t.strip_prefix("\\private\\").map(|rest| format!("\\{rest}")).filter(|s| !temps.contains(s)) {
+                    temps.push(short);
+                }
             }
         }
         Places { home: paths.home.to_string_lossy().to_string(), temps }
@@ -1150,6 +1160,10 @@ impl Places {
             format!("{}{}", self.home, &t[v.len()..])
         } else if t.starts_with('$') || t.starts_with('%') {
             return Place::Unknown;
+        } else if cfg!(unix) && t.starts_with('/') {
+            // On a Mac that's simply a whole path. (On Windows it's Git Bash's or WSL's spelling
+            // of one, or a path inside a container: see below.)
+            t.to_string()
         } else if let Some(rest) = drive_from_unix(t) {
             rest
         } else if is_absolute(t) {
@@ -1216,7 +1230,7 @@ mod tests {
     use serde_json::json;
 
     fn fixture(tag: &str) -> (PathBuf, Paths) {
-        let root = std::env::temp_dir().join(format!("mom-homework-{tag}-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-homework-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         (root, paths)
@@ -1279,7 +1293,7 @@ mod tests {
         let cwd = root.join("work").join("storefront").to_string_lossy().to_string();
         let id = "0199c2f4-1a2b-7c3d-8e4f-5a6b7c8d9e0f";
         let day = chrono::Local::now().format("%Y/%m/%d").to_string();
-        let log = paths.codex_dir().join("sessions").join(day.replace('/', "\\")).join(format!("rollout-2026-10-14T10-00-00-{id}.jsonl"));
+        let log = day.split('/').fold(paths.codex_dir().join("sessions"), |dir, part| dir.join(part)).join(format!("rollout-2026-10-14T10-00-00-{id}.jsonl"));
         let item = |item: Value, s: u32| json!({"timestamp": format!("2026-10-14T10:{s:02}:00Z"), "type": "event_msg", "payload": {"type": "item_completed", "item": item}});
         write_lines(&log, &[
             json!({"timestamp": "2026-10-14T10:00:00Z", "type": "session_meta", "payload": {"id": id, "cwd": format!("\\\\?\\{cwd}")}}),
@@ -1380,7 +1394,7 @@ mod tests {
         let cwd = root.join("work").join("atlas").to_string_lossy().to_string();
         let id = "0199c2f4-1a2b-7c3d-8e4f-5a6b7c8d9e01";
         let day = chrono::Local::now().format("%Y/%m/%d").to_string();
-        let log = paths.codex_dir().join("sessions").join(day.replace('/', "\\")).join(format!("rollout-2026-10-14T10-00-00-{id}.jsonl"));
+        let log = day.split('/').fold(paths.codex_dir().join("sessions"), |dir, part| dir.join(part)).join(format!("rollout-2026-10-14T10-00-00-{id}.jsonl"));
         let item = |item: Value, s: u32| json!({"timestamp": format!("2026-10-14T10:{s:02}:00Z"), "type": "event_msg", "payload": {"type": "item_completed", "item": item}});
         write_lines(&log, &[
             json!({"timestamp": "2026-10-14T10:00:00Z", "type": "session_meta", "payload": {"id": id, "cwd": cwd}}),
@@ -1420,7 +1434,9 @@ mod tests {
         assert_eq!(p.place("$env:TEMP\\x", &cwd), Place::Temp);
         assert_eq!(p.place("~/Documents", &cwd), Place::Outside);
         assert_eq!(p.place("$somewhere", &cwd), Place::Unknown);
-        assert_eq!(p.place("/var/tmp/x", &cwd), Place::Unknown);
+        // On Windows that's a path in WSL or a container, which mom can't place. On a Mac it's a
+        // path like any other.
+        assert_eq!(p.place("/var/tmp/x", &cwd), if cfg!(windows) { Place::Unknown } else { Place::Outside });
         assert_eq!(p.place(&cwd, ""), Place::Unknown, "no project folder known: can't be outside it");
         assert_eq!(drive_from_unix("/c/Users/x").as_deref(), Some("C:\\Users\\x"));
         assert_eq!(resolve_dots(r"C:\a\b\..\c\.\d"), r"c:\a\c\d");

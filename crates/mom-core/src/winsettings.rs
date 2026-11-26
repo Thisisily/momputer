@@ -2152,6 +2152,8 @@ mod tests {
         }
     }
 
+    // About Windows' own folders, read by Windows' own rules for paths.
+    #[cfg(windows)]
     #[test]
     fn terminals_open_in_windows_terminal_draw_with_a_proper_font_and_speak_utf8() {
         let mut m = Fake::new();
@@ -2197,6 +2199,8 @@ mod tests {
         assert!(terminal(&m).is_empty(), "the Fake lists no PSReadLine folders");
     }
 
+    // About Windows' own folders, read by Windows' own rules for paths.
+    #[cfg(windows)]
     #[test]
     fn powershell_7_is_found_for_msi_msix_aliases_and_portable_installs() {
         let pf = r"C:\Program Files";
@@ -2233,7 +2237,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn executable_version_rejects_an_inert_pwsh_file() {
-        let root = std::env::temp_dir().join(format!("mom-pwsh-probe-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-pwsh-probe-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("pwsh.exe");
         std::fs::write(&path, b"not an executable").unwrap();
@@ -2441,7 +2445,7 @@ mod tests {
 
     #[test]
     fn a_fix_backs_up_first_and_undo_puts_it_back() {
-        let root = std::env::temp_dir().join(format!("mom-winsettings-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-winsettings-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         let m = Fake::new();
@@ -2470,7 +2474,7 @@ mod tests {
 
     #[test]
     fn undo_only_trusts_backups_of_your_own_settings() {
-        let root = std::env::temp_dir().join(format!("mom-winsettings-undo-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-winsettings-undo-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         let m = Fake::new();

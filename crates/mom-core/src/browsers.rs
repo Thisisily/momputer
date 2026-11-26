@@ -103,6 +103,27 @@ const BROWSERS: &[(&str, &str, &str, &str, &str)] = &[
     ("vivaldi", "Vivaldi", r"Vivaldi\User Data", "vivaldi.exe", "vivaldi"),
 ];
 
+/// The same browsers on a Mac: (id, where its profiles are under ~/Library/Application Support,
+/// what its processes' names start with). A Mac keeps a profile's saved pages apart from it,
+/// in the same place under ~/Library/Caches.
+const MAC_BROWSERS: &[(&str, &str, &str)] = &[
+    ("chrome", "Google/Chrome", "google chrome"),
+    ("edge", "Microsoft Edge", "microsoft edge"),
+    ("brave", "BraveSoftware/Brave-Browser", "brave browser"),
+    ("vivaldi", "Vivaldi", "vivaldi"),
+];
+
+/// Where a browser keeps its profiles on this system, and (on a Mac) their saved pages.
+fn homes(id: &str, folder: &str) -> Option<(PathBuf, Option<PathBuf>)> {
+    if cfg!(target_os = "macos") {
+        let library = dirs::home_dir()?.join("Library");
+        let (_, place, _) = MAC_BROWSERS.iter().find(|b| b.0 == id)?;
+        let under = |base: &str| place.split('/').fold(library.join(base), |p, part| p.join(part));
+        return Some((under("Application Support"), Some(under("Caches"))));
+    }
+    Some((std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?.join(folder), None))
+}
+
 static CACHE: Mutex<Option<(u64, Vec<Browser>)>> = Mutex::new(None);
 
 /// Every browser, its profiles and extensions. Folder sizes take a moment, so it's kept for five
@@ -116,10 +137,9 @@ pub fn list(table: &ProcTable, fresh: bool) -> Vec<Browser> {
             }
         }
     }
-    let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) else { return vec![] };
     let mut out = Vec::new();
     for (id, name, folder, _, scheme) in BROWSERS {
-        let root = local.join(folder);
+        let Some((root, saved)) = homes(id, folder) else { continue };
         if !root.join("Local State").is_file() {
             continue;
         }
@@ -132,7 +152,7 @@ pub fn list(table: &ProcTable, fresh: bool) -> Vec<Browser> {
             mem: 0,
             restart: format!("{scheme}://restart"),
             extensions_page: format!("{scheme}://extensions"),
-            profiles: profiles(&root, scheme, now),
+            profiles: profiles(&root, saved.as_deref(), scheme, now),
         });
     }
     *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((now, out.clone()));
@@ -143,7 +163,16 @@ pub fn list(table: &ProcTable, fresh: bool) -> Vec<Browser> {
 fn with_running(mut list: Vec<Browser>, table: &ProcTable, now: u64) -> Vec<Browser> {
     for b in &mut list {
         let Some((_, _, _, exe, _)) = BROWSERS.iter().find(|x| x.0 == b.id) else { continue };
-        let procs: Vec<_> = table.procs.values().filter(|p| p.name.eq_ignore_ascii_case(exe)).collect();
+        // On a Mac a browser's helpers carry its name with more after it ("Google Chrome Helper").
+        let mac = MAC_BROWSERS.iter().find(|x| x.0 == b.id).map(|x| x.2).filter(|_| cfg!(target_os = "macos"));
+        let procs: Vec<_> = table
+            .procs
+            .values()
+            .filter(|p| match mac {
+                Some(starts) => p.name.to_ascii_lowercase().starts_with(starts),
+                None => p.name.eq_ignore_ascii_case(exe),
+            })
+            .collect();
         b.open = !procs.is_empty();
         b.processes = procs.len() as u32;
         b.mem = procs.iter().map(|p| p.mem).sum();
@@ -174,7 +203,7 @@ fn cache_part(name: &str) -> bool {
     crate::browser_data::CHROMIUM_CACHE_DIRS.iter().any(|cache| cache.eq_ignore_ascii_case(name))
 }
 
-fn profiles(root: &Path, scheme: &str, now: u64) -> Vec<Profile> {
+fn profiles(root: &Path, saved: Option<&Path>, scheme: &str, now: u64) -> Vec<Profile> {
     let Some(state) = read_json(&root.join("Local State")) else { return vec![] };
     let Some(cache) = state.pointer("/profile/info_cache").and_then(Value::as_object) else { return vec![] };
     let dirs: Vec<(String, Value)> = cache.iter().filter(|(k, _)| root.join(k).is_dir()).map(|(k, v)| (k.clone(), v.clone())).collect();
@@ -183,6 +212,10 @@ fn profiles(root: &Path, scheme: &str, now: u64) -> Vec<Profile> {
     let mut parts: Vec<(usize, String, PathBuf)> = Vec::new();
     for (i, (dir, _)) in dirs.iter().enumerate() {
         for e in std::fs::read_dir(root.join(dir)).into_iter().flatten().flatten() {
+            parts.push((i, e.file_name().to_string_lossy().to_lowercase(), e.path()));
+        }
+        // And what a Mac keeps of it under Caches: its saved pages and scripts.
+        for e in saved.into_iter().flat_map(|s| std::fs::read_dir(s.join(dir)).into_iter().flatten().flatten()) {
             parts.push((i, e.file_name().to_string_lossy().to_lowercase(), e.path()));
         }
     }
@@ -488,7 +521,7 @@ mod tests {
             connection.execute_batch("CREATE TABLE cookies (host_key TEXT); INSERT INTO cookies VALUES ('one.example'), ('one.example'), ('two.example');").unwrap();
         }
         let before = std::fs::read(&cookies).unwrap();
-        let found = profiles(&fixture.0, "chrome", 1_800_000_000);
+        let found = profiles(&fixture.0, None, "chrome", 1_800_000_000);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].cookies_bytes, before.len() as u64);
         assert_eq!(found[0].cookies, None);

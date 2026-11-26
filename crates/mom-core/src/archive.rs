@@ -202,7 +202,21 @@ pub fn free_space(p: &Path) -> Option<u64> {
         let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
         (unsafe { GetDiskFreeSpaceExW(w.as_ptr(), &mut avail, &mut total, &mut free) } != 0).then_some(avail)
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let mut dir = p.to_path_buf();
+        while !dir.exists() {
+            dir = dir.parent()?.to_path_buf();
+        }
+        let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+        // SAFETY: a NUL-terminated path of ours, and plain data for the answer.
+        unsafe {
+            let mut fs: libc::statvfs = std::mem::zeroed();
+            (libc::statvfs(c.as_ptr(), &mut fs) == 0).then(|| (fs.f_bavail as u64).saturating_mul(fs.f_frsize as u64))
+        }
+    }
+    #[cfg(not(any(windows, unix)))]
     {
         let _ = p;
         None
@@ -378,7 +392,7 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> (PathBuf, Paths) {
-        let root = std::env::temp_dir().join(format!("mom-archive-{name}-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-archive-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         (root, paths)

@@ -489,6 +489,13 @@ pub fn install_cli(paths: &Paths, from: &Path) -> anyhow::Result<PathBuf> {
             return Err(e.into());
         }
     }
+    // A copy is only a program if it may be run, and the one it was copied from isn't always
+    // marked so (the one a build puts next to the app isn't).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755));
+    }
     Ok(to)
 }
 
@@ -661,7 +668,7 @@ mod tests {
     use super::*;
 
     fn fake_home(tag: &str) -> (PathBuf, Paths) {
-        let root = std::env::temp_dir().join(format!("mom-hooks-{tag}-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-hooks-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         std::fs::create_dir_all(paths.claude_dir()).unwrap();

@@ -247,6 +247,8 @@ fn steam_id(key: &str, uninstall: &str) -> Option<String> {
 /// What Steam itself records about an installed game.
 #[derive(Clone, Debug, PartialEq)]
 struct SteamGame {
+    /// What Steam calls it.
+    name: String,
     dir: PathBuf,
     size: u64,
     /// When it was last played; never played, when it was installed or last updated.
@@ -267,6 +269,7 @@ fn steam_game(library: &Path, manifest: &str) -> Option<SteamGame> {
     let number = |key: &str| value(key).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
     let played = number("LastPlayed");
     Some(SteamGame {
+        name: value("name").unwrap_or_default(),
         dir: library.join("steamapps").join("common").join(folder),
         size: number("SizeOnDisk"),
         last: if played > 0 { played } else { number("LastUpdated") },
@@ -274,56 +277,136 @@ fn steam_game(library: &Path, manifest: &str) -> Option<SteamGame> {
     })
 }
 
+/// Where Steam is installed: Windows keeps that in the registry; on a Mac it's in the Library.
+fn steam_root() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        use crate::health::reg::{string_values, Hive};
+        string_values(Hive::CurrentUser, r"Software\Valve\Steam")
+            .into_iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("SteamPath"))
+            .map(|(_, v)| PathBuf::from(v.trim().replace('/', "\\")))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs::home_dir().map(|h| h.join("Library").join("Application Support").join("Steam"))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        None
+    }
+}
+
 /// Every game Steam has installed, by its number: read from Steam's library list and the record
 /// it keeps for each game. Only libraries on drives built into this PC are looked in, and
 /// nothing that is a link is opened: Steam's folders can be written by other accounts.
 fn steam_games() -> std::collections::HashMap<String, SteamGame> {
-    let mut out = std::collections::HashMap::new();
+    let Some(steam) = steam_root() else { return std::collections::HashMap::new() };
     #[cfg(windows)]
-    {
-        use crate::health::reg::{string_values, Hive};
-        let Some(steam) = string_values(Hive::CurrentUser, r"Software\Valve\Steam")
-            .into_iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("SteamPath"))
-            .map(|(_, v)| PathBuf::from(v.trim().replace('/', "\\")))
-        else {
-            return out;
-        };
-        let real = |p: &Path, dir: bool| std::fs::symlink_metadata(p).is_ok_and(|m| !m.is_symlink() && m.is_dir() == dir);
-        let drives: Vec<String> = crate::util::fixed_drives().iter().map(|d| d.to_ascii_lowercase()).collect();
-        let on_this_pc = |p: &Path| {
-            let s = p.to_string_lossy().to_ascii_lowercase();
-            drives.iter().any(|d| s.starts_with(d.as_str()))
-        };
-        let mut libraries = vec![steam.clone()];
-        let list = steam.join("steamapps").join("libraryfolders.vdf");
-        if real(&list, false) && std::fs::metadata(&list).is_ok_and(|m| m.len() <= 4 << 20) {
-            for line in std::fs::read_to_string(&list).unwrap_or_default().lines() {
-                let mut parts = line.trim().split('"');
-                if parts.nth(1) == Some("path") {
-                    if let Some(p) = parts.nth(1) {
-                        libraries.push(PathBuf::from(p.replace(r"\\", "\\")));
+    let drives: Vec<String> = crate::util::fixed_drives().iter().map(|d| d.to_ascii_lowercase()).collect();
+    #[cfg(windows)]
+    let on_this_pc = |p: &Path| {
+        let s = p.to_string_lossy().to_ascii_lowercase();
+        drives.iter().any(|d| s.starts_with(d.as_str()))
+    };
+    // On a Mac a disk you plugged in is under /Volumes.
+    #[cfg(not(windows))]
+    let on_this_pc = |p: &Path| !p.starts_with("/Volumes");
+    steam_games_in(&steam, on_this_pc)
+}
+
+/// When each game was last played on this Steam account, by its number, from the file Steam
+/// keeps for each person who signed in here (userdata/<person>/config/localconfig.vdf):
+///
+/// ```text
+/// "apps" { "440" { "LastPlayed" "1790809334" ... } ... }
+/// ```
+///
+/// Steam on a Mac leaves a game's own record saying it was never played, so this is where its
+/// last play is written down. It's the account's, so a game played on another computer counts.
+#[cfg(any(target_os = "macos", test))]
+fn steam_plays(localconfig: &str) -> std::collections::HashMap<String, u64> {
+    let mut out = std::collections::HashMap::new();
+    // The blocks we're inside, outermost first, and the name waiting for its "{".
+    let mut inside: Vec<&str> = Vec::new();
+    let mut named = "";
+    for line in localconfig.lines() {
+        let line = line.trim();
+        match line {
+            "{" => inside.push(std::mem::take(&mut named)),
+            "}" => {
+                inside.pop();
+            }
+            _ => {
+                let mut parts = line.split('"');
+                let (Some(key), value) = (parts.nth(1), parts.nth(1)) else { continue };
+                match value {
+                    None => named = key,
+                    Some(value) if key == "LastPlayed" => {
+                        let [.., apps, id] = inside.as_slice() else { continue };
+                        if apps.eq_ignore_ascii_case("apps") && !id.is_empty() && id.len() <= 10 && id.bytes().all(|b| b.is_ascii_digit()) {
+                            let at = value.parse::<u64>().unwrap_or(0);
+                            let best = out.entry(id.to_string()).or_insert(0);
+                            *best = (*best).max(at);
+                        }
                     }
+                    Some(_) => {}
                 }
             }
         }
-        for lib in libraries.iter().filter(|l| on_this_pc(l)) {
-            let apps = lib.join("steamapps");
-            if !real(lib, true) || !real(&apps, true) {
+    }
+    out
+}
+
+/// The same, for everyone who signed in to Steam here: the newest play of each game.
+#[cfg(target_os = "macos")]
+fn steam_plays_in(steam: &Path) -> std::collections::HashMap<String, u64> {
+    let mut out = std::collections::HashMap::new();
+    let real = |p: &Path, dir: bool| std::fs::symlink_metadata(p).is_ok_and(|m| !m.is_symlink() && m.is_dir() == dir);
+    for person in dirs_in(&steam.join("userdata")).into_iter().take(16) {
+        let file = person.join("config").join("localconfig.vdf");
+        if !real(&person, true) || !real(&file, false) || std::fs::metadata(&file).is_ok_and(|m| m.len() > 32 << 20) {
+            continue;
+        }
+        for (id, at) in steam_plays(&String::from_utf8_lossy(&std::fs::read(&file).unwrap_or_default())) {
+            let best = out.entry(id).or_insert(0);
+            *best = (*best).max(at);
+        }
+    }
+    out
+}
+
+fn steam_games_in(steam: &Path, on_this_pc: impl Fn(&Path) -> bool) -> std::collections::HashMap<String, SteamGame> {
+    let mut out = std::collections::HashMap::new();
+    let real = |p: &Path, dir: bool| std::fs::symlink_metadata(p).is_ok_and(|m| !m.is_symlink() && m.is_dir() == dir);
+    let mut libraries = vec![steam.to_path_buf()];
+    let list = steam.join("steamapps").join("libraryfolders.vdf");
+    if real(&list, false) && std::fs::metadata(&list).is_ok_and(|m| m.len() <= 4 << 20) {
+        for line in std::fs::read_to_string(&list).unwrap_or_default().lines() {
+            let mut parts = line.trim().split('"');
+            if parts.nth(1) == Some("path") {
+                if let Some(p) = parts.nth(1) {
+                    libraries.push(PathBuf::from(p.replace(r"\\", "\\")));
+                }
+            }
+        }
+    }
+    for lib in libraries.iter().filter(|l| on_this_pc(l)) {
+        let apps = lib.join("steamapps");
+        if !real(lib, true) || !real(&apps, true) {
+            continue;
+        }
+        for e in std::fs::read_dir(&apps).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let Some(id) = name.strip_prefix("appmanifest_").and_then(|n| n.strip_suffix(".acf")) else { continue };
+            if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) || !real(&e.path(), false) {
                 continue;
             }
-            for e in std::fs::read_dir(&apps).into_iter().flatten().flatten() {
-                let name = e.file_name().to_string_lossy().to_string();
-                let Some(id) = name.strip_prefix("appmanifest_").and_then(|n| n.strip_suffix(".acf")) else { continue };
-                if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) || !real(&e.path(), false) {
-                    continue;
-                }
-                if e.metadata().is_ok_and(|m| m.len() > 1 << 20) {
-                    continue; // these are a few hundred bytes
-                }
-                if let Some(g) = std::fs::read_to_string(e.path()).ok().and_then(|t| steam_game(lib, &t)) {
-                    out.entry(id.to_string()).or_insert(g);
-                }
+            if e.metadata().is_ok_and(|m| m.len() > 1 << 20) {
+                continue; // these are a few hundred bytes
+            }
+            if let Some(g) = std::fs::read_to_string(e.path()).ok().and_then(|t| steam_game(lib, &t)) {
+                out.entry(id.to_string()).or_insert(g);
             }
         }
     }
@@ -573,6 +656,14 @@ pub fn unused(paths: &Paths, table: &ProcTable, now: u64) -> Vec<App> {
             }
         }
     }
+    #[cfg(target_os = "macos")]
+    if paths.is_mac() {
+        let out = mac_unused(paths, table, now);
+        if let Ok(mut c) = CACHE.lock() {
+            *c = Some((now, out.clone()));
+        }
+        return out;
+    }
     let on_path: Vec<String> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).map(|d| d.to_string_lossy().to_ascii_lowercase()).collect())
         .unwrap_or_default();
@@ -630,9 +721,191 @@ pub fn unused(paths: &Paths, table: &ProcTable, now: u64) -> Vec<App> {
     out
 }
 
+/// The apps in a Mac's Applications folders (everyone's and yours), and in the folders one
+/// level inside them. Not the stand-ins a browser or Steam leaves there for a site or a game,
+/// and not what's really part of macOS (Safari only looks as if it's in Applications).
+#[cfg(target_os = "macos")]
+fn mac_apps(home: &Path) -> Vec<PathBuf> {
+    let is_app = |p: &Path| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("app"));
+    let real_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink());
+    let mut out = Vec::new();
+    for base in [PathBuf::from("/Applications"), home.join("Applications")] {
+        let mut folders = vec![base.clone()];
+        for e in std::fs::read_dir(&base).into_iter().flatten().flatten() {
+            let p = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
+            // "Chrome Apps.localized" holds a shortcut for each site you installed, not apps.
+            if real_dir(&p) && !is_app(&p) && !name.starts_with('.') && !name.contains(" Apps.") {
+                folders.push(p);
+            }
+        }
+        for folder in folders {
+            for e in std::fs::read_dir(&folder).into_iter().flatten().flatten().take(2_000) {
+                let p = e.path();
+                if !is_app(&p) || !real_dir(&p) {
+                    continue;
+                }
+                // Steam's shortcut to a game: a script that asks Steam to start it.
+                if p.join("Contents").join("MacOS").join("run.sh").is_file() {
+                    continue;
+                }
+                let really = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+                if really.starts_with("/System") || !p.join("Contents").join("Info.plist").is_file() {
+                    continue;
+                }
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// A Mac's apps and Steam games with no sign of use for a year. An app that's open counts as
+/// used now. Each is dated by the newest sign there is: when macOS last saw it opened, or when
+/// its own settings and data last changed. One that left no trace at all goes by when it was
+/// installed or last updated, and one whose traces macOS won't show isn't listed.
+#[cfg(target_os = "macos")]
+fn mac_unused(paths: &Paths, table: &ProcTable, now: u64) -> Vec<App> {
+    const YEAR: u64 = 365 * 86_400;
+    let running = crate::programs::image_paths(table);
+    // An app used from a terminal leaves none of these traces: one with a command on PATH
+    // (in a folder of its own, or a link from /usr/local/bin) stays off the list.
+    let mut commands: Vec<PathBuf> = Vec::new();
+    for dir in std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default().into_iter().take(64) {
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten().take(4_000) {
+            if let Ok(to) = std::fs::read_link(e.path()) {
+                commands.push(if to.is_absolute() { to } else { dir.join(to) });
+            }
+        }
+        commands.push(dir);
+    }
+    let candidates: Vec<PathBuf> = mac_apps(&paths.home)
+        .into_iter()
+        .filter(|app| {
+            let name = app.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            // An app in a folder of its own inside Applications ("Python 3.11") is a part of that.
+            let folder = app.parent().filter(|f| f.file_name().is_some_and(|n| n != "Applications")).map(name_of).unwrap_or_default();
+            let inside = format!("{}/", app.to_string_lossy());
+            !name.is_empty()
+                && !hands_off(&name)
+                && !is_plumbing(&name, "")
+                && !is_plumbing(&folder, "")
+                && !name.eq_ignore_ascii_case("momputer")
+                && !running.values().any(|exe| exe.starts_with(&inside))
+                && !commands.iter().any(|c| c.starts_with(app))
+        })
+        .collect();
+    // Asking macOS about an app takes a moment, so several are asked about at once.
+    let dated: Vec<Option<(u64, LastUsedSource)>> = std::thread::scope(|s| {
+        let home = &paths.home;
+        let workers: Vec<_> = candidates
+            .chunks(candidates.len().div_ceil(8).max(1))
+            .map(|some| s.spawn(move || some.iter().map(|app| crate::macos::app_last_used(home, app)).collect::<Vec<_>>()))
+            .collect();
+        workers.into_iter().flat_map(|w| w.join().unwrap_or_default()).collect()
+    });
+    let mut out: Vec<App> = Vec::new();
+    for (app, dated) in candidates.into_iter().zip(dated) {
+        let Some((last, source)) = dated.filter(|(t, _)| now.saturating_sub(*t) >= YEAR) else { continue };
+        out.push(App {
+            key: app.to_string_lossy().to_string(),
+            name: app.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+            publisher: String::new(),
+            version: String::new(),
+            size: 0,
+            last_used: Some(last),
+            last_used_source: Some(source),
+            dir: Some(app.to_string_lossy().to_string()),
+            from: None,
+            install_dir: Some(app),
+            steam: None,
+        });
+    }
+    // Steam's games: where, how big and when last played are Steam's to say. On a Mac the last
+    // play is in the account's own file; a game put on this Mac within the year isn't unused.
+    let plays = steam_root().map(|steam| steam_plays_in(&steam)).unwrap_or_default();
+    for (id, mut g) in steam_games() {
+        let Some(folder) = std::fs::symlink_metadata(&g.dir).ok().filter(|m| m.is_dir() && !m.file_type().is_symlink()) else { continue };
+        let put_here = folder.created().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+        let played = plays.get(&id).copied().unwrap_or(0).max(if g.source == LastUsedSource::Played { g.last } else { 0 });
+        if played > 0 {
+            (g.last, g.source) = (played, LastUsedSource::Played);
+        }
+        let open = running.values().any(|exe| Path::new(exe).starts_with(&g.dir));
+        if open || g.last == 0 || now.saturating_sub(g.last.max(put_here)) < YEAR {
+            continue;
+        }
+        out.push(App {
+            key: format!("steam://uninstall/{id}"),
+            name: if g.name.is_empty() { name_of(&g.dir) } else { g.name },
+            publisher: String::new(),
+            version: String::new(),
+            size: g.size,
+            last_used: Some(g.last),
+            last_used_source: Some(g.source),
+            dir: Some(g.dir.to_string_lossy().to_string()),
+            from: Some("Steam".into()),
+            install_dir: Some(g.dir),
+            steam: Some(id),
+        });
+    }
+    let unsized_: Vec<PathBuf> = out.iter().filter(|a| a.size == 0).filter_map(|a| a.install_dir.clone()).collect();
+    let measured = crate::trash::folder_bytes(&unsized_);
+    for a in out.iter_mut().filter(|a| a.size == 0) {
+        if let Some(i) = a.install_dir.as_ref().and_then(|d| unsized_.iter().position(|u| u == d)) {
+            a.size = measured[i];
+        }
+    }
+    out.sort_by(|a, b| b.size.cmp(&a.size).then(a.last_used.cmp(&b.last_used)));
+    out.truncate(400);
+    out
+}
+
+/// On a Mac, uninstalling an app is moving it to the Trash: `key` is the app, which must be a
+/// real folder in Applications (yours or everyone's, or a folder inside), and not open. A Steam
+/// game is Steam's to remove: `key` is its uninstall address, and Steam asks before it does.
+#[cfg(target_os = "macos")]
+fn mac_uninstall(key: &str) -> Result<String, String> {
+    if let Some(id) = key.strip_prefix("steam://uninstall/") {
+        if id.is_empty() || id.len() > 10 || !id.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("That isn't a Steam game.".into());
+        }
+        crate::util::run("/usr/bin/open", &[key], std::time::Duration::from_secs(10)).map_err(|_| "Steam didn't open.".to_string())?;
+        return Ok("Steam is open. It asks before it removes the game.".into());
+    }
+    let app = Path::new(key);
+    let home = dirs::home_dir().ok_or("That isn't an app in Applications.")?;
+    if !app.is_absolute() || app.components().any(|c| matches!(c, std::path::Component::ParentDir)) || !mac_apps(&home).iter().any(|a| a == app) {
+        return Err("That isn't an app in Applications.".into());
+    }
+    let name = app.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    if hands_off(&name) {
+        return Err(format!("Mom doesn't remove {name}: what's in it can't be got back."));
+    }
+    let table = crate::procs::Sampler::new().sample();
+    let inside = format!("{key}/");
+    if crate::programs::image_paths(&table).values().any(|exe| exe.starts_with(&inside)) {
+        return Err(format!("{name} is open. Quit it first."));
+    }
+    // An app from the App Store, or one an installer put there, belongs to the whole Mac: mom
+    // can't move it, and Finder can, once you've given it your password or your fingerprint.
+    let yours = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::symlink_metadata(app).is_ok_and(|m| m.uid() == unsafe { libc::geteuid() })
+    };
+    if !yours || crate::util::to_bin(app).is_err() {
+        crate::macos::finder_trash(app, &name)?;
+    }
+    Ok(format!("{name} is in the Trash. Empty the Trash to get its space back, or put it back from there."))
+}
+
 /// Starts a program's own uninstaller (Windows asks for permission if it needs it). The
 /// uninstaller comes from the registry entry `key` names, which must be in the uninstall list.
 pub fn uninstall(key: &str) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        mac_uninstall(key)
+    }
     #[cfg(windows)]
     {
         use crate::health::reg::{string_values, Hive};
@@ -648,7 +921,7 @@ pub fn uninstall(key: &str) -> Result<String, String> {
         crate::elevate::open(Path::new(&exe), &args)?;
         Ok(format!("{name}'s uninstaller is open. Follow it to the end."))
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = key;
         Err("Only on Windows.".into())
@@ -692,7 +965,7 @@ mod tests {
 
     #[test]
     fn unavailable_app_activity_is_unknown_instead_of_the_epoch() {
-        let root = std::env::temp_dir().join(format!("mom-app-activity-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-app-activity-{}", std::process::id()));
         assert!(!root.exists());
         assert_eq!(touched(&root), None);
         std::fs::create_dir_all(&root).unwrap();
@@ -713,6 +986,8 @@ mod tests {
         assert!(hands_off("Gnosis Safe 2.0") && hands_off("Pocket Wallet") && hands_off("Signal 5.33.0") && !hands_off("Atlas Recorder"));
     }
 
+    // About Windows' own folders, read by Windows' own rules for paths.
+    #[cfg(windows)]
     #[test]
     fn a_programs_folder_is_its_own_never_one_it_shares() {
         let f = |loc: &str, icon: &str, un: &str| own_folder(loc, icon, un).map(|p| p.to_string_lossy().to_string());
@@ -737,7 +1012,7 @@ mod tests {
         let lib = Path::new(r"E:\SteamLibrary");
         assert_eq!(
             steam_game(lib, record),
-            Some(SteamGame { dir: lib.join("steamapps").join("common").join("Retro Racer"), size: 534_902_844, last: 1_790_809_334, source: LastUsedSource::Played })
+            Some(SteamGame { name: "Retro Racer".into(), dir: lib.join("steamapps").join("common").join("Retro Racer"), size: 534_902_844, last: 1_790_809_334, source: LastUsedSource::Played })
         );
         // Never played: when it was installed or last updated, so a game from last week isn't "unused".
         let never = record.replace("1790809334", "0");
@@ -749,6 +1024,21 @@ mod tests {
             assert_eq!(steam_game(lib, &record.replace("\"installdir\"\t\t\"Retro Racer\"", &format!("\"installdir\"\t\t\"{odd}\""))), None, "{odd}");
         }
         assert_eq!(steam_game(lib, "not a record"), None);
+    }
+
+    #[test]
+    fn a_games_last_play_is_read_from_the_accounts_own_file() {
+        let file = "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n\t\t\t\t\"apps\"\n\t\t\t\t{\n\
+            \t\t\t\t\t\"900001\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"LastPlayed\"\t\t\"1600000000\"\n\t\t\t\t\t\t\"Playtime\"\t\t\"310\"\n\t\t\t\t\t}\n\
+            \t\t\t\t\t\"900002\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"cloud\"\n\t\t\t\t\t\t{\n\t\t\t\t\t\t\t\"last_sync_state\"\t\t\"synchronized\"\n\t\t\t\t\t\t}\n\t\t\t\t\t\t\"LastPlayed\"\t\t\"1780000000\"\n\t\t\t\t\t}\n\
+            \t\t\t\t\t\"440\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"Playtime\"\t\t\"0\"\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n\
+            \t\"friends\"\n\t{\n\t\t\"7\"\n\t\t{\n\t\t\t\"LastPlayed\"\t\t\"1799999999\"\n\t\t}\n\t}\n}\n";
+        let plays = steam_plays(file);
+        assert_eq!(plays.get("900001"), Some(&1_600_000_000));
+        assert_eq!(plays.get("900002"), Some(&1_780_000_000), "a block inside the game's own doesn't hide what follows it");
+        assert_eq!(plays.get("440"), None, "never played");
+        assert_eq!(plays.get("7"), None, "a number that isn't under apps is nobody's game");
+        assert!(steam_plays("not a record").is_empty());
     }
 
     #[test]

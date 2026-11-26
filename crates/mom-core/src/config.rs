@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn round_trips_through_toml() {
-        let dir = std::env::temp_dir().join(format!("mom-config-{}", std::process::id()));
+        let dir = crate::util::temp_dir().join(format!("mom-config-{}", std::process::id()));
         let paths = Paths::under(&dir);
         let mut c = Config::default();
         c.rooms.push(PathBuf::from(r"C:\Workspace\storefront"));

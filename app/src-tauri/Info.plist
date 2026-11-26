@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- What macOS shows when it asks whether mom may look in one of your folders. Tauri adds
+     these to the app's own Info.plist when it builds momputer.app. -->
+<plist version="1.0">
+<dict>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Mom looks in Downloads for installers and unpacked archives you're done with, and for copies of the same file. She only reads; nothing goes until you say so.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Mom looks in Documents for projects' old build folders, work that isn't backed up, and copies of the same file. She only reads; nothing goes until you say so.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Mom looks on the Desktop for copies of the same file and big files nobody has opened in a year. She only reads; nothing goes until you say so.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Mom asks Finder to move an app to the Trash when the app belongs to the whole Mac and she can't move it herself.</string>
+	<key>NSAppDataUsageDescription</key>
+	<string>Mom asks when each of your apps last saved its settings, to tell which ones you no longer open. She reads the dates only, never what's inside.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Mom looks at a disk you plugged in only when you added a folder on it, or chose it to keep old conversations on.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>Mom looks at a network disk only when you added a folder on it.</string>
+</dict>
+</plist>

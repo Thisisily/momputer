@@ -232,6 +232,11 @@ pub(crate) struct Room(std::collections::HashMap<String, Option<u64>>);
 impl Room {
     /// Whether `bytes` at `path` would land in the bin rather than be deleted for good.
     pub(crate) fn fits(&mut self, path: &Path, bytes: u64) -> bool {
+        // A Mac's Trash takes anything, whatever its size. (On a disk that has no Trash, macOS
+        // refuses to trash at all, and the thing stays where it is: nothing is deleted for good.)
+        if cfg!(not(windows)) {
+            return true;
+        }
         let Some(root) = drive_root(path) else { return false };
         let cap = *self.0.entry(root.clone()).or_insert_with(|| capacity(&root));
         cap.is_some_and(|c| bytes < c)
@@ -335,6 +340,15 @@ mod tests {
     use crate::trash::tests::fixture;
 
     #[test]
+    fn a_macs_trash_takes_anything() {
+        if cfg!(not(windows)) {
+            assert!(Room::default().fits(Path::new("/Users/me/Downloads/big.dmg"), u64::MAX));
+        }
+    }
+
+    // Windows' own bin: its drives, its limits and its records.
+    #[cfg(windows)]
+    #[test]
     fn only_what_fits_a_drives_bin_is_recycled() {
         assert_eq!(drive_root(Path::new(r"c:\Users\me\x")), Some(r"C:\".to_string()));
         assert_eq!(drive_root(Path::new(r"\\?\D:\big")), Some(r"D:\".to_string()));
@@ -399,6 +413,8 @@ mod tests {
         assert_eq!(parse_record(&cut).unwrap().original, r"C:\fo");
     }
 
+    // About Windows' own folders, read by Windows' own rules for paths.
+    #[cfg(windows)]
     #[test]
     fn lists_what_is_in_a_bin_folder() {
         let root = fixture("bin");

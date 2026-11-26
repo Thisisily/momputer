@@ -130,8 +130,11 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Speed {
             findings.push(Finding { more: c.more, timeline: None, id: c.id, level: c.level, title: c.title, detail: c.detail, fix: c.fix });
         }
     }
+    // What a Mac says of itself: too hot, saving its battery, out of disk.
+    #[cfg(target_os = "macos")]
+    findings.extend(crate::macos::speed_findings());
     let starting = crate::health::startup_apps(paths).iter().filter(|a| a.enabled).count();
-    if starting >= 12 {
+    if starting >= if cfg!(target_os = "macos") { 25 } else { 12 } {
         findings.push(Finding { more: vec![], timeline: None,
             id: "startup".into(),
             level: "tip",

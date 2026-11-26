@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn reads_automations_and_falls_back_to_rollouts() {
-        let root = std::env::temp_dir().join(format!("mom-codex-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-codex-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let auto = root.join("automations").join("publishing");
         std::fs::create_dir_all(&auto).unwrap();

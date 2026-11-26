@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn remembered_newest_first_without_repeats() {
-        let dir = std::env::temp_dir().join(format!("mom-restart-{}", std::process::id()));
+        let dir = crate::util::temp_dir().join(format!("mom-restart-{}", std::process::id()));
         let paths = Paths::under(&dir);
         let s = |id: &str, cmd: &str| Stopped { id: id.into(), name: "vite".into(), project: None, command: cmd.into(), argv: v(&cmd.split(' ').collect::<Vec<_>>()), cwd: r"C:\p".into(), ports: vec![5173], at: 1 };
         save(&paths, &[s("a", "npm run dev"), s("b", "npm run preview")]).unwrap();
@@ -348,7 +348,7 @@ mod tests {
     #[cfg(windows)]
     fn every_argument_arrives_as_it_was_whatever_is_in_it() {
         let me = std::env::current_exe().unwrap().to_string_lossy().to_string();
-        let dir = std::env::temp_dir().join(format!("mom-restart-args & 100% (odd) ^ it's-{}", std::process::id()));
+        let dir = crate::util::temp_dir().join(format!("mom-restart-args & 100% (odd) ^ it's-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stopped = |argv: Vec<String>| Stopped { id: "a".into(), name: "server".into(), project: None, command: quoted(&argv), argv, cwd: dir.to_string_lossy().to_string(), ports: vec![], at: 1 };
         // The test program run as a server: it prints its arguments after the test's own name.

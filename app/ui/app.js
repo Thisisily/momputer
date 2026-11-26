@@ -7,6 +7,80 @@
   const T = window.__TAURI__;
   const bridge = T ? { invoke: T.core.invoke, listen: T.event.listen } : window.momMock;
   const invoke = (cmd, args) => bridge.invoke(cmd, args);
+  // On a Mac mom says Mac things ("your Mac", "the Trash", "the menu bar"), and her window has
+  // the Mac's own three buttons at the top left.
+  const browser = typeof navigator === "undefined" ? {} : navigator;
+  // In a browser, "?as=mac" or "?as=windows" in the address says which to be: that's how the
+  // pictures of both are made on one computer.
+  const told = T || typeof location === "undefined" ? null : /[?&]as=(mac|windows)\b/.exec(location.search);
+  const MAC = told ? told[1] === "mac" : /Mac/i.test(browser.platform || "") || /Macintosh/.test(browser.userAgent || "");
+  if (MAC && document.documentElement) {
+    document.documentElement.classList.add("is-mac");
+    if (T) document.documentElement.classList.add("mac-window");
+  }
+  // What mom says differently on a Mac, longest first. Whole phrases only, so a file that happens
+  // to be called "PC" keeps its name.
+  const MAC_WORDS = [
+    ["the Recycle Bin", "the Trash"],
+    ["Recycle Bin", "Trash"],
+    ["File Explorer", "Finder"],
+    ["Task Manager", "Activity Monitor"],
+    ["Opens Windows Settings", "Opens System Settings"],
+    ["Looking at what starts with Windows…", "Looking at what your Mac starts by itself…"],
+    ["start with Windows.", "start by themselves."],
+    ["Starts with Windows", "Starts by itself"],
+    ["Nothing. Windows starts clean.", "Nothing. Your Mac starts clean."],
+    ["apps start with Windows", "things start by themselves"],
+    ["What starts with Windows", "What your Mac starts by itself"],
+    ["It starts for every user, so only an administrator can switch it. Windows Settings can.", "It starts for the whole Mac, so only an administrator can switch it. System Settings can."],
+    ["Switch off what you don't need the moment you sign in.", "Switch off what you don't need from the moment you log in."],
+    ["Windows has been steady", "macOS has been steady"],
+    ["Event Viewer has the details.", "Console has the details, under Crash Reports."],
+    ["had trouble with Windows", "had trouble with macOS"],
+    ["Part of Windows.", "Part of macOS."],
+    ["It runs as a Windows service. Stop it from Windows' Services if you must.", "It runs for the whole Mac, not as you. Mom leaves it alone."],
+    ["Windows, security and agents", "macOS, the whole Mac's and agents"],
+    ["the way its X button does", "the way ⌘Q does"],
+    ["Uninstall opens the app's own uninstaller.", "Uninstall moves the app to the Trash; what it kept in your Library stays. An app from the App Store belongs to the whole Mac: mom asks Finder to move it, and if Finder won't, she shows it selected in Finder, where ⌘⌫ moves it once you've given your password."],
+    ["Drivers, runtimes, wallets, messengers and command-line tools are never listed.", "Wallets, password managers, messengers, apps that are open and apps you use from a terminal are never listed."],
+    ["Dates may come from app data changes, not launches.", "The date is the newest sign of use mom can find: when macOS last saw the app opened, or when it last saved its settings or its data."],
+    ["Apps with unknown activity are omitted.", "An app whose traces macOS won't show is left out."],
+    ["Steam dates distinguish recorded play from updates.", "The date is when Steam last recorded you playing it, on any computer."],
+    ["Apps with older activity records", "Apps with no sign of use in a year"],
+    ["Games with older activity records", "Games nobody has played in a year"],
+    ["No apps with known activity records over a year old. Apps with unknown activity are not listed.", "Every app here shows a sign of use within the last year."],
+    ["with Windows", "when you log in"],
+    ["Start with Windows", "Start when you log in"],
+    ["the tray", "the menu bar"],
+    ["on this PC", "on this Mac"],
+    ["this PC", "this Mac"],
+    ["This PC", "This Mac"],
+    ["your PC", "your Mac"],
+    ["Your PC", "Your Mac"],
+    ["the whole PC", "the whole Mac"],
+    ["the PC", "the Mac"],
+    ["The PC", "The Mac"],
+    ["a PC", "a Mac"],
+    ["PC's", "Mac's"],
+    ["another drive", "another disk"],
+    ["a drive you choose", "a disk you choose"],
+  ];
+  const sayText = (t) => MAC_WORDS.reduce((x, [from, to]) => (x.includes(from) ? x.split(from).join(to) : x), t);
+  /** A piece of the page in this computer's words: the text people read and the tooltips, and
+      nothing inside the tags themselves (ids, paths and the like stay exactly as they are). */
+  const inWords = (html) =>
+    !MAC || !html
+      ? html
+      : String(html)
+          .replace(/>([^<]+)</g, (_, t) => `>${sayText(t)}<`)
+          .replace(/^([^<>]+)(?=<|$)/, (t) => sayText(t))
+          .replace(/\b(title|aria-label)="([^"]*)"/g, (_, attr, t) => `${attr}="${sayText(t)}"`);
+  if (MAC) {
+    // The page as it's written, once: the titles and names of the buttons along the top.
+    document.querySelectorAll("[title], [aria-label]").forEach((el) => {
+      for (const attr of ["title", "aria-label"]) if (el.hasAttribute(attr)) el.setAttribute(attr, sayText(el.getAttribute(attr)));
+    });
+  }
   const G = window.gsap;
   // The widget should cost nothing while you're not looking at it. 60 frames a second is plenty
   // (GSAP would draw at the screen's rate, 240 on some), and once the last tween ends GSAP stops
@@ -284,6 +358,7 @@
     gemini: "Gemini",
     copilot: "Copilot",
     windsurf: "Windsurf",
+    antigravity: "Antigravity",
     goose: "Goose",
     amp: "Amp",
     opencode: "OpenCode",
@@ -299,6 +374,7 @@
 
   /** Re-draw a region by morphing, so focus, hover and half-finished clicks survive. */
   function morph(el, html) {
+    html = inWords(html);
     if (window.Idiomorph) {
       window.Idiomorph.morph(el, html, {
         morphStyle: "innerHTML",
@@ -322,7 +398,7 @@
   let toastTimer = null;
   function toast(text, isError = false) {
     const el = $("#toast");
-    el.textContent = text;
+    el.textContent = MAC ? sayText(String(text ?? "")) : text;
     el.classList.toggle("is-error", isError);
     el.hidden = false;
     if (moving()) G.fromTo(el, { y: 24, opacity: 0 }, { y: 0, opacity: 1, duration: 0.45, ease: "back.out(1.6)" });
@@ -436,11 +512,12 @@
     const s = state.snap;
     showFace();
     const said = state.say && Date.now() < state.say.until ? state.say.text : null;
+    const words = (t) => (MAC ? sayText(t) : t);
     if (!s) {
-      if (said) $("#mom-line").textContent = said;
+      if (said) $("#mom-line").textContent = words(said);
       return;
     }
-    $("#mom-line").textContent = said || (state.paused ? "I'm on a break. Nobody's watching." : s.mood.line);
+    $("#mom-line").textContent = words(said || (state.paused ? "I'm on a break. Nobody's watching." : s.mood.line));
     const n = s.summary.leftovers;
     const was = state.lastCount;
     state.lastCount = n;
@@ -748,7 +825,7 @@
 
   /** What went wrong in a stretch of days, in words: each kind with its count. */
   const troubleWords = (d) =>
-    [[d.blueScreens, "blue screen"], [d.shutdowns, "unexpected shutdown"], [d.gpuResets, "graphics driver reset"], [d.hardwareErrors, "hardware error"]]
+    [[d.blueScreens, MAC ? "kernel panic" : "blue screen"], [d.shutdowns, "unexpected shutdown"], [d.gpuResets, "graphics driver reset"], [d.hardwareErrors, "hardware error"]]
       .filter(([n]) => n)
       .map(([n, one]) => plural(n, one));
 
@@ -766,7 +843,7 @@
       level: fell ? "warn" : trouble.length ? "tip" : "ok",
       title,
       detail,
-      fix: trouble.length || st.appCrashes ? { label: "Event Viewer", kind: "launch", value: "eventvwr.exe" } : null,
+      fix: !MAC && (trouble.length || st.appCrashes) ? { label: "Event Viewer", kind: "launch", value: "eventvwr.exe" } : null,
       more: [],
       items: st.apps.map(([name, n]) => ({ name, note: `crashed ${plural(n, "time")}`, led: "off" })),
     };
@@ -899,7 +976,7 @@
   function progRow(p) {
     const open = state.progOpen === p.id;
     const cpu = p.avgSecs ? p.avgCpu : p.cpu;
-    const bits = [p.kind === "app" || p.kind === "background" ? "" : HANDS_OFF[p.kind] ? { windows: "Windows", security: "Security", service: "Service", agent: "Agent", mom: "momputer" }[p.kind] : ""];
+    const bits = [p.kind === "app" || p.kind === "background" ? "" : HANDS_OFF[p.kind] ? { windows: MAC ? "macOS" : "Windows", security: "Security", service: MAC ? "Whole Mac" : "Service", agent: "Agent", mom: "momputer" }[p.kind] : ""];
     bits.push(plural(p.count, "process", "processes"));
     if (p.windows) bits.push(plural(p.windows, "window"));
     if (p.gpu >= 1) bits.push(`graphics card ${Math.round(p.gpu)}%`);
@@ -949,7 +1026,7 @@
     let html = `<div class="lead"><div class="lead-text"><p>${plural(apps.length, "app")} open, ${background.length} in the background.<small>Using ${Math.round(cpu)}% of the processor between them.</small></p></div></div>
       <div class="list-tools">
         <label class="list-search">${ICON.search}<input type="search" id="prog-q" placeholder="Filter" value="${esc(v.q)}" autocomplete="off" spellcheck="false" aria-label="Filter programs"></label>
-        <div class="seg" role="group" aria-label="Sort by">${sort("cpu", "CPU")}${sort("mem", "Memory")}${sort("gpu", "Graphics")}${sort("name", "A–Z")}</div>
+        <div class="seg" role="group" aria-label="Sort by">${sort("cpu", "CPU")}${sort("mem", "Memory")}${MAC ? "" : sort("gpu", "Graphics")}${sort("name", "A–Z")}</div>
       </div>
       <p class="list-hint">Rows stay where they are while you look, so nothing moves under your pointer. Tap a sort to sort again.</p>`;
     html += section("apps", "Apps", apps.length ? total(apps) : "", apps.map(progRow).join("") || `<p class="empty">${q ? "No app matches that." : "No app windows open."}</p>`);
@@ -1148,7 +1225,7 @@
     ].filter(Boolean);
     const control = x.yours
       ? `<button class="switch" role="switch" aria-checked="${x.enabled}" aria-label="Start ${esc(x.name)} with Windows" data-act="startup-set" data-id="${esc(x.id)}" ${state.startupBusy === x.id ? "disabled" : ""}></button>`
-      : `<button class="mini-btn wide" data-act="open-uri" data-url="ms-settings:startupapps" title="It starts for every user, so only an administrator can switch it. Windows Settings can.">Settings</button>`;
+      : `<button class="mini-btn wide" data-act="open-uri" data-url="${MAC ? "x-apple.systempreferences:com.apple.LoginItems-Settings.extension" : "ms-settings:startupapps"}" title="It starts for every user, so only an administrator can switch it. Windows Settings can.">Settings</button>`;
     return `<div class="row" id="st-${hash(x.id)}" data-led="${x.enabled ? (x.running ? "green" : "off") : "off"}" title="${esc(x.command)}">
       <span class="row-name">${rowIcon(state.icons.get(x.exe))}${esc(x.name)}</span>
       <div class="row-meta"><span class="why">${esc(meta.join(" · "))}</span></div>
@@ -1164,9 +1241,10 @@
     const on = list.filter((x) => x.enabled);
     const off = list.filter((x) => !x.enabled);
     let html = `<div class="lead"><div class="lead-text"><div class="big"><span class="dot free-num">${on.length}</span></div><p>of ${plural(list.length, "app")} start with Windows.<small>Switch off what you don't need the moment you sign in. It still opens when you start it.</small></p></div>
-      <button class="secondary" data-act="open-uri" data-url="ms-settings:startupapps">Settings${ICON.out}</button></div>`;
+      <button class="secondary" data-act="open-uri" data-url="${MAC ? "x-apple.systempreferences:com.apple.LoginItems-Settings.extension" : "ms-settings:startupapps"}">Settings${ICON.out}</button></div>`;
     html += section("start-on", "Starts with Windows", on.length ? `${total(on.filter((x) => x.running))} now` : "", on.map(startupRow).join("") || `<p class="empty">Nothing. Windows starts clean.</p>`);
     if (off.length) html += section("start-off", "Switched off", "", off.map(startupRow).join(""));
+    if (MAC) html += `<p class="foot">These are the Mac's launch agents and daemons: the small helpers apps install to start by themselves. Apps you set to open at login are in System Settings, under Login Items; the Settings button opens it. A switch here takes effect the next time you log in.</p>`;
     return html;
   }
 
@@ -1708,7 +1786,7 @@ in ${x.cwd}`)}">
   const GROUPS = [
     ["agents", "Agents' mess"],
     ["dev", "Developer caches and builds"],
-    ["windows", "Windows and browsers"],
+    ["windows", MAC ? "macOS" : "Windows and browsers"],
     ["personal", "Your files"],
   ];
 
@@ -1736,7 +1814,7 @@ in ${x.cwd}`)}">
   function driveForecast(d) {
     if (!d.fullInDays) return "";
     const days = d.fullInDays === 1 ? "1 day" : `${d.fullInDays} days`;
-    return `<p class="gauge-soon"><span class="led red"></span>At this rate ${esc(d.root.replace(/\\$/, ""))} is full in about ${days}.</p>`;
+    return `<p class="gauge-soon"><span class="led red"></span>At this rate ${esc(MAC ? d.label : d.root.replace(/\\$/, ""))} is full in about ${days}.</p>`;
   }
 
   function renderDrives() {
@@ -1747,7 +1825,7 @@ in ${x.cwd}`)}">
         const used = d.total - d.free;
         const warn = d.free < d.total * 0.1 || d.free < 15 * 1024 ** 3;
         return `<div class="gauge" id="drv-${hash(d.root)}">
-          <div class="gauge-head"><span class="gauge-name">${esc(d.root.replace(/\\$/, ""))} <span class="dim">${esc(d.label)}</span></span>
+          <div class="gauge-head"><span class="gauge-name">${MAC ? esc(d.label) : `${esc(d.root.replace(/\\$/, ""))} <span class="dim">${esc(d.label)}</span>`}</span>
             <span class="num"><strong>${bytes(d.free)}</strong> free of ${bytes(d.total)}</span></div>
           ${meter(d.total ? used / d.total : 0, { warn })}
           ${driveForecast(d)}
@@ -1788,7 +1866,8 @@ in ${x.cwd}`)}">
     const appRow = (a) => {
       const sure = state.uninstallConfirm === a.key;
       const opened = state.uninstalled.has(a.key);
-      const activity = a.lastUsedSource === "played" ? "played" : a.lastUsedSource === "updated" ? "updated" : "activity recorded";
+      // A Mac app that left no trace of ever being opened goes by when it was put there.
+      const activity = a.lastUsedSource === "played" ? "played" : a.lastUsedSource === "updated" ? (MAC && !a.from ? "no sign it was ever opened · installed" : "updated") : MAC ? "last sign of use" : "activity recorded";
       const since = Number.isFinite(a.lastUsed) && a.lastUsed > 0 && a.lastUsed <= now ? `${activity} ${yearsAgo(now - a.lastUsed)} ago` : "activity date unknown";
       // Where it is, in full; whoever made it when there's no folder to show.
       const where = a.dir || (a.from ? "" : a.publisher);
@@ -1796,7 +1875,7 @@ in ${x.cwd}`)}">
       return `<div class="item stays moved" id="un-${hash(a.key)}"><span class="led"></span>
           <span class="item-main"><span class="item-name" title="${esc(a.dir ? `${a.name} · ${a.dir}` : a.name)}">${esc(a.name)}</span>
           <span class="item-sub">${esc(`${a.size ? bytes(a.size) : "size unknown"} · ${since}`)}</span>${where ? `<span class="item-sub">${esc(where)}</span>` : ""}</span>
-          <span class="moved-acts">${folder}<button class="mini-btn wide${sure ? " sure" : ""}" data-act="uninstall-app" data-key="${esc(a.key)}" ${opened ? "disabled" : ""}>${opened ? "Opened" : sure ? "Sure? Uninstall" : "Uninstall"}</button></span></div>`;
+          <span class="moved-acts">${folder}<button class="mini-btn wide${sure ? " sure" : ""}" data-act="uninstall-app" data-key="${esc(a.key)}" ${opened ? "disabled" : ""}>${opened ? (MAC && !a.from ? "In the Trash" : "Opened") : sure ? "Sure? Uninstall" : "Uninstall"}</button></span></div>`;
     };
     // Apps and games each get their own list: a Steam library can hold hundreds of games, and
     // the apps would be lost among them.
@@ -1885,7 +1964,7 @@ in ${x.cwd}`)}">
   const UPKEEP_TABS = [
     ["storage", "Storage"],
     ["apps", "Apps"],
-    ["windows", "Windows"],
+    ["windows", MAC ? "Mac" : "Windows"],
     ["files", "Files"],
   ];
 
@@ -2079,7 +2158,27 @@ in ${x.cwd}`)}">
     ["mouse", "Mouse", "Mouse", () => false, "Your mouse", false, ["Mouse settings", "ms-settings:mousetouchpad"]],
     ["board", "Motherboard", "Board", (c) => c.id === "bios-old", "Your motherboard", false, null],
     ["windows", "Windows", "Windows", (c) => c.area === "Security" || c.area === "Updates", "Windows", false, ["Windows Update", "ms-settings:windowsupdate"]],
-  ];
+  ].map((part) => {
+    if (!MAC) return part;
+    // The same desk on a Mac: the Mac itself where the motherboard is, macOS where Windows is,
+    // and System Settings' pages behind the buttons.
+    const page = (label, id) => [label, `x-apple.systempreferences:${id}`];
+    const [id, , row, mine] = part;
+    const mac = {
+      processor: ["Processor", "Processor", "Your processor", page("Battery settings", "com.apple.Battery-Settings.extension")],
+      memory: ["Memory", "Memory", "Your memory", null],
+      graphics: ["Graphics", "Graphics", "Your graphics", page("Display settings", "com.apple.Displays-Settings.extension")],
+      monitor: ["Display", "Screen", "Your display", page("Display settings", "com.apple.Displays-Settings.extension")],
+      disks: ["Disks", "Disks", "Your disks", page("Storage settings", "com.apple.settings.Storage")],
+      sound: ["Sound", "Sound", "Your sound", page("Sound settings", "com.apple.Sound-Settings.extension")],
+      keyboard: ["Keyboard", "Keyboard", "Your keyboard", page("Keyboard settings", "com.apple.Keyboard-Settings.extension")],
+      mouse: ["Mouse", "Mouse", "Your mouse", page("Mouse settings", "com.apple.Mouse-Settings.extension")],
+      board: ["This Mac", "Model", "Your Mac", null],
+      windows: ["macOS", "macOS", "macOS", page("Software Update", "com.apple.Software-Update-Settings.extension")],
+    }[id];
+    const own = id === "disks" ? (c) => /^disk-health/.test(c.id) : id === "board" ? (c) => c.id === "battery" : id === "memory" ? (c) => c.id.startsWith("memory") : id === "processor" ? () => false : mine;
+    return [id, mac[0], mac[1] || row, own, mac[2], id === "disks", mac[3]];
+  });
 
   /** Your PC as the desk shows it: each part with its checks and its light, and how many
       sticks, drives and cards to draw. */
@@ -2276,7 +2375,30 @@ in ${x.cwd}`)}">
     }
   }
 
+  /** The Mac's checkup: what it is, whether it's protected, up to date and backed up, and how its
+      disk, battery and memory are doing. Mom only looks; each button opens System Settings. */
+  function renderMac() {
+    const sys = state.system;
+    const all = [...(sys ? sys.checks : []), ...(state.health ? state.health.checks : [])];
+    const warn = all.filter((c) => c.level === "warn").length;
+    const tips = all.filter((c) => c.level === "tip").length;
+    const said = !sys
+      ? "Looking at how your Mac is doing…"
+      : warn
+        ? `${warn === 1 ? "thing needs" : "things need"} a look. Each one says what's wrong and where to fix it.`
+        : tips
+          ? `${tips === 1 ? "thing" : "things"} worth knowing about. Nothing urgent.`
+          : "Your Mac is in good shape. Nothing to do.";
+    let html = `<div class="lead"><div class="lead-text">${sys && (warn || tips) ? `<div class="big"><span class="dot free-num">${warn || tips}</span></div>` : ""}<p>${esc(said)}</p></div>
+      <button class="secondary" data-act="mac-refresh" ${state.systemLoading ? "disabled" : ""}>${state.systemLoading ? '<span class="led green blink"></span>Looking' : "Look again"}</button></div>`;
+    html += renderSystem();
+    html += renderChecks();
+    html += `<p class="foot">Mom only looks here. Each button opens the page of System Settings where you can change it yourself.</p>`;
+    return html;
+  }
+
   function renderWindows() {
+    if (MAC) return renderMac();
     const w = state.winsettings;
     let html;
     if (!w) {
@@ -2554,6 +2676,7 @@ in ${x.cwd}`)}">
 
   /** "admin" under Measure: measure as administrator too (Windows asks first). */
   function adminTick() {
+    if (MAC) return "";
     loadAdminCheck();
     const on = !!(state.settings && state.settings.config.ui.measureAsAdmin) && !state.adminBlock;
     const why = state.adminBlock || "Measure as administrator too. Windows asks first, then mom can see the size of what only an administrator can open.";
@@ -2561,7 +2684,7 @@ in ${x.cwd}`)}">
   }
 
   /** Whether Measure asks Windows to measure as administrator too. */
-  const measuresAsAdmin = () => !!(state.settings && state.settings.config.ui.measureAsAdmin) && !state.adminBlock;
+  const measuresAsAdmin = () => !MAC && !!(state.settings && state.settings.config.ui.measureAsAdmin) && !state.adminBlock;
 
   async function loadAdminCheck() {
     if (state.adminBlock !== undefined) return;
@@ -3986,7 +4109,7 @@ in ${x.cwd}`)}">
   /** What a tab of Upkeep needs the first time it's shown. */
   function openUpkeepTab(tab) {
     if (tab === "windows") {
-      loadWinsettings();
+      if (!MAC) loadWinsettings();
       if (!state.system) loadSystem();
     }
     if (tab === "files" && !state.files) loadFiles();
@@ -4174,6 +4297,10 @@ in ${x.cwd}`)}">
       }
       case "open-uri":
         act(invoke("open_url", { url: el.dataset.url }), () => null);
+        break;
+      case "mac-refresh":
+        loadSystem(true);
+        loadHealth(true);
         break;
       case "reveal":
         if (g && g.cwd) act(invoke("reveal", { path: g.cwd }), () => null);

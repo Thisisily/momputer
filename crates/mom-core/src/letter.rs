@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(sunday_before(sunday), sunday, "ten o'clock itself counts");
         assert!(sunday_before(sunday - 1) < sunday, "a minute before ten is still last week");
 
-        let root = std::env::temp_dir().join(format!("mom-letter-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-letter-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         assert!(!due(&paths, now), "the first look only starts counting");

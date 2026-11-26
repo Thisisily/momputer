@@ -472,7 +472,7 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("mom-steam-shaders-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            let root = crate::util::temp_dir().join(format!("mom-steam-shaders-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
             std::fs::create_dir_all(&root).unwrap();
             let paths = Paths::under(&root);
             let me = Self { root, paths };
@@ -587,7 +587,7 @@ mod tests {
         assert!(manifest(r#""AppState" { "appid" "123" "appid" "123" "name" "Game" "installdir" "Game" }"#, "123").is_err());
         assert!(vdf(r#""libraryfolders" { "0" { "path" "C:\\Steam" }"#).is_err());
         assert!(normalized(Path::new("relative/Steam")).is_none());
-        assert!(normalized(&std::env::temp_dir().join("../elsewhere")).is_none());
+        assert!(normalized(&crate::util::temp_dir().join("../elsewhere")).is_none());
         let f = Fixture::new();
         f.libraries(&[f.steam(), f.root.join("outside-allowed-drives")]);
         f.cache(&f.steam(), "123");

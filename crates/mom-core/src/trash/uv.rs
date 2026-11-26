@@ -40,6 +40,9 @@ const NO_VALUE: &[&str] = &[
 
 /// Where uv keeps its cache: the folder mom measures, probes and cleans.
 pub(super) fn cache_dir(paths: &Paths) -> PathBuf {
+    if paths.is_mac() {
+        return paths.home.join(".cache").join("uv");
+    }
     paths.local_appdata.join("uv").join("cache")
 }
 
@@ -352,7 +355,13 @@ fn one_name(path: &Path) -> bool {
     unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) != 0 && info.nNumberOfLinks == 1 }
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn one_name(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.nlink() == 1)
+}
+
+#[cfg(not(any(windows, unix)))]
 fn one_name(_: &Path) -> bool {
     true
 }
