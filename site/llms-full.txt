@@ -1,9 +1,10 @@
 # momputer
 
-> momputer is a Windows widget that turns off what AI coding agents (Claude Code, Codex and others) left running, frees up disk space, checks drives, memory, sound and Windows settings, and tidies folders. She always shows you first. Free for personal use on Windows 10 and 11.
+> momputer is a widget for Windows, and now the Mac, that turns off what AI coding agents (Claude Code, Codex and others) left running, frees up disk space, checks drives, memory, sound and Windows settings, and tidies folders. She always shows you first. Free for personal use on Windows 10 and 11.
 
 ## Get it
 - [Download for Windows](https://github.com/Thisisily/momputer/releases/latest): the file ending in -setup.exe. Windows 10 and 11, 64-bit.
+- [On a Mac](https://github.com/Thisisily/momputer#on-a-mac): new, and not a download yet. Build it from source: clone the repository, run ./scripts/build.sh --app, and open target/release/bundle/macos/momputer.app. Needs Rust and Xcode's command line tools.
 - [Install steps](https://thisisily.github.io/momputer/#install): three steps, about a minute. momputer isn't code-signed yet, so Windows may show "Windows protected your PC": More info, then Run anyway.
 
 ## What it does
@@ -31,7 +32,7 @@
 - Sends nothing about you or your PC. The one request it makes is a daily check with GitHub for a newer version, which a switch in Settings turns off.
 
 ## What's next
-- Not built yet: a Mac version (then Linux); a check for apps and global packages that are out of date, with one button to update them; a vulnerability checker for versions with known security problems; installing with winget; an MCP server so agents can ask mom directly. [How each would work](https://github.com/Thisisily/momputer/blob/main/docs/roadmap.md).
+- Not built yet: a signed Mac download (the Mac version itself is here, built from source), then Linux; a check for apps and global packages that are out of date, with one button to update them; a vulnerability checker for versions with known security problems; installing with winget; an MCP server so agents can ask mom directly. [How each would work](https://github.com/Thisisily/momputer/blob/main/docs/roadmap.md).
 
 ## License
 - [PolyForm Noncommercial 1.0.0](https://github.com/Thisisily/momputer/blob/main/LICENSE): free at home, for hobby projects, for students, nonprofits and research. Work at a company needs a commercial license ([ask on GitHub](https://github.com/Thisisily/momputer/issues/new?template=commercial-license.yml)).

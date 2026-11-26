@@ -15,10 +15,11 @@ GREEN, RED = "#2fe07a", "#ff3b47"
 BADGES = [
     ("download", "Download for Windows", RED, True),
     ("windows", "Windows 10 · 11", GREEN, False),
+    ("mac", "Mac · new", GREEN, False),
     ("free", "Free for personal use", GREEN, False),
     ("big-mode", "BIG MODE", GREEN, False),
     ("skills", "11 agent skills", GREEN, False),
-    ("agents", "Claude Code · Codex · Cursor · Gemini · Copilot", GREEN, False),
+    ("agents", "Claude Code · Codex · Cursor · Gemini · Copilot · Antigravity · OpenCode", GREEN, False),
 ]
 
 # Roughly how wide each capital is at this size. The text is then stretched to exactly that
