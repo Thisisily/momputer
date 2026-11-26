@@ -115,12 +115,13 @@ fn widget_size(monitor: &tauri::Monitor) -> tauri::LogicalSize<f64> {
     tauri::LogicalSize::new(WIDGET.0.min(area.width - 32.0).max(420.0), WIDGET.1.min(area.height - 32.0).max(440.0))
 }
 
-/// Where a widget of this size sits: by the tray, a little in from the corner.
+/// Where a widget of this size sits: by the tray, a little in from the corner. That's the bottom
+/// right on Windows, by the clock, and the top right on a Mac, under the menu bar.
 fn widget_spot(monitor: &tauri::Monitor, size: tauri::PhysicalSize<u32>) -> tauri::PhysicalPosition<i32> {
     let area = monitor.work_area();
     let margin = (16.0 * monitor.scale_factor()) as i32;
     let x = area.position.x + area.size.width as i32 - size.width as i32 - margin;
-    let y = area.position.y + area.size.height as i32 - size.height as i32 - margin;
+    let y = if cfg!(target_os = "macos") { area.position.y + margin / 2 } else { area.position.y + area.size.height as i32 - size.height as i32 - margin };
     tauri::PhysicalPosition::new(x.max(area.position.x), y.max(area.position.y))
 }
 
@@ -133,10 +134,14 @@ fn place_window(win: &tauri::WebviewWindow) {
 }
 
 /// How long the change of shape takes on the stand-in: the old shape closing, the new one opening.
+/// (The stand-in is Windows' only: see `make_card`.)
+#[cfg_attr(not(windows), allow(dead_code))]
 const MORPH: Duration = Duration::from_millis(300);
 /// The page's content fades out before its window is swapped for the stand-in, and the stand-in
 /// dissolves once the window is back under it.
+#[cfg_attr(not(windows), allow(dead_code))]
 const FADE_OUT: Duration = Duration::from_millis(90);
+#[cfg_attr(not(windows), allow(dead_code))]
 const DISSOLVE: Duration = Duration::from_millis(140);
 
 /// The stand-in for BIG MODE's change of size: a see-through window that's never clicked or
@@ -1681,6 +1686,34 @@ fn bundled_cli() -> PathBuf {
     exe.with_file_name(if cfg!(windows) { "mom.exe" } else { "mom" })
 }
 
+/// A Mac app opened from the Dock, Finder or at login is given a bare PATH (/usr/bin:/bin:
+/// /usr/sbin:/sbin): no Homebrew, no node, no docker. Mom asks the tools on your PATH what they
+/// know (git, docker, uv, pnpm), so she takes the PATH a new terminal window would have, and looks
+/// in the usual places besides. Run from a terminal she has that PATH already, and asks nobody.
+#[cfg(target_os = "macos")]
+fn take_shell_path() {
+    let now: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    if now.iter().any(|d| d.starts_with("/usr/local") || d.starts_with("/opt/homebrew") || d.starts_with("/Users")) {
+        return;
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let shell = std::env::var("SHELL").ok().filter(|s| s.starts_with('/')).unwrap_or_else(|| "/bin/zsh".into());
+    // As a login shell that someone is at: it reads what a terminal window reads (nvm and its
+    // kind are set up there). It gets a few seconds; a shell that asks questions gets no answer.
+    let asked = mom_core::util::run(&shell, &["-l", "-i", "-c", "printf '\\n__MOM_PATH__%s__MOM_PATH__\\n' \"$PATH\""], Duration::from_secs(4));
+    let said = asked.ok().and_then(|o| o.text().split("__MOM_PATH__").nth(1).map(str::to_string)).filter(|p| p.starts_with('/'));
+    let mut dirs: Vec<PathBuf> = said.map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    dirs.extend(["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"].map(PathBuf::from));
+    dirs.extend([".local/bin", ".cargo/bin", ".bun/bin", ".deno/bin", "go/bin"].map(|d| home.join(d)));
+    dirs.extend(now);
+    let mut seen = HashSet::new();
+    dirs.retain(|d| d.is_absolute() && seen.insert(d.clone()) && d.is_dir());
+    if let Ok(path) = std::env::join_paths(dirs) {
+        // Before anything else has started, so nothing is reading the environment meanwhile.
+        std::env::set_var("PATH", path);
+    }
+}
+
 #[tauri::command(async)]
 fn set_integration(id: String, on: bool, s: State<'_, S>) -> Res<String> {
     let msg = if on { hooks::install(&s.paths, &id, &bundled_cli()) } else { hooks::uninstall(&s.paths, &id) };
@@ -1839,7 +1872,13 @@ fn open_url(url: String, app: AppHandle) -> Res<()> {
     let settings_page = url
         .strip_prefix("ms-settings:")
         .map(|page| !page.is_empty() && page.len() <= 48 && page.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
-        .unwrap_or(false);
+        .unwrap_or(false)
+        // A page of a Mac's System Settings: "com.apple.Battery-Settings.extension", with at most
+        // a part of the page after a "?".
+        || (cfg!(target_os = "macos")
+            && url.strip_prefix("x-apple.systempreferences:com.apple.").is_some_and(|page| {
+                !page.is_empty() && page.len() <= 80 && page.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '?')) && page.matches('?').count() <= 1
+            }));
     // Where to get a graphics driver, from Speed; and Windows Security.
     let driver_page = ["https://www.nvidia.com/en-us/drivers/", "https://www.amd.com/en/support/download/drivers.html", "https://www.intel.com/content/www/us/en/support/detect.html"]
         .contains(&url.as_str());
@@ -1849,7 +1888,7 @@ fn open_url(url: String, app: AppHandle) -> Res<()> {
     // Where a newer momputer is fetched from.
     let install_page = url == mom_core::updates::GET_IT;
     if !(local || codex_thread || settings_page || author || driver_page || security || install_page || url.starts_with("https://github.com/")) {
-        return Err("mom only opens local servers, Codex threads, Windows Settings pages and the project's own pages".into());
+        return Err("mom only opens local servers, Codex threads, the system's own Settings pages and the project's own pages".into());
     }
     app.opener().open_url(url, None::<&str>).map_err(err)
 }
@@ -1980,6 +2019,8 @@ fn set_paused(paused: bool, s: State<'_, S>) {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    take_shell_path();
     let paths = Paths::detect();
     let config = Config::load(&paths);
     let start_hidden = std::env::args().any(|a| a == "--hidden");
@@ -2149,13 +2190,16 @@ fn main() {
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.set_always_on_top(shared.cfg().ui.always_on_top);
             }
-            // The stand-in card for BIG MODE, once mom has settled in.
-            let card_handle = handle.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_secs(4));
-                let app = card_handle.clone();
-                let _ = card_handle.run_on_main_thread(move || make_card(&app));
-            });
+            // The stand-in card for BIG MODE, once mom has settled in. (Only Windows needs one:
+            // elsewhere the window changes size the plain way.)
+            if cfg!(windows) {
+                let card_handle = handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(4));
+                    let app = card_handle.clone();
+                    let _ = card_handle.run_on_main_thread(move || make_card(&app));
+                });
+            }
             let (s, skills_handle) = (shared.clone(), handle.clone());
             std::thread::Builder::new().name("mom-skills".into()).spawn(move || skills_watch(skills_handle, s))?;
             let s = shared.clone();
@@ -2177,6 +2221,13 @@ fn main() {
                 api.prevent_close();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("momputer failed to start");
+        .build(tauri::generate_context!())
+        .expect("momputer failed to start")
+        .run(|_app, _event| {
+            // A click on mom in the Dock, with her window tucked away: open it again.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = _event {
+                show_main(_app);
+            }
+        });
 }

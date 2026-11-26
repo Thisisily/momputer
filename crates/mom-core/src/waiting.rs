@@ -416,7 +416,7 @@ mod tests {
     use super::*;
 
     fn fake_home(tag: &str) -> (PathBuf, Paths) {
-        let root = std::env::temp_dir().join(format!("mom-waiting-{tag}-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-waiting-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         std::fs::create_dir_all(paths.claude_dir()).unwrap();
@@ -443,7 +443,9 @@ mod tests {
         assert_eq!(v["model"], "opus");
         assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 2, "theirs and ours");
         assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "say done");
-        assert!(v["hooks"]["Notification"][0]["hooks"][0]["command"].as_str().unwrap().ends_with("mom.exe\" notify --agent claude"));
+        // The copy of mom it runs: mom.exe on Windows, plain mom on a Mac.
+        let mom = paths.installed_cli().file_name().unwrap().to_string_lossy().to_string();
+        assert!(v["hooks"]["Notification"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(&format!("{mom}\" notify --agent claude")));
         let toml_text = std::fs::read_to_string(codex_file(&paths)).unwrap();
         assert_eq!(toml_text.lines().filter(|l| is_our_line(l)).count(), 1);
         let table: toml::Table = toml_text.parse().unwrap();

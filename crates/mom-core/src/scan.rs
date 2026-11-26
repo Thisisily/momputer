@@ -151,12 +151,23 @@ struct Facts {
     kind: Option<Kind>,
 }
 
+/// Where a person types commands: a terminal, or Explorer. `name` is the program's name without
+/// ".exe" (see `Proc::stem`).
 fn is_human_shell_host(name: &str) -> bool {
     matches!(
         name,
-        "explorer.exe" | "windowsterminal.exe" | "openconsole.exe" | "conhost.exe" | "wezterm-gui.exe"
-            | "alacritty.exe" | "hyper.exe" | "tabby.exe" | "warp.exe" | "mintty.exe" | "conemu64.exe"
-    )
+        "explorer" | "windowsterminal" | "openconsole" | "conhost" | "wezterm-gui"
+            | "alacritty" | "hyper" | "tabby" | "warp" | "mintty" | "conemu64"
+    ) || (cfg!(unix)
+        // A Mac's terminals (Warp's program is called "stable"), the ones that live inside a
+        // terminal, and a shell someone signed in to.
+        && matches!(name, "terminal" | "iterm2" | "ghostty" | "kitty" | "stable" | "rio" | "tmux" | "screen" | "zellij" | "login" | "sshd"))
+}
+
+/// A go-between an app puts in front of what it starts, and no more than that. (On a Mac, the
+/// Claude desktop app starts its servers through a small program called "disclaimer".)
+fn is_go_between(p: &Proc) -> bool {
+    p.stem() == "disclaimer"
 }
 
 fn host_label(kind: AgentKind) -> &'static str {
@@ -165,6 +176,8 @@ fn host_label(kind: AgentKind) -> &'static str {
         AgentKind::Codex => "Codex app",
         AgentKind::Cursor => "Cursor",
         AgentKind::Windsurf => "Windsurf",
+        AgentKind::Antigravity => "Antigravity",
+        AgentKind::OpenCode => "OpenCode app",
         AgentKind::Copilot => "VS Code",
         _ => "an app",
     }
@@ -175,7 +188,7 @@ fn host_label(kind: AgentKind) -> &'static str {
 fn is_wrapper_shell(p: &Proc) -> bool {
     p.cmd.iter().skip(1).any(|a| {
         let a = a.to_ascii_lowercase();
-        matches!(a.as_str(), "/c" | "-c" | "/k" | "-command" | "-file" | "-encodedcommand" | "-ec")
+        matches!(a.as_str(), "/c" | "-c" | "-lc" | "-ic" | "-lic" | "-ilc" | "/k" | "-command" | "-file" | "-encodedcommand" | "-ec")
     })
 }
 
@@ -187,15 +200,24 @@ fn is_junk_dir(dir: &str) -> bool {
         || d.contains("\\windowsapps\\")
         || d.contains("\\appdata\\local\\microsoft\\")
         || d.len() <= 3
+        // A Mac's own folders, and the inside of an app. (`norm_path` spells "/" as "\".)
+        || ["\\applications", "\\system\\", "\\library\\", "\\usr\\", "\\opt\\homebrew", "\\bin", "\\sbin", "\\private\\var\\db"].iter().any(|m| d.starts_with(m))
+        || d.contains(".app\\contents")
 }
 
 /// Claude Code's scratch folders are named after the session: %TEMP%\claude\<project>\<session-id>\...
+/// (On a Mac: /tmp/claude-<user number>/<project>/<session-id>/...)
 pub fn claude_scratch_session(text: &str) -> Option<String> {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r"(?i)[\\/]temp[\\/]claude[\\/][^\\/]+[\\/]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})").unwrap()
+        regex::Regex::new(r"(?i)[\\/](?:temp[\\/]claude|tmp[\\/]claude-\d+)[\\/][^\\/]+[\\/]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})").unwrap()
     });
     re.captures(text).map(|c| c[1].to_lowercase())
+}
+
+/// The folders on the way to `dir`, by name, whichever way its slashes lean.
+fn parts(dir: &str) -> Vec<&str> {
+    dir.split(['\\', '/']).filter(|s| !s.is_empty() && !(s.len() == 2 && s.ends_with(':'))).collect()
 }
 
 /// Short project name for a folder: the git repo it's in, or the folder under a workspace root.
@@ -256,12 +278,17 @@ pub fn project_name(dir: &str) -> Option<String> {
         }
         return Some(format!("{name} (scratch)"));
     }
-    let path = std::path::Path::new(&d);
+    // The same on a Mac: /tmp/claude-501/-Users-me-code-storefront/<session>/scratchpad. The
+    // folder is the project's path with every "/" written "-", so the project is named by the
+    // folder that's really there.
+    if let Some(slug) = mac_scratch_slug(&d) {
+        return Some(format!("{} (scratch)", crate::trash::claude_project_name(slug)));
+    }
     // The outermost repository names a project (a worktree's or submodule's own .git sits inside
     // it), but never the home folder or one above it: some people keep their home folder in git.
     let home = dirs::home_dir().map(|h| norm_path(&h.to_string_lossy()));
     let mut git_root: Option<&std::path::Path> = None;
-    for anc in path.ancestors() {
+    for anc in std::path::Path::new(dir).ancestors() {
         if anc.parent().is_none() {
             break;
         }
@@ -276,20 +303,29 @@ pub fn project_name(dir: &str) -> Option<String> {
     if let Some(root) = git_root {
         return root.file_name().map(|n| n.to_string_lossy().to_string());
     }
-    let comps: Vec<String> = path
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
-            _ => None,
-        })
-        .collect();
+    let comps = parts(dir);
+    // On a Mac everything of yours is under /Users/<you>: that says nothing about a project.
+    let comps = match (comps.as_slice(), home.as_deref()) {
+        ([users, _, rest @ ..], Some(h)) if users.eq_ignore_ascii_case("users") && !rest.is_empty() && h.starts_with("\\users\\") => rest.to_vec(),
+        _ => comps,
+    };
     const WORKSPACES: &[&str] = &["workspace", "workspaces", "projects", "code", "dev", "src", "repos", "github", "git", "sites"];
     for (i, c) in comps.iter().enumerate() {
         if WORKSPACES.contains(&c.to_lowercase().as_str()) && i + 1 < comps.len() {
-            return Some(comps[i + 1].clone());
+            return Some(comps[i + 1].to_string());
         }
     }
-    comps.last().cloned()
+    comps.last().map(|c| c.to_string())
+}
+
+/// The project folder's name in a Mac scratch path ("\\tmp\\claude-501\\<slug>\\..."), as Claude
+/// Code wrote it.
+fn mac_scratch_slug(backslashed: &str) -> Option<&str> {
+    let i = backslashed.to_ascii_lowercase().find("\\tmp\\claude-")?;
+    let mut rest = backslashed[i + "\\tmp\\claude-".len()..].split('\\');
+    let uid = rest.next()?;
+    let slug = rest.next()?;
+    (!uid.is_empty() && uid.chars().all(|c| c.is_ascii_digit()) && !slug.is_empty()).then_some(slug)
 }
 
 fn category_priority(c: Category) -> u8 {
@@ -433,8 +469,8 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
             if agent_of(a).is_some() {
                 return false;
             }
-            let n = table.procs[&a].lname();
-            if n == "services.exe" || n == "wininit.exe" || n == "smss.exe" {
+            let n = table.procs[&a].stem();
+            if n == "services" || n == "wininit" || n == "smss" {
                 return true;
             }
         }
@@ -522,6 +558,8 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
         let orphan = table.is_orphan(root);
         let ancestors = table.ancestors(root);
         let nearest = ancestors.iter().find_map(|a| agent_of(*a).map(|(k, ap)| (*a, k, ap)));
+        // What started it, looking past a go-between.
+        let starter = ancestors.iter().copied().find(|a| !is_go_between(&table.procs[a]));
         let cwd = [headline_pid, root]
             .into_iter()
             .chain(members.iter().copied())
@@ -546,7 +584,7 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
             }
         } else if let Some((apid, k, ap)) = nearest.filter(|(_, _, ap)| *ap != AgentProc::Host) {
             let alive = ap != AgentProc::Sandbox || live_session_kinds.contains(&k);
-            let direct_child = ancestors.first() == Some(&apid);
+            let direct_child = starter == Some(apid);
             let root_is_shell = facts[&root].kind == Some(Kind::Shell);
             // Plugin and MCP servers the agent runs for itself, often through a `cmd /c` wrapper.
             let machinery = members.iter().any(|m| {
@@ -571,7 +609,7 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
             // terminal tabs, and IDEs' children are yours.)
             *ap == AgentProc::Host
                 && matches!(k, AgentKind::ClaudeCode | AgentKind::Codex)
-                && ancestors.first() == Some(apid)
+                && starter == Some(*apid)
                 && (facts[&root].kind != Some(Kind::Shell) || is_wrapper_shell(&table.procs[&root]))
         }) {
             Owner {
@@ -586,7 +624,7 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
                 guessed: false,
             }
         } else if !orphan
-            && (nearest.is_some() || ancestors.iter().any(|a| is_human_shell_host(&table.procs[a].lname())))
+            && (nearest.is_some() || ancestors.iter().any(|a| is_human_shell_host(&table.procs[a].stem())))
         {
             let via = nearest.map(|(_, k, _)| host_label(k)).unwrap_or("a terminal");
             Owner {
@@ -769,7 +807,7 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
             continue;
         }
         // Codex's own machinery (exec server, code-mode host, computer-use bridge) isn't a session.
-        if kind == AgentKind::Codex && (p.lname() != "codex.exe" || p.cmd.iter().any(|a| a == "exec-server")) {
+        if kind == AgentKind::Codex && (p.stem() != "codex" || p.cmd.iter().any(|a| a == "exec-server")) {
             continue;
         }
         let host_agent = table
@@ -780,7 +818,7 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
             Some(k) => host_label(k).to_string(),
             None => {
                 let terminal = table.ancestors(p.pid).iter().any(|a| {
-                    let n = table.procs[a].lname();
+                    let n = table.procs[a].stem();
                     is_human_shell_host(&n) || classify::kind_of(&table.procs[a]) == Some(Kind::Shell)
                 });
                 if terminal { "Terminal".to_string() } else { String::new() }
@@ -790,12 +828,13 @@ pub fn analyze(table: &ProcTable, listeners: &HashMap<u32, Vec<Listener>>, cfg: 
         let helpers: Vec<&&Group> = mine.iter().filter(|g| g.status == Status::Helper).collect();
         // One Codex app-server hosts every thread; its own folder says nothing. Threads come
         // from Codex's records instead (see codex.rs).
-        let hosts_threads = kind == AgentKind::Codex && p.cmd.iter().any(|a| a == "app-server");
+        // The OpenCode app's engine is the same: one `serve` behind every session in the app.
+        let hosts_threads = (kind == AgentKind::Codex && p.cmd.iter().any(|a| a == "app-server")) || (kind == AgentKind::OpenCode && host_agent.is_some() && p.cmd.iter().any(|a| a == "serve"));
         let project_dir = if hosts_threads { None } else { project_of_agent.get(&p.pid).cloned().or_else(|| p.cwd.clone()) };
         sessions.push(Session {
             id: session_of_agent.get(&p.pid).cloned().unwrap_or_else(|| format!("pid-{}", p.pid)),
             agent: kind,
-            label: if hosts_threads && host_agent.is_some() { "Codex app".to_string() } else { kind.label().to_string() },
+            label: if hosts_threads && host_agent.is_some() { host_label(kind).to_string() } else { kind.label().to_string() },
             pid: p.pid,
             started: p.start,
             age: now.saturating_sub(p.start),
@@ -1054,7 +1093,7 @@ mod tests {
 
     #[test]
     fn a_running_claude_session_is_known_from_its_own_file_between_commands() {
-        let dir = std::env::temp_dir().join(format!("mom-claude-sessions-{}", std::process::id()));
+        let dir = crate::util::temp_dir().join(format!("mom-claude-sessions-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let t0 = 1_790_000_000;

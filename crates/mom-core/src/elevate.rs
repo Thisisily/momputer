@@ -709,7 +709,7 @@ mod tests {
     /// let in, whoever the temp folder itself lets in.
     #[cfg(windows)]
     fn own_folder(name: &str) -> std::path::PathBuf {
-        let root = std::env::temp_dir().join(format!("mom-{name}-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         assert!(icacls(&root, &["/inheritance:r", "/grant:r", &format!("*{}:(OI)(CI)F", acl::me()[0])]));
@@ -813,7 +813,7 @@ mod tests {
 
     #[test]
     fn only_what_you_made_is_yours() {
-        let dir = std::env::temp_dir().join(format!("mom-mine-{}", std::process::id()));
+        let dir = crate::util::temp_dir().join(format!("mom-mine-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("project")).unwrap();
         std::fs::write(dir.join("project").join("file.txt"), "x").unwrap();
         // Running as administrator (a build machine does), what you make belongs to the
@@ -862,7 +862,7 @@ mod tests {
     #[test]
     fn deletes_as_administrator_only_where_nobody_else_can_swap_folders() {
         // Inside a folder you own (Temp): no.
-        let mine = std::env::temp_dir().join("mom-admin-check").join("x");
+        let mine = crate::util::temp_dir().join("mom-admin-check").join("x");
         std::fs::create_dir_all(mine.parent().unwrap()).unwrap();
         let err = admin_may_delete(&mine).unwrap_err();
         assert!(err.contains("other users can change"), "{err}");
@@ -876,7 +876,7 @@ mod tests {
     #[test]
     fn asks_for_an_administrator_only_for_a_mom_nothing_else_could_have_swapped() {
         // A copy in a folder you own: no.
-        let dir = std::env::temp_dir().join("mom-elevate-check");
+        let dir = crate::util::temp_dir().join("mom-elevate-check");
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("mom.exe");
         std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
@@ -892,7 +892,7 @@ mod tests {
     fn tells_signed_from_unsigned_from_tampered() {
         // This test program isn't signed, and a text file can't be.
         assert_eq!(signature(&std::env::current_exe().unwrap()), Ok(None));
-        let dir = std::env::temp_dir().join("mom-signature-check");
+        let dir = crate::util::temp_dir().join("mom-signature-check");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("note.txt"), "hello").unwrap();
         assert_eq!(signature(&dir.join("note.txt")), Ok(None));

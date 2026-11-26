@@ -5,6 +5,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// The Temp folder, spelled the way it really is. On a Mac, /var and /tmp are links into
+/// /private, and mom never works through a link (see browser_data.rs): by the name the system
+/// gives it there, she'd refuse everything in Temp.
+pub fn temp_dir() -> PathBuf {
+    let dir = std::env::temp_dir();
+    #[cfg(unix)]
+    if let Ok(real) = std::fs::canonicalize(&dir) {
+        return real;
+    }
+    dir
+}
+
 pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -275,6 +287,29 @@ pub fn move_new(from: &Path, to: &Path) -> std::io::Result<()> {
         }
         std::fs::rename(from, to)
     }
+}
+
+/// How things are sent to the bin. On a Mac the system itself is asked, not Finder: asking Finder
+/// has macOS ask you whether momputer may control it, and nothing goes anywhere if you say no.
+fn bin() -> trash::TrashContext {
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    let mut bin = trash::TrashContext::new();
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        bin.set_delete_method(DeleteMethod::NsFileManager);
+    }
+    bin
+}
+
+/// Sends a file or folder to the Recycle Bin (the Trash, on a Mac).
+pub fn to_bin(path: &Path) -> Result<(), String> {
+    bin().delete(path).map_err(|e| e.to_string())
+}
+
+/// Sends several at once. On an error, some may have gone and some not: look.
+pub fn to_bin_all<P: AsRef<Path>>(paths: &[P]) -> Result<(), String> {
+    bin().delete_all(paths).map_err(|e| e.to_string())
 }
 
 /// Did a move fail because something is already where the thing was going?
@@ -628,7 +663,7 @@ mod tests {
 
     #[test]
     fn a_move_never_replaces_what_is_there() {
-        let dir = std::env::temp_dir().join(format!("mom-move-new-{}", std::process::id()));
+        let dir = temp_dir().join(format!("mom-move-new-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("folder")).unwrap();
         let (a, b) = (dir.join("a.txt"), dir.join("b.txt"));

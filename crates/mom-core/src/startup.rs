@@ -51,7 +51,12 @@ pub fn list(paths: &Paths, table: &ProcTable) -> Vec<Startup> {
                 name,
                 command: a.command.clone(),
                 exe,
-                yours: a.location != "Run (all users)" && !a.command.to_ascii_lowercase().contains(r"\programdata\microsoft\windows\start menu"),
+                yours: if a.location.starts_with("Launch ") {
+                    // A Mac's: yours to switch if it's an agent (they run as you); a daemon is the whole Mac's.
+                    a.location.starts_with("Launch agent")
+                } else {
+                    a.location != "Run (all users)" && !a.command.to_ascii_lowercase().contains(r"\programdata\microsoft\windows\start menu")
+                },
                 location: a.location,
                 enabled: a.enabled,
                 running: !procs.is_empty(),
@@ -67,6 +72,9 @@ pub fn list(paths: &Paths, table: &ProcTable) -> Vec<Startup> {
 /// "run-user:Steam", "folder-machine:Tailscale.lnk": the hive and list it's in, and its entry.
 fn id_of(a: &StartupApp) -> String {
     match a.location.as_str() {
+        "Launch agent (you)" => format!("agent-user:{}", a.entry),
+        "Launch agent (all users)" => format!("agent-machine:{}", a.entry),
+        "Launch daemon (all users)" => format!("daemon:{}", a.entry),
         "Startup folder" if a.command.to_ascii_lowercase().contains(r"\programdata\") => format!("folder-machine:{}", a.entry),
         "Startup folder" => format!("folder-user:{}", a.entry),
         "Run (all users)" => format!("run-machine:{}", a.entry),
@@ -78,7 +86,12 @@ fn id_of(a: &StartupApp) -> String {
 pub fn exe_of(command: &str) -> Option<String> {
     let c = command.trim();
     let path = if let Some(rest) = c.strip_prefix('"') {
-        rest.split('"').next()?.to_string()
+        let path = rest.split('"').next()?.to_string();
+        // A Mac's programs are whole paths with no ".exe" to tell them by.
+        if path.starts_with('/') {
+            return Some(path);
+        }
+        path
     } else {
         let lower = c.to_ascii_lowercase();
         let end = lower.find(".exe").map(|i| i + 4)?;
@@ -136,6 +149,18 @@ const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Star
 pub fn set(paths: &Paths, id: &str, on: bool) -> Result<String, String> {
     let item = crate::health::startup_apps(paths).into_iter().find(|a| id_of(a) == id).ok_or("That one isn't in the startup list any more.")?;
     let (list, entry) = id.split_once(':').ok_or("Mom doesn't know that startup entry.")?;
+    #[cfg(target_os = "macos")]
+    if list.starts_with("agent-") {
+        crate::macos::set_startup(paths.uid, entry, on)?;
+        return Ok(if on {
+            format!("{} will start by itself again, from the next time you log in.", item.name)
+        } else {
+            format!("{} won't start by itself any more, from the next time you log in. It's still installed; open it whenever you like.", item.name)
+        });
+    }
+    if list == "daemon" {
+        return Err(format!("{} starts for the whole Mac, so only an administrator can switch it. System Settings > General > Login Items & Extensions can.", item.name));
+    }
     let sub = match list {
         "run-user" => "Run",
         "folder-user" => "StartupFolder",

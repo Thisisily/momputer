@@ -5,6 +5,12 @@
 //! Also takes out the trash (temp folders and caches), gives the whole machine a checkup,
 //! grades messy folders, and teaches agents the house rules.
 
+// Mom was written for Windows first, and a good part of her reads things only Windows keeps (its
+// registry, its event log, its drivers). Elsewhere that part is still built, so it stays honest,
+// but nothing calls it, and a variable only Windows' branch changes needn't be changeable: not
+// worth a warning each.
+#![cfg_attr(not(windows), allow(dead_code, unused_mut))]
+
 pub mod agents;
 pub mod archive;
 mod browser_data;
@@ -24,6 +30,8 @@ pub mod icons;
 pub mod installed;
 pub mod kill;
 pub mod letter;
+#[cfg(target_os = "macos")]
+mod macos;
 pub mod paths;
 pub mod ports;
 pub mod procs;

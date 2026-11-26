@@ -1081,11 +1081,11 @@ fn run(cli: Cli) -> Result<i32> {
             if json {
                 print_json(&sys)?;
             } else {
-                println!("{}", st.bold("THIS PC"));
+                println!("{}", st.bold(if cfg!(target_os = "macos") { "THIS MAC" } else { "THIS PC" }));
                 for (k, v) in &sys.pc {
                     println!("  {}{}", pad(k, 12), v);
                 }
-                for area in ["Security", "Updates", "Hardware", "Performance", "Registry"] {
+                for area in ["Security", "Updates", "Backups", "Hardware", "Performance", "Registry"] {
                     let list: Vec<_> = sys.checks.iter().filter(|c| c.area == area).collect();
                     if list.is_empty() {
                         continue;
@@ -1200,7 +1200,7 @@ fn run(cli: Cli) -> Result<i32> {
                     let after = match (e.undone, e.action) {
                         (true, _) => " · put back".to_string(),
                         (false, Some(a)) => format!(" · {a} from the widget"),
-                        _ if e.in_bin => " · in the Recycle Bin".to_string(),
+                        _ if e.in_bin => paths.say(" · in the Recycle Bin"),
                         _ => String::new(),
                     };
                     println!("{}  {}{}{}", st.dim(&pad(&when, 10)), e.entry.text, st.dim(who), st.dim(&after));
@@ -1303,7 +1303,7 @@ fn wrap(text: &str, width: usize, indent: &str) -> String {
 const GROUPS: &[(&str, &str)] = &[
     ("agents", "AGENTS' LEFTOVERS"),
     ("dev", "DEVELOPER CACHES AND BUILDS"),
-    ("windows", "WINDOWS AND BROWSERS"),
+    ("windows", if cfg!(target_os = "macos") { "MACOS" } else { "WINDOWS AND BROWSERS" }),
     ("personal", "YOUR FILES"),
 ];
 
@@ -1361,7 +1361,7 @@ fn print_files(st: &Style, r: &mom_core::files::FilesReport) {
     println!(
         "\n{}",
         st.dim(&wrap(
-            "Nothing was touched. In the widget you tick what goes, and it goes to the Recycle Bin; the last copy of anything always stays.",
+            &paths().say("Nothing was touched. In the widget you tick what goes, and it goes to the Recycle Bin; the last copy of anything always stays."),
             96,
             "  "
         ))
@@ -1466,7 +1466,7 @@ fn print_health(st: &Style, h: &mom_core::health::Health) {
         let filled = (pct as usize * 20 / 100).min(20);
         let bar = format!("{}{}", "█".repeat(filled), "░".repeat(20 - filled));
         let bar = if pct >= 90 { st.red(&bar) } else { bar };
-        let name = format!("{}{}", d.label, if d.system { " (Windows)" } else { "" });
+        let name = format!("{}{}", d.label, if !d.system { "" } else if cfg!(target_os = "macos") { " (macOS)" } else { " (Windows)" });
         println!("  {}{}{}  {}", pad(&d.root, 5), pad(&name, 26), bar, st.dim(&format!("{} free of {}", human_bytes(d.free), human_bytes(d.total))));
         if let Some(days) = d.full_in_days {
             println!("       {}", st.yellow(&mom_core::space::full_in_words(&d.root, days)));
@@ -1480,6 +1480,10 @@ fn print_health(st: &Style, h: &mom_core::health::Health) {
     for p in &h.top_memory {
         let procs = if p.count == 1 { "1 process".to_string() } else { format!("{} processes", p.count) };
         println!("  {}{}{}", pad(&human_bytes(p.mem), 10), pad(&p.name, 30), st.dim(&procs));
+    }
+    // What starts with Windows is Windows' own list; mom doesn't read a Mac's yet.
+    if cfg!(target_os = "macos") {
+        return;
     }
     let on = h.startup.iter().filter(|a| a.enabled).count();
     println!("\n{}  {}", st.bold("STARTS WITH WINDOWS"), st.dim(&format!("{on} on, {} off", h.startup.len() - on)));
@@ -1609,7 +1613,7 @@ fn print_room(st: &Style, r: &tidy::RoomReport) {
         }
         println!(
             "\n  {}",
-            st.dim("`mom tidy --apply` does the checked ones, `--only a1,a3` picks. Moves can be undone (`mom undo`); deletions go to the Recycle Bin.")
+            st.dim(&paths().say("`mom tidy --apply` does the checked ones, `--only a1,a3` picks. Moves can be undone (`mom undo`); deletions go to the Recycle Bin."))
         );
     }
 }

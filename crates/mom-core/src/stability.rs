@@ -64,6 +64,13 @@ pub fn get() -> Stability {
     if let Some(s) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|s| now.saturating_sub(s.to) < KEEP_FOR) {
         return s.clone();
     }
+    // A Mac keeps a report of each crash in a folder, where Windows keeps a log of events.
+    #[cfg(target_os = "macos")]
+    if let Some(home) = dirs::home_dir() {
+        let s = crate::macos::stability(&home, now);
+        *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
+        return s;
+    }
     let ms = DAYS * 86_400 * 1000;
     let drivers: Vec<String> = crate::speed::GPU_DRIVERS.iter().map(|d| format!("Provider[@Name='{d}']")).collect();
     let system = format!(
@@ -142,7 +149,7 @@ impl Stability {
     /// The thirty days in a sentence: "1 blue screen and 62 app crashes in 30 days."
     pub fn summary(&self) -> String {
         let parts: Vec<String> = [
-            (self.blue_screens, "blue screen", "blue screens"),
+            (self.blue_screens, if cfg!(target_os = "macos") && !cfg!(test) { "kernel panic" } else { "blue screen" }, if cfg!(target_os = "macos") && !cfg!(test) { "kernel panics" } else { "blue screens" }),
             (self.shutdowns, "unexpected shutdown", "unexpected shutdowns"),
             (self.gpu_resets, "graphics driver reset", "graphics driver resets"),
             (self.hardware_errors, "hardware error", "hardware errors"),
@@ -297,7 +304,7 @@ mod tests {
 
     #[test]
     fn a_change_is_watched_for_a_week() {
-        let dir = std::env::temp_dir().join(format!("mom-watch-{}", std::process::id()));
+        let dir = crate::util::temp_dir().join(format!("mom-watch-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let now = 1_792_000_000;
         assert_eq!(watch(&dir, 3200, "4604", now), None, "the first look only takes notes");

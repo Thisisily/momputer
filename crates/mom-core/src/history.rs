@@ -410,7 +410,7 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> (std::path::PathBuf, Paths) {
-        let root = std::env::temp_dir().join(format!("mom-history-{name}-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-history-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         (root, paths)

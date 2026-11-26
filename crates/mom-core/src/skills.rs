@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn who_has_a_skill_and_how_old_their_copy_is() {
-        let root = std::env::temp_dir().join(format!("mom-skills-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-skills-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         let put = |dir: PathBuf, version: Option<&str>| {

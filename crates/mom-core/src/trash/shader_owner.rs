@@ -377,7 +377,7 @@ mod windows {
         impl Fixture {
             fn new() -> Self {
                 static NEXT: AtomicU64 = AtomicU64::new(0);
-                let path = std::env::temp_dir().join(format!(
+                let path = crate::util::temp_dir().join(format!(
                     "mom-shader-owner-{}-{}-{}", std::process::id(),
                     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
                     NEXT.fetch_add(1, Ordering::Relaxed),
@@ -492,6 +492,8 @@ mod tests {
         assert!(nvidia_identity(&nvph(b"game.exe")[..24]).is_none());
     }
 
+    // About Windows' own folders, read by Windows' own rules for paths.
+    #[cfg(windows)]
     #[test]
     fn older_drivers_layout_names_too_and_app_ids_come_from_file_names() {
         // Name at byte 13, after a marker at byte 12 (no size field before it).

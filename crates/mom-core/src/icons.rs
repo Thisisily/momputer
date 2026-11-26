@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn an_extension_picture_stays_inside_its_folder() {
-        let root = std::env::temp_dir().join(format!("mom-icons-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-icons-{}", std::process::id()));
         let dir = root.join("ext");
         std::fs::create_dir_all(dir.join("img")).unwrap();
         std::fs::write(dir.join("img").join("48.png"), png(1, 1, &[0, 0, 0, 255])).unwrap();

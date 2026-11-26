@@ -6,7 +6,9 @@ use crate::eventlog::{query, Ev};
 use crate::speed::Fix;
 use crate::system::{check, plain, Check};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 // ------------------------------------------------------------------ your folders
 
@@ -368,7 +370,7 @@ mod tests {
         assert_eq!((c[0].level, c[0].title.as_str()), ("ok", "F: is healthy again"));
         assert!(c[0].detail.contains("4 times") && c[0].more.is_empty());
         assert!(repair_checks(&[Repairs { letter: 'C', label: String::new(), times: vec![1], found: 1, healthy_now: false }]).is_empty());
-        let dir = std::env::temp_dir().join(format!("mom-found-{}", std::process::id()));
+        let dir = crate::util::temp_dir().join(format!("mom-found-{}", std::process::id()));
         for n in ["found.000", "found.001", "FOUND.017", "found.things", "found.0001"] {
             std::fs::create_dir_all(dir.join(n)).unwrap();
         }

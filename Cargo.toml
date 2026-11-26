@@ -54,6 +54,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_Packaging_Appx",
     "Wdk_System_SystemInformation",
 ] }
+libc = "0.2"
 mom-core = { path = "crates/mom-core" }
 
 # Debug builds are for tests and checks. A line number in a backtrace is enough to find a

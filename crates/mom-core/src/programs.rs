@@ -103,6 +103,15 @@ fn windows_dir() -> String {
     format!("{}\\", lower(root.trim_end_matches('\\')))
 }
 
+/// Is this file the system's own? Under Windows' folder; or, on a Mac, in macOS's own folders
+/// (but not one of the apps it comes with: Safari and Mail are apps like any other).
+fn is_os_path(lpath: &str, win_dir: &str) -> bool {
+    lpath.starts_with(win_dir)
+        || (cfg!(target_os = "macos")
+            && !lpath.contains("/applications/")
+            && ["/system/", "/usr/libexec/", "/usr/sbin/", "/usr/bin/", "/sbin/", "/bin/", "/library/apple/", "/private/var/db/"].iter().any(|dir| lpath.starts_with(dir)))
+}
+
 /// The process a helper belongs to: the first ancestor that isn't a helper itself.
 fn owner<'a>(table: &'a ProcTable, p: &'a Proc) -> &'a Proc {
     let mut cur = p;
@@ -180,7 +189,7 @@ pub fn list(table: &ProcTable) -> Vec<Program> {
             "mom"
         } else if a.procs.iter().any(|p| SECURITY.contains(&p_lname(p).as_str())) || SECURITY_DIRS.iter().any(|d| lexe.contains(d)) {
             "security"
-        } else if root.pid <= 4 || crate::health::not_a_program(&root.name) || (!lexe.is_empty() && lexe.starts_with(&win_dir)) || a.procs.iter().any(|p| crate::classify::is_critical(p)) {
+        } else if root.pid <= 4 || crate::health::not_a_program(&root.name) || (!lexe.is_empty() && is_os_path(&lexe, &win_dir)) || a.procs.iter().any(|p| crate::classify::is_critical(p)) {
             "windows"
         } else if agent {
             "agent"
@@ -283,8 +292,18 @@ fn agent_family(table: &ProcTable) -> HashSet<u32> {
 }
 
 /// A program mom can start again by itself: a file she knows, or a Store app (by its app ID).
+/// On a Mac, an app: a bare program was started with words mom can't give it again.
 fn relaunchable(lexe: &str) -> bool {
+    if cfg!(target_os = "macos") {
+        return lexe.contains(".app/");
+    }
     !lexe.is_empty()
+}
+
+/// The app a file is inside, on a Mac: ".../Google Chrome.app" for the app itself and for every
+/// helper it keeps within.
+fn mac_bundle(path: &str) -> Option<&str> {
+    path.find(".app/").map(|at| &path[..at + 4])
 }
 
 /// Agent sessions running inside a program ("2 Claude Code sessions").
@@ -324,8 +343,16 @@ fn tidy_name(s: &str) -> String {
 fn display_name(proc_name: &str, exe: Option<&str>) -> String {
     let lexe = exe.map(lower).unwrap_or_default();
     let stem = lower(proc_name.trim_end_matches(".exe").trim_end_matches(".EXE"));
-    if stem == "claude" && (lexe.contains("\\.local\\bin\\") || lexe.contains("\\npm\\") || lexe.contains("node_modules")) {
+    if stem == "claude" && (lexe.contains("\\.local\\bin\\") || lexe.contains("\\npm\\") || lexe.contains("node_modules") || lexe.contains("/.local/") || lexe.contains("/claude-code/")) {
         return "Claude Code".into();
+    }
+    // On a Mac the app's own name is the best there is: "Google Chrome" for all of Chrome's
+    // processes, "Visual Studio Code" for the one that runs as "Electron".
+    if cfg!(target_os = "macos") {
+        if let Some(app) = exe.and_then(os::description).filter(|d| !d.is_empty()) {
+            // (A helper kept in a bundle of its own, "Steam Helper.app", is still Steam.)
+            return crate::health::program_name(&app);
+        }
     }
     if let Some(known) = crate::health::known_name(proc_name) {
         return known.to_string();
@@ -474,7 +501,7 @@ fn actionable(p: &Proc, path: Option<&str>, session: Option<u32>, win_dir: &str)
         && !crate::health::not_a_program(&p.name)
         && !SECURITY.contains(&p_lname(p).as_str())
         && !SECURITY_DIRS.iter().any(|d| lpath.contains(d))
-        && !(lpath.is_empty() || lpath.starts_with(win_dir))
+        && !(lpath.is_empty() || is_os_path(&lpath, win_dir))
 }
 
 /// Asks the program's windows to close, and waits up to `secs` for its processes to go.
@@ -585,6 +612,14 @@ fn restart(table: &ProcTable, prog: &Program) -> ActReport {
         if !gone_within(&procs, 5) {
             return fail(format!("{name} wouldn't close, so mom didn't start another one."));
         }
+    }
+    // On a Mac, the app is opened the way Finder opens it.
+    if cfg!(target_os = "macos") {
+        let Some(app) = mac_bundle(&target) else { return fail(format!("Closed {name}. Mom can only open apps again; start it the way you did.")) };
+        return match crate::util::run("/usr/bin/open", &[app], std::time::Duration::from_secs(20)) {
+            Ok(out) if out.ok() => ActReport { ok: true, message: format!("Restarted {name}.") },
+            _ => fail(format!("Closed {name}, but couldn't open it again. Open it from the Dock or Finder.")),
+        };
     }
     // Through Explorer, so it starts as you'd start it, not as mom's child.
     match std::process::Command::new("explorer.exe").arg(&target).spawn() {
@@ -881,7 +916,68 @@ mod os {
     }
 }
 
-#[cfg(not(windows))]
+/// A Mac's answers: an app is a bundle (Something.app) with its helpers inside, the apps that
+/// are open are the ones macOS lists with a place in the Dock, and one is asked to quit the way
+/// ⌘Q asks.
+#[cfg(target_os = "macos")]
+mod os {
+    use crate::procs::ProcTable;
+    use std::collections::{HashMap, HashSet};
+    use std::time::Duration;
+
+    /// Where every process's program is. (The table only looks that up for the few it reads in full.)
+    pub fn image_paths(table: &ProcTable) -> HashMap<u32, String> {
+        table.procs.values().filter_map(|p| Some((p.pid, p.exe.clone().or_else(|| crate::procs::exe_path(p.pid))?))).collect()
+    }
+
+    /// The main process of every app that's open the way a person opens one ("Foreground" in
+    /// macOS's list: it has a place in the Dock), from `lsappinfo list`.
+    fn open_apps() -> Vec<u32> {
+        let Some(out) = crate::util::run("/usr/bin/lsappinfo", &["list"], Duration::from_secs(6)).ok().filter(|o| o.ok()) else { return Vec::new() };
+        out.text()
+            .lines()
+            .filter(|l| l.contains("type=\"Foreground\""))
+            .filter_map(|l| l.split("pid = ").nth(1)?.split_whitespace().next()?.parse().ok())
+            .collect()
+    }
+
+    /// An open app counts as having a window: that's what makes it an app here.
+    pub fn windows() -> HashMap<u32, Vec<isize>> {
+        open_apps().into_iter().map(|pid| (pid, vec![1])).collect()
+    }
+
+    /// Asks each app among `pids` to quit, as ⌘Q does: it gets to ask about what isn't saved.
+    /// Through macOS's own way of asking a running app (NSRunningApplication's terminate): no
+    /// app is scripted, so macOS has nothing to ask your permission for.
+    pub fn close_windows(pids: &HashSet<u32>) {
+        let apps: Vec<String> = open_apps().into_iter().filter(|pid| pids.contains(pid)).map(|pid| pid.to_string()).collect();
+        if apps.is_empty() {
+            return;
+        }
+        let script = format!(
+            "ObjC.import('AppKit'); [{}].forEach(function (pid) {{ var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(pid); if (!app.isNil()) app.terminate; }});",
+            apps.join(",")
+        );
+        let _ = crate::util::run("/usr/bin/osascript", &["-l", "JavaScript", "-e", &script], Duration::from_secs(10));
+    }
+
+    pub fn app_id(_: u32) -> Option<String> {
+        None
+    }
+
+    /// The name on the bundle a file is inside: "Google Chrome" for the app and for its helpers.
+    pub fn description(path: &str) -> Option<String> {
+        let app = super::mac_bundle(path)?;
+        let name = app.rsplit('/').next()?.strip_suffix(".app")?;
+        (!name.is_empty()).then(|| name.to_string())
+    }
+
+    pub fn gpu_by_pid() -> HashMap<u32, HashMap<String, f32>> {
+        HashMap::new()
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod os {
     use crate::procs::ProcTable;
     use std::collections::{HashMap, HashSet};

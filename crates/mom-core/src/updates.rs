@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn what_she_heard_is_measured_against_what_is_running() {
-        let dir = std::env::temp_dir().join(format!("mom-update-{}", std::process::id()));
+        let dir = crate::util::temp_dir().join(format!("mom-update-{}", std::process::id()));
         let paths = Paths::under(&dir);
         assert_eq!(known(&paths, "0.2.0"), Update { current: "0.2.0".into(), get_it: GET_IT.into(), ..Update::default() });
         std::fs::create_dir_all(paths.state_dir()).unwrap();

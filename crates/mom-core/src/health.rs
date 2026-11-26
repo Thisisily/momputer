@@ -125,6 +125,8 @@ pub fn check(table: &ProcTable, paths: &Paths) -> Health {
         storage_sense: os::storage_sense_on(),
         startup_enabled: startup.iter().filter(|s| s.enabled).count(),
         top: top_memory.first(),
+        mac: paths.is_mac(),
+        pressure: os::memory_pressure(),
     };
     let mut checks = checks(&facts);
     let unused_apps = crate::installed::unused(paths, table, crate::util::now_secs());
@@ -165,6 +167,12 @@ struct Facts<'a> {
     storage_sense: bool,
     startup_enabled: usize,
     top: Option<&'a ProcMem>,
+    /// A Mac: its disks go by name, and what only Windows has (Storage Sense, the list of what
+    /// starts with it) isn't spoken of.
+    mac: bool,
+    /// How hard a Mac is working to find memory ("normal", "tight", "critical"), which says
+    /// more there than how much is in use: macOS fills what's free with what it can drop.
+    pressure: Option<&'static str>,
 }
 
 fn action(label: &str, url: &str) -> Option<CheckAction> {
@@ -182,10 +190,27 @@ fn drive_low(d: &Drive) -> bool {
 
 fn checks(f: &Facts) -> Vec<Check> {
     let mut out = Vec::new();
-    for d in f.drives {
+    for (n, d) in f.drives.iter().enumerate() {
+        let numbers = format!("{} free of {}.", size(d.free), size(d.total));
+        if f.mac {
+            // A Mac's disks go by their names ("Macintosh HD").
+            let id = if d.system { "drive-startup".to_string() } else { format!("drive-{n}") };
+            out.push(if drive_low(d) {
+                let why = if d.system { " macOS needs room to update, and everything slows down when it runs out." } else { "" };
+                check_item(
+                    &id,
+                    "warn",
+                    format!("{} is nearly full", d.label),
+                    format!("{numbers}{why} Mom's Storage tab can make room."),
+                    action("Open Storage settings", "x-apple.systempreferences:com.apple.settings.Storage"),
+                )
+            } else {
+                check_item(&id, "ok", format!("{} has room", d.label), numbers, None)
+            });
+            continue;
+        }
         let letter = d.root.trim_end_matches('\\');
         let id = format!("drive-{}", letter.trim_end_matches(':').to_ascii_lowercase());
-        let numbers = format!("{} free of {}.", size(d.free), size(d.total));
         out.push(if drive_low(d) {
             let why = if d.system { " Windows needs room to update, and everything slows down when it runs out." } else { "" };
             check_item(
@@ -230,12 +255,14 @@ fn checks(f: &Facts) -> Vec<Check> {
             .top
             .map(|t| format!("{} is using {}.", t.name, size(t.mem)))
             .unwrap_or_default();
-        let level = if pct > 90 {
-            "warn"
-        } else if pct > 80 {
-            "tip"
-        } else {
-            "ok"
+        let level = match f.pressure {
+            // A Mac says itself when it's short.
+            Some("critical") => "warn",
+            Some("tight") => "tip",
+            Some(_) => "ok",
+            None if pct > 90 => "warn",
+            None if pct > 80 => "tip",
+            None => "ok",
         };
         let (title, detail) = match level {
             "ok" => (
@@ -250,6 +277,16 @@ fn checks(f: &Facts) -> Vec<Check> {
         out.push(check_item("memory", level, title, detail, None));
     }
 
+    let rank = |l: &str| match l {
+        "warn" => 0,
+        "tip" => 1,
+        _ => 2,
+    };
+    if f.mac {
+        // What starts with Windows, and Storage Sense, are Windows' own.
+        out.sort_by_key(|c| rank(c.level));
+        return out;
+    }
     let n = f.startup_enabled;
     out.push(if n > 8 {
         check_item(
@@ -282,11 +319,6 @@ fn checks(f: &Facts) -> Vec<Check> {
         )
     });
 
-    let rank = |l: &str| match l {
-        "warn" => 0,
-        "tip" => 1,
-        _ => 2,
-    };
     out.sort_by_key(|c| rank(c.level));
     out
 }
@@ -301,6 +333,12 @@ pub(crate) fn not_a_program(name: &str) -> bool {
 
 /// A name people recognise for a program's process.
 pub(crate) fn program_name(exe: &str) -> String {
+    // A Mac app's helpers carry its name: "Google Chrome Helper (Renderer)" is Google Chrome,
+    // and so are all the others of its dozens of processes.
+    let exe = match exe.find(" Helper") {
+        Some(at) if at > 0 && (exe[at..] == *" Helper" || exe[at..].starts_with(" Helper (")) => &exe[..at],
+        _ => exe,
+    };
     match known_name(exe) {
         Some(known) => known.to_string(),
         None => exe.strip_suffix(".exe").or_else(|| exe.strip_suffix(".EXE")).unwrap_or(exe).to_string(),
@@ -322,6 +360,11 @@ pub(crate) fn known_name(exe: &str) -> Option<&'static str> {
         "code" => "VS Code",
         "cursor" => "Cursor",
         "windsurf" => "Windsurf",
+        "antigravity" => "Antigravity",
+        "agy" => "Antigravity (in a terminal)",
+        "opencode" => "OpenCode",
+        "opencode-cli" => "OpenCode's engine",
+        "steam_osx" => "Steam",
         "claude" => "Claude",
         "codex" => "Codex",
         "chatgpt" => "ChatGPT",
@@ -413,6 +456,11 @@ const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Star
 
 /// Everything set to start with Windows: the Run keys and the Startup folders.
 pub fn startup_apps(paths: &Paths) -> Vec<StartupApp> {
+    // A Mac keeps a file for each thing it starts, where Windows keeps a list.
+    #[cfg(target_os = "macos")]
+    if paths.is_mac() {
+        return crate::macos::startup_apps(paths);
+    }
     use os::Hive::{CurrentUser as Cu, LocalMachine as Lm};
     let mut out = Vec::new();
     for (hive, key, location, approved_key) in [
@@ -612,6 +660,11 @@ mod os {
             || Key::open(Hive::LocalMachine, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending").is_some()
     }
 
+    /// Only a Mac says how hard it's working to find memory.
+    pub fn memory_pressure() -> Option<&'static str> {
+        None
+    }
+
     pub fn storage_sense_on() -> bool {
         Key::open(Hive::CurrentUser, r"Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy")
             .and_then(|k| k.dword("01"))
@@ -700,13 +753,37 @@ mod os {
         false
     }
     pub fn uptime_secs() -> u64 {
-        0
+        #[cfg(target_os = "macos")]
+        {
+            crate::macos::uptime_secs()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            0
+        }
     }
     pub fn memory() -> Option<Memory> {
         None
     }
+    pub fn memory_pressure() -> Option<&'static str> {
+        #[cfg(target_os = "macos")]
+        {
+            crate::macos::memory_pressure()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            None
+        }
+    }
     pub fn drives() -> Vec<Drive> {
-        vec![]
+        #[cfg(target_os = "macos")]
+        {
+            crate::macos::drives()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            vec![]
+        }
     }
 }
 
@@ -720,7 +797,7 @@ mod tests {
     }
 
     fn facts<'a>(drives: &'a [Drive], memory: &'a Memory, top: Option<&'a ProcMem>) -> Facts<'a> {
-        Facts { drives, memory, uptime_secs: 2 * 86_400, reboot_pending: false, storage_sense: true, startup_enabled: 3, top }
+        Facts { drives, memory, uptime_secs: 2 * 86_400, reboot_pending: false, storage_sense: true, startup_enabled: 3, top, mac: false, pressure: None }
     }
 
     fn find<'c>(checks: &'c [Check], id: &str) -> &'c Check {
@@ -812,6 +889,12 @@ mod tests {
         let t = ProcTable::from_procs(procs, 1);
         let top = top_memory(&t, 6);
         assert_eq!(top[0].name, "Chrome");
+        // A Mac app and its helpers are one program.
+        assert_eq!(program_name("Google Chrome Helper (Aperitif Renderer)"), "Google Chrome");
+        assert_eq!(program_name("Code Helper"), "VS Code");
+        assert_eq!(program_name("Spotify Helper"), "Spotify");
+        assert_eq!(program_name("Helper"), "Helper");
+        assert_eq!(program_name("My Helper Tool"), "My Helper Tool");
         assert_eq!((top[0].mem, top[0].count), (5 * GB, 2));
         assert_eq!(top[1].name, "VS Code");
         assert!(top.iter().any(|p| p.name == "Steam" && p.count == 2));

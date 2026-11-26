@@ -22,6 +22,7 @@ pub enum AgentKind {
     Gemini,
     Copilot,
     Windsurf,
+    Antigravity,
     Goose,
     Amp,
     OpenCode,
@@ -41,6 +42,7 @@ impl AgentKind {
             AgentKind::Gemini => "Gemini CLI",
             AgentKind::Copilot => "GitHub Copilot",
             AgentKind::Windsurf => "Windsurf",
+            AgentKind::Antigravity => "Antigravity",
             AgentKind::Goose => "Goose",
             AgentKind::Amp => "Amp",
             AgentKind::OpenCode => "OpenCode",
@@ -61,6 +63,7 @@ impl AgentKind {
             AgentKind::Gemini => "Gemini",
             AgentKind::Copilot => "Copilot",
             AgentKind::Windsurf => "Windsurf",
+            AgentKind::Antigravity => "Antigravity",
             AgentKind::Goose => "Goose",
             AgentKind::Amp => "Amp",
             AgentKind::OpenCode => "OpenCode",
@@ -80,6 +83,7 @@ impl AgentKind {
             AgentKind::Gemini => "gemini",
             AgentKind::Copilot => "copilot",
             AgentKind::Windsurf => "windsurf",
+            AgentKind::Antigravity => "antigravity",
             AgentKind::Goose => "goose",
             AgentKind::Amp => "amp",
             AgentKind::OpenCode => "opencode",
@@ -106,6 +110,8 @@ impl AgentKind {
             AgentKind::Copilot
         } else if starts("windsurf") || starts("codeium") {
             AgentKind::Windsurf
+        } else if starts("antigravity") || n == "agy" || starts("agy-") || starts("agy_") {
+            AgentKind::Antigravity
         } else if starts("goose") {
             AgentKind::Goose
         } else if starts("amp") {
@@ -261,41 +267,59 @@ fn is_electron_helper(p: &Proc) -> bool {
     p.cmd.iter().any(|a| a.starts_with("--type="))
 }
 
+/// The app itself, on a Mac: the program an app's window belongs to (`X.app/Contents/MacOS/X`),
+/// as opposed to a command-line tool of the same name, or one the app carries inside it.
+fn is_mac_app(exe: &str) -> bool {
+    exe.contains(".app\\contents\\macos\\")
+}
+
 pub fn agent_process(p: &Proc) -> Option<(AgentKind, AgentProc)> {
-    let name = p.lname();
+    let name = p.stem();
     let exe = p.lexe();
     let cmd = p.cmdline().to_ascii_lowercase().replace('\\', "/");
+    let app = |kind: AgentKind| (!is_electron_helper(p)).then_some((kind, AgentProc::Host));
     match name.as_str() {
-        "claude.exe" | "claude" => {
+        "claude" => {
             if is_electron_helper(p) {
                 return None;
             }
-            // The Claude desktop app is also called claude.exe; it hosts Claude Code sessions.
-            if exe.contains("\\windowsapps\\claude_") || exe.contains("\\anthropicclaude\\") {
+            // The Claude desktop app is also called claude; it hosts Claude Code sessions.
+            if exe.contains("\\windowsapps\\claude_") || exe.contains("\\anthropicclaude\\") || is_mac_app(&exe) {
                 Some((AgentKind::ClaudeCode, AgentProc::Host))
             } else {
                 Some((AgentKind::ClaudeCode, AgentProc::Session))
             }
         }
-        "codex.exe" | "codex" => Some((AgentKind::Codex, AgentProc::Session)),
+        // On a Mac the Codex desktop app is Codex.app; the `codex` it carries inside does the work.
+        "codex" if is_mac_app(&exe) => app(AgentKind::Codex),
+        "codex" => Some((AgentKind::Codex, AgentProc::Session)),
         n if n.starts_with("codex-") && n.contains("sandbox") && !n.contains("setup") => {
             Some((AgentKind::Codex, AgentProc::Sandbox))
         }
         n if n.starts_with("codex-") && !n.contains("setup") => Some((AgentKind::Codex, AgentProc::Session)),
-        // The Codex desktop app ships as ChatGPT.exe.
-        "chatgpt.exe" => (!is_electron_helper(p)).then_some((AgentKind::Codex, AgentProc::Host)),
-        "cursor.exe" => (!is_electron_helper(p)).then_some((AgentKind::Cursor, AgentProc::Host)),
-        "windsurf.exe" => (!is_electron_helper(p)).then_some((AgentKind::Windsurf, AgentProc::Host)),
-        "code.exe" | "code - insiders.exe" => {
-            (!is_electron_helper(p)).then_some((AgentKind::Copilot, AgentProc::Host))
-        }
-        "opencode.exe" | "opencode" => Some((AgentKind::OpenCode, AgentProc::Session)),
-        "goose.exe" | "goose" => Some((AgentKind::Goose, AgentProc::Session)),
-        "aider.exe" | "aider" => Some((AgentKind::Aider, AgentProc::Session)),
+        // The Codex desktop app ships as ChatGPT.exe on Windows. (A Mac's ChatGPT.app is ChatGPT.)
+        "chatgpt" if !is_mac_app(&exe) => app(AgentKind::Codex),
+        "cursor" => app(AgentKind::Cursor),
+        "windsurf" => app(AgentKind::Windsurf),
+        // Google's Antigravity: the editor hosts its agents; `agy` is the one for the terminal.
+        // Neither marks what it starts, so its work is known only while it's still running.
+        "antigravity" => app(AgentKind::Antigravity),
+        "agy" => Some((AgentKind::Antigravity, AgentProc::Session)),
+        "code" | "code - insiders" => app(AgentKind::Copilot),
+        // On a Mac, VS Code and Windsurf run as "Electron" inside their own app.
+        "electron" if exe.contains("\\visual studio code") => app(AgentKind::Copilot),
+        "electron" if exe.contains("\\windsurf") => app(AgentKind::Windsurf),
+        // The OpenCode desktop app hosts sessions, and does its work through a copy of the
+        // command-line one it keeps for itself (`opencode-cli serve`). On its own, that's a session.
+        "opencode" if is_electron_helper(p) => None,
+        "opencode" if is_mac_app(&exe) => app(AgentKind::OpenCode),
+        "opencode" | "opencode-cli" => Some((AgentKind::OpenCode, AgentProc::Session)),
+        "goose" => Some((AgentKind::Goose, AgentProc::Session)),
+        "aider" => Some((AgentKind::Aider, AgentProc::Session)),
         // Hermes Agent's launcher in its Python environment.
-        "hermes.exe" | "hermes" => Some((AgentKind::Hermes, AgentProc::Session)),
-        "droid.exe" => Some((AgentKind::Other, AgentProc::Session)),
-        "node.exe" | "node" | "bun.exe" => {
+        "hermes" => Some((AgentKind::Hermes, AgentProc::Session)),
+        "droid" => Some((AgentKind::Other, AgentProc::Session)),
+        "node" | "bun" => {
             if cmd.contains("@anthropic-ai/claude-code") {
                 Some((AgentKind::ClaudeCode, AgentProc::Session))
             } else if cmd.contains("@google/gemini-cli") || cmd.contains("/gemini-cli/") {
@@ -316,7 +340,7 @@ pub fn agent_process(p: &Proc) -> Option<(AgentKind, AgentProc)> {
                 None
             }
         }
-        "python.exe" | "python3.exe" | "pythonw.exe" => {
+        n if n == "python" || n == "pythonw" || n == "python3" || n.starts_with("python3.") => {
             let aider = p
                 .cmd
                 .iter()
@@ -423,5 +447,57 @@ mod tests {
         assert_eq!(agent_process(&fake(12, 0, "python.exe", "python manage.py runserver", 2)), None);
         assert_eq!(AgentKind::from_name("pi"), AgentKind::Pi);
         assert_eq!(AgentKind::from_name("pip"), AgentKind::Other);
+    }
+
+    #[test]
+    fn recognises_agent_processes_on_a_mac() {
+        let at = |pid: u32, name: &str, cmd: &str, exe: &str| {
+            let mut p = fake(pid, 1, name, cmd, 1);
+            p.exe = Some(exe.into());
+            p
+        };
+        // The desktop app hosts sessions; its helpers are neither.
+        let desktop = at(1, "Claude", "/Applications/Claude.app/Contents/MacOS/Claude", "/Applications/Claude.app/Contents/MacOS/Claude");
+        assert_eq!(agent_process(&desktop), Some((AgentKind::ClaudeCode, AgentProc::Host)));
+        let helper = at(2, "Claude Helper (Renderer)", "x --type=renderer", "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)");
+        assert_eq!(agent_process(&helper), None);
+        // Claude Code keeps itself under its version number and is run as "claude".
+        let cli = at(3, "claude", "claude --dangerously-skip-permissions", "/Users/me/.local/share/claude/versions/2.1.331");
+        assert_eq!(agent_process(&cli), Some((AgentKind::ClaudeCode, AgentProc::Session)));
+        // The one the desktop app runs for a session of its own.
+        let hosted = at(4, "claude", "claude --output-format stream-json", "/Users/me/Library/Application Support/Claude/claude-code/2.1.295/claude");
+        assert_eq!(agent_process(&hosted), Some((AgentKind::ClaudeCode, AgentProc::Session)));
+
+        let cursor = at(5, "Cursor", "/Applications/Cursor.app/Contents/MacOS/Cursor", "/Applications/Cursor.app/Contents/MacOS/Cursor");
+        assert_eq!(agent_process(&cursor), Some((AgentKind::Cursor, AgentProc::Host)));
+        let code = at(6, "Electron", "/Applications/Visual Studio Code.app/Contents/MacOS/Electron", "/Applications/Visual Studio Code.app/Contents/MacOS/Electron");
+        assert_eq!(agent_process(&code), Some((AgentKind::Copilot, AgentProc::Host)));
+        let some_app = at(7, "Electron", "/Applications/Other.app/Contents/MacOS/Electron", "/Applications/Other.app/Contents/MacOS/Electron");
+        assert_eq!(agent_process(&some_app), None);
+
+        let codex_app = at(8, "Codex", "/Applications/Codex.app/Contents/MacOS/Codex", "/Applications/Codex.app/Contents/MacOS/Codex");
+        assert_eq!(agent_process(&codex_app), Some((AgentKind::Codex, AgentProc::Host)));
+        let codex = at(9, "codex", "codex app-server", "/Applications/Codex.app/Contents/Resources/codex");
+        assert_eq!(agent_process(&codex), Some((AgentKind::Codex, AgentProc::Session)));
+        let opencode_app = at(10, "OpenCode", "/Applications/OpenCode.app/Contents/MacOS/OpenCode", "/Applications/OpenCode.app/Contents/MacOS/OpenCode");
+        assert_eq!(agent_process(&opencode_app), Some((AgentKind::OpenCode, AgentProc::Host)));
+        assert_eq!(agent_process(&at(11, "opencode", "opencode", "/opt/homebrew/bin/opencode")), Some((AgentKind::OpenCode, AgentProc::Session)));
+        // The engine the OpenCode app runs for itself, wherever the app was opened from.
+        let engine = at(14, "opencode-cli", "opencode-cli serve --service", "/Users/me/Library/Application Support/ai.opencode.desktop/cli/2.4.2-x64/opencode-cli");
+        assert_eq!(agent_process(&engine), Some((AgentKind::OpenCode, AgentProc::Session)));
+        let moved = at(15, "OpenCode", "x", "/private/var/folders/sb/T/AppTranslocation/E92F/d/OpenCode.app/Contents/MacOS/OpenCode");
+        assert_eq!(agent_process(&moved), Some((AgentKind::OpenCode, AgentProc::Host)));
+
+        // Antigravity: the editor, and `agy` in a terminal.
+        let editor = at(16, "Antigravity", "x", "/Applications/Antigravity.app/Contents/MacOS/Antigravity");
+        assert_eq!(agent_process(&editor), Some((AgentKind::Antigravity, AgentProc::Host)));
+        assert_eq!(agent_process(&at(17, "agy", "agy --dangerously-skip-permissions", "/Users/me/.local/bin/agy")), Some((AgentKind::Antigravity, AgentProc::Session)));
+        assert_eq!(agent_process(&at(18, "Antigravity Helper", "x --type=renderer", "/Applications/Antigravity.app/Contents/Frameworks/Antigravity Helper.app/Contents/MacOS/Antigravity Helper")), None);
+        assert_eq!(AgentKind::from_name("agy"), AgentKind::Antigravity);
+
+        let gemini = at(12, "node", "node /opt/homebrew/lib/node_modules/@google/gemini-cli/dist/index.js", "/opt/homebrew/bin/node");
+        assert_eq!(agent_process(&gemini), Some((AgentKind::Gemini, AgentProc::Session)));
+        let aider = at(13, "python3.12", "/Users/me/.local/pipx/venvs/aider-chat/bin/python /Users/me/.local/bin/aider", "/opt/homebrew/Cellar/python@3.12/3.12.4/bin/python3.12");
+        assert_eq!(agent_process(&aider), Some((AgentKind::Aider, AgentProc::Session)));
     }
 }

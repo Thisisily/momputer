@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn readings_are_kept_once_a_day_and_for_a_while() {
-        let root = std::env::temp_dir().join(format!("mom-space-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-space-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         let day = 86_400;

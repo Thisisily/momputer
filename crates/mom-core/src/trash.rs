@@ -28,6 +28,7 @@ mod walk;
 mod windows_update;
 
 pub use admin_look::{look as look_as_admin, LOOKS};
+pub(crate) use claude::project_name as claude_project_name;
 use crate::agents::AgentKind;
 use crate::config::{Config, TrashConfig};
 use crate::paths::Paths;
@@ -284,6 +285,9 @@ pub struct TrashCtx<'a> {
     pub list_scale: usize,
     /// Who is using uv's cache, from the same process sample.
     pub uv: uv::Seen,
+    /// On a Mac, the apps that are open, by the name macOS knows each by ("com.spotify.client"),
+    /// lowercase. None when macOS didn't say: then no app's cache is called free to clear.
+    pub open_apps: Option<HashSet<String>>,
     /// Isolated tests supply update transitions without querying or changing the host PC.
     #[cfg(test)]
     windows_update_probe: Option<&'a dyn Fn() -> windows_update::State>,
@@ -325,6 +329,7 @@ impl<'a> TrashCtx<'a> {
             live: None,
             list_scale: 1,
             uv: uv::seen(table, &uv::cache_dir(paths)),
+            open_apps: open_apps(paths),
             #[cfg(test)]
             windows_update_probe: None,
         }
@@ -339,9 +344,20 @@ impl<'a> TrashCtx<'a> {
         self.live_sessions.contains(id) || self.live_sessions.contains(&id.to_lowercase())
     }
 
+    /// Is a program of this name running? `exe` as Windows names it ("cargo.exe"): on a Mac the
+    /// same program is plain "cargo".
     fn running(&self, exe: &str) -> bool {
-        self.running_exes.contains(exe)
+        self.running_exes.contains(exe) || self.running_exes.contains(&crate::procs::stem_of(exe))
     }
+}
+
+/// The apps open right now on a Mac, as macOS lists them. (Nothing to ask on Windows.)
+fn open_apps(paths: &Paths) -> Option<HashSet<String>> {
+    if !paths.is_mac() {
+        return Some(HashSet::new());
+    }
+    let out = crate::util::run("/usr/bin/lsappinfo", &["list"], Duration::from_secs(6)).ok().filter(|o| o.ok())?;
+    Some(out.text().split("bundleID=\"").skip(1).filter_map(|rest| rest.split('"').next()).map(str::to_ascii_lowercase).collect())
 }
 
 const IN_USE: &str = "In use by a running program";
@@ -642,6 +658,63 @@ const DEFS: &[Def] = &[
         owner: None,
     },
     Def {
+        id: "xcode-builds",
+        label: "Xcode build data",
+        detail: "What Xcode built for each project. It builds it again when you open the project.",
+        what: "Everything Xcode makes while building your projects (its DerivedData folder): the built apps, \
+               indexes, logs and caches, a folder for each project. It grows to many gigabytes and Xcode never \
+               clears it. None of it is your source.",
+        group: "dev",
+        action: "delete",
+        safety: "safe",
+        owner: None,
+    },
+    Def {
+        id: "homebrew-cache",
+        label: "Homebrew downloads",
+        detail: "Packages Homebrew downloaded to install. Safe to clear; what's installed stays.",
+        what: "The packages Homebrew downloaded before installing them, kept in case you install the same version \
+               again. What you installed doesn't depend on them.",
+        group: "dev",
+        action: "delete",
+        safety: "safe",
+        owner: None,
+    },
+    Def {
+        id: "cocoapods-cache",
+        label: "CocoaPods cache",
+        detail: "CocoaPods' download cache. Safe to clear; it refills as you install.",
+        what: "A copy of every pod CocoaPods has downloaded, kept so the next `pod install` is faster. \
+               Your projects don't depend on it.",
+        group: "dev",
+        action: "delete",
+        safety: "safe",
+        owner: None,
+    },
+    Def {
+        id: "simulators",
+        label: "Dead simulators",
+        detail: "iPhone and iPad simulators whose system Xcode no longer has. Runs `xcrun simctl delete unavailable`.",
+        what: "Xcode makes a simulator for every kind of iPhone and iPad for each iOS version you install, and each \
+               keeps its own apps and data. When an iOS version is removed or replaced, its simulators stay on disk, \
+               though they can never be started again.",
+        group: "dev",
+        action: "tool",
+        safety: "safe",
+        owner: None,
+    },
+    Def {
+        id: "puppeteer-old",
+        label: "Old Puppeteer browsers",
+        detail: "Older copies of Chrome that Puppeteer downloaded. The newest of each stays.",
+        what: "Puppeteer downloads its own copy of Chrome (and a windowless one) to drive, and a new one with every \
+               update, in ~/.cache/puppeteer. Agents' browser tools do the same. The old copies are never removed.",
+        group: "dev",
+        action: "delete",
+        safety: "safe",
+        owner: None,
+    },
+    Def {
         id: "playwright-old",
         label: "Old Playwright browsers",
         detail: "Older browser builds Playwright downloaded. The newest of each is kept.",
@@ -705,6 +778,18 @@ const DEFS: &[Def] = &[
         group: "windows",
         action: "delete",
         safety: "safe",
+        owner: None,
+    },
+    Def {
+        id: "app-caches",
+        label: "App caches",
+        detail: "What apps saved to start and load faster, and updates they already installed. Each rebuilds its own.",
+        what: "Every app has a folder in your Library's Caches for what it can make or download again: thumbnails, \
+               pages, streamed music, and often the update it downloaded last (which stays after it's installed). \
+               macOS expects these to be cleared; an app that's open keeps its own.",
+        group: "windows",
+        action: "delete",
+        safety: "review",
         owner: None,
     },
     Def {
@@ -1229,7 +1314,12 @@ pub fn set_keep(cfg: &mut TrashConfig, path: &str, on: bool) -> Result<bool, Str
 fn find(id: &str, ctx: &TrashCtx) -> Found {
     let keep = &ctx.cfg.keep[..ctx.cfg.keep.len().min(MAX_KEPT)];
     let mut found = find_raw(id, ctx);
-    if id != "docker" && id != "recycle-bin" {
+    // A link inside a folder keeps it on Windows, where one is rare and worth a second look. On a
+    // Mac they're everywhere and mean nothing (every node_modules has a folder of them, every app
+    // is held together by them), and mom removes a link as a link: she never goes where it leads,
+    // measuring or deleting (see walk.rs).
+    let links_keep = !ctx.paths.is_mac();
+    if id != "docker" && id != "recycle-bin" && id != "simulators" {
         let mut looked = crate::browser_data::Looked::default();
         for c in &mut found.cands {
             // What only an administrator can open can't be checked as you; the administrator
@@ -1249,9 +1339,9 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
                 c.goes = false;
                 c.optional = false;
                 c.reason = BROWSER_DATA.into();
-            } else if !c.complete || c.links > 0 {
+            } else if !c.complete || (links_keep && c.links > 0) {
                 // Kept, whatever its own verdict. One already staying goes on saying why.
-                let why = if c.links > 0 { "holds links to other folders" } else { "could not safely check every file and folder" };
+                let why = if links_keep && c.links > 0 { "holds links to other folders" } else { "could not safely check every file and folder" };
                 if c.goes {
                     c.reason = format!("{}{}; kept", why[..1].to_uppercase(), &why[1..]);
                 } else if c.optional {
@@ -1265,9 +1355,29 @@ fn find(id: &str, ctx: &TrashCtx) -> Found {
     keep_yours(found, keep)
 }
 
+/// Clean-ups for things only Windows has, or that a Mac sees to itself: its own temp folder
+/// (macOS clears that out), graphics shader caches, Windows' own leftovers, old drivers, and
+/// folders of apps that are gone (told by Windows' list of what's installed).
+///
+/// Not yet on a Mac: the Trash (macOS shows what's in it only to apps given Full Disk Access).
+const NOT_ON_A_MAC: &[&str] = &[
+    "old-temp", "shader-cache", "game-junk", "windows-junk", "admin-leftovers", "old-drivers", "forgotten-apps", "dev-leftovers", "recycle-bin",
+];
+/// And the ones for what only a Mac has.
+const ONLY_ON_A_MAC: &[&str] = &["xcode-builds", "homebrew-cache", "cocoapods-cache", "simulators", "app-caches"];
+
 fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
     let agent_age = ctx.cfg.agent_scratch_days * 86_400;
     let la = &ctx.paths.local_appdata;
+    let home = &ctx.paths.home;
+    let mac = ctx.paths.is_mac();
+    if (mac && NOT_ON_A_MAC.contains(&id)) || (!mac && ONLY_ON_A_MAC.contains(&id)) {
+        return Found::none();
+    }
+    // What tools can make again: ~/Library/Caches on a Mac, %LOCALAPPDATA% on Windows.
+    let caches = ctx.paths.caches();
+    // npm's own folder: its download cache and what npx fetched are in it.
+    let npm = if mac { home.join(".npm") } else { la.join("npm-cache") };
     match id {
         "claude-temp" => claude::find(ctx, agent_age),
         "codex-temp" | "claude-leftovers" | "agent-leftovers" | "app-leftovers" | "cursor-worktrees" | "shader-cache" | "game-junk"
@@ -1304,7 +1414,7 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
             f
         }
         "npx-cache" => {
-            let root = la.join("npm-cache").join("_npx");
+            let root = npm.join("_npx");
             if !root.is_dir() {
                 return Found::none();
             }
@@ -1341,9 +1451,9 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
             }
             f
         }
-        "npm-cache" => whole_dir(la.join("npm-cache").join("_cacache"), "npm download cache", ctx),
+        "npm-cache" => whole_dir(npm.join("_cacache"), "npm download cache", ctx),
         "pnpm-store" => {
-            let root = la.join("pnpm").join("store");
+            let root = if mac { ctx.paths.library().join("pnpm").join("store") } else { la.join("pnpm").join("store") };
             if !root.is_dir() || crate::util::on_path("pnpm").is_none() {
                 return Found::none();
             }
@@ -1353,9 +1463,9 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
             f.tool = Some((t.bytes, t.bytes));
             f
         }
-        "yarn-cache" => whole_dir(la.join("Yarn").join("Cache"), "Yarn package cache", ctx),
+        "yarn-cache" => whole_dir(if mac { caches.join("Yarn") } else { la.join("Yarn").join("Cache") }, "Yarn package cache", ctx),
         "bun-cache" => whole_dir(ctx.paths.home.join(".bun").join("install").join("cache"), "bun package cache", ctx),
-        "pip-cache" => whole_dir(la.join("pip").join("cache"), "pip download cache", ctx),
+        "pip-cache" => whole_dir(if mac { caches.join("pip") } else { la.join("pip").join("cache") }, "pip download cache", ctx),
         "uv-cache" => {
             let root = uv::cache_dir(ctx.paths);
             if !root.is_dir() {
@@ -1394,12 +1504,83 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
             }
             f
         }
-        "go-build-cache" => whole_dir(la.join("go-build"), "Go build cache", ctx),
-        "nuget-cache" => whole_dir(la.join("NuGet").join("v3-cache"), "NuGet HTTP cache", ctx),
+        "go-build-cache" => whole_dir(caches.join("go-build"), "Go build cache", ctx),
+        "nuget-cache" => whole_dir(if mac { home.join(".local").join("share").join("NuGet").join("v3-cache") } else { la.join("NuGet").join("v3-cache") }, "NuGet HTTP cache", ctx),
         "gradle-cache" => whole_dir(ctx.paths.home.join(".gradle").join("caches"), "Gradle caches", ctx),
-        "electron-cache" => whole_dir(la.join("electron").join("Cache"), "Electron downloads", ctx),
+        "electron-cache" => whole_dir(if mac { caches.join("electron") } else { la.join("electron").join("Cache") }, "Electron downloads", ctx),
+        "homebrew-cache" => whole_dir(caches.join("Homebrew"), "Homebrew downloads", ctx),
+        "cocoapods-cache" => whole_dir(caches.join("CocoaPods"), "CocoaPods cache", ctx),
+        "xcode-builds" => {
+            let root = ctx.paths.library().join("Developer").join("Xcode").join("DerivedData");
+            if !root.is_dir() {
+                return Found::none();
+            }
+            let mut f = Found::at(root.clone());
+            let list: Vec<(PathBuf, String)> = entries(&root)
+                .into_iter()
+                .filter(|p| p.is_dir())
+                .map(|p| {
+                    let n = xcode_build_name(&name_of(&p));
+                    (p, n)
+                })
+                .collect();
+            // Xcode writes into a project's folder while it's open, so a day without a change
+            // says it isn't.
+            let building = ctx.running("xcodebuild") || ctx.running("xcbbuildservice");
+            for c in cands(list, ctx.now) {
+                let c = c.age_sensitive();
+                f.cands.push(if ctx.in_use(&c.path) {
+                    c.verdict(false, IN_USE)
+                } else if building && c.age < CRASH_MIN_AGE {
+                    c.verdict(false, "Xcode is building")
+                } else if c.age < CRASH_MIN_AGE {
+                    let r = format!("Last changed {} ago (kept for a day)", ago(c.age));
+                    c.kept_but_tickable(r)
+                } else {
+                    let r = format!("Last changed {} ago; Xcode builds it again when you open the project", ago(c.age));
+                    c.verdict(true, r)
+                });
+            }
+            f
+        }
+        "puppeteer-old" => {
+            // ~/.cache/puppeteer/<browser>/<system>-<version>, one folder for each version it fetched.
+            let root = home.join(".cache").join("puppeteer");
+            if !root.is_dir() {
+                return Found::none();
+            }
+            let mut f = Found::at(root.clone());
+            let (mut list, mut which): (Vec<(PathBuf, String)>, Vec<(String, Vec<u64>)>) = (Vec::new(), Vec::new());
+            for browser in entries(&root).into_iter().filter(|p| p.is_dir()) {
+                let family = name_of(&browser);
+                for build in entries(&browser).into_iter().filter(|p| p.is_dir()) {
+                    let n = name_of(&build);
+                    let version = n.rsplit_once('-').map(|(_, v)| v).unwrap_or(&n).to_string();
+                    let numbers: Vec<u64> = version.split('.').filter_map(|x| x.parse().ok()).collect();
+                    if numbers.is_empty() {
+                        continue;
+                    }
+                    list.push((build, format!("{} {version}", puppeteer_family(&family))));
+                    which.push((family.clone(), numbers));
+                }
+            }
+            let newest = |family: &str| which.iter().filter(|w| w.0 == family).map(|w| w.1.clone()).max().unwrap_or_default();
+            for (c, (family, version)) in cands(list, ctx.now).into_iter().zip(which.iter().cloned()) {
+                let latest = newest(&family);
+                f.cands.push(if ctx.in_use(&c.path) {
+                    c.verdict(false, IN_USE)
+                } else if version >= latest {
+                    c.kept_but_tickable("Newest version, kept. Puppeteer downloads it again if it's gone")
+                } else {
+                    c.verdict(true, format!("Replaced by {}", latest.iter().map(u64::to_string).collect::<Vec<_>>().join(".")))
+                });
+            }
+            f
+        }
+        "simulators" => simulators(ctx),
+        "app-caches" => app_caches(ctx),
         "playwright-old" => {
-            let root = la.join("ms-playwright");
+            let root = caches.join("ms-playwright");
             if !root.is_dir() {
                 return Found::none();
             }
@@ -1470,9 +1651,15 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
                 }
                 let mut f = Found::none();
                 f.available = true;
-                f.exact = false;
-                f.tool = Some((0, 0));
-                f.note = Some("Docker isn't running. Start Docker Desktop and mom can see what it would prune.".into());
+                // Its disk is one big file, and takes what it takes whether Docker runs or not.
+                let disk = docker_disk(ctx.paths);
+                f.exact = disk > 0;
+                f.tool = Some((disk, 0));
+                f.note = Some(if disk > 0 {
+                    format!("Docker isn't running, and its disk takes {}. Start Docker Desktop and mom can see what it would prune.", human_bytes(disk))
+                } else {
+                    "Docker isn't running. Start Docker Desktop and mom can see what it would prune.".into()
+                });
                 return f;
             }
             let mut f = Found::none();
@@ -1530,20 +1717,33 @@ fn find_raw(id: &str, ctx: &TrashCtx) -> Found {
         }
         "browser-cache" => browsers::find(ctx),
         "crash-dumps" => {
-            let dumps = la.join("CrashDumps");
+            // A Mac keeps a report for each crash, hang and runaway app in one folder (and the
+            // ones it has sent to Apple in "Retired" inside it).
+            let dumps = if mac { ctx.paths.library().join("Logs").join("DiagnosticReports") } else { la.join("CrashDumps") };
             let wer = la.join("Microsoft").join("Windows").join("WER");
             let mut found = Vec::new();
-            for p in entries(&dumps) {
-                let n = name_of(&p);
-                found.push((p, crashed_app_from_dump(&n), "Crash dump"));
-            }
-            for sub in ["ReportArchive", "ReportQueue"] {
-                for p in entries(&wer.join(sub)) {
+            if mac {
+                for dir in [dumps.clone(), dumps.join("Retired")] {
+                    for p in entries(&dir) {
+                        let n = name_of(&p);
+                        if p.is_file() && is_mac_report(&n) {
+                            found.push((p, crashed_app_from_mac_report(&n), "Crash report"));
+                        }
+                    }
+                }
+            } else {
+                for p in entries(&dumps) {
                     let n = name_of(&p);
-                    found.push((p, crashed_app_from_report(&n), "Error report"));
+                    found.push((p, crashed_app_from_dump(&n), "Crash dump"));
+                }
+                for sub in ["ReportArchive", "ReportQueue"] {
+                    for p in entries(&wer.join(sub)) {
+                        let n = name_of(&p);
+                        found.push((p, crashed_app_from_report(&n), "Error report"));
+                    }
                 }
             }
-            if found.is_empty() && !dumps.is_dir() && !wer.is_dir() {
+            if found.is_empty() && !dumps.is_dir() && (mac || !wer.is_dir()) {
                 return Found::none();
             }
             let mut f = Found::at(dumps);
@@ -1694,6 +1894,163 @@ fn npx_name(dir: &Path) -> String {
         .join(", ")
 }
 
+fn puppeteer_family(family: &str) -> String {
+    match family {
+        "chrome" => "Chrome".into(),
+        "chrome-headless-shell" => "Chrome headless shell".into(),
+        "chromedriver" => "ChromeDriver".into(),
+        "firefox" => "Firefox".into(),
+        other => other.replace(['_', '-'], " "),
+    }
+}
+
+/// What Docker Desktop's disk really takes on a Mac. It's one file that says it's as big as it
+/// may ever get; what counts is the room it has actually used.
+fn docker_disk(paths: &Paths) -> u64 {
+    if !paths.is_mac() {
+        return 0;
+    }
+    let disk = paths.library().join("Containers").join("com.docker.docker").join("Data").join("vms").join("0").join("data").join("Docker.raw");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::symlink_metadata(&disk).map(|m| m.blocks().saturating_mul(512)).unwrap_or(0)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::symlink_metadata(&disk).map(|m| m.len()).unwrap_or(0)
+    }
+}
+
+/// Where Xcode keeps each simulator, a folder named by its id.
+fn simulator_devices(paths: &Paths) -> PathBuf {
+    paths.library().join("Developer").join("CoreSimulator").join("Devices")
+}
+
+/// Simulators whose iOS version Xcode no longer has: (id, "iPhone 12 (iOS 15.2)"). They can't be
+/// started any more, and Xcode's own tool is what lists and removes them. None if it didn't answer.
+fn dead_simulators() -> Option<Vec<(String, String)>> {
+    let out = crate::util::run("/usr/bin/xcrun", &["simctl", "list", "devices", "unavailable", "-j"], Duration::from_secs(30)).ok().filter(|o| o.ok())?;
+    let v: serde_json::Value = serde_json::from_str(out.text().trim()).ok()?;
+    let mut dead = Vec::new();
+    for (runtime, devices) in v.get("devices")?.as_object()? {
+        // "com.apple.CoreSimulator.SimRuntime.iOS-15-2" -> "iOS 15.2"
+        let system = runtime.rsplit('.').next().unwrap_or(runtime);
+        let system = match system.split_once('-') {
+            Some((name, version)) => format!("{name} {}", version.replace('-', ".")),
+            None => system.to_string(),
+        };
+        for d in devices.as_array().into_iter().flatten() {
+            let id = d.get("udid").and_then(|u| u.as_str()).unwrap_or("");
+            let safe = !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+            if safe && d.get("isAvailable").and_then(|a| a.as_bool()) == Some(false) {
+                dead.push((id.to_string(), format!("{} ({system})", d.get("name").and_then(|n| n.as_str()).unwrap_or("Simulator"))));
+            }
+        }
+    }
+    Some(dead)
+}
+
+fn simulators(ctx: &TrashCtx) -> Found {
+    let root = simulator_devices(ctx.paths);
+    if !root.is_dir() {
+        return Found::none();
+    }
+    let Some(dead) = dead_simulators() else { return Found::none() };
+    let mut f = Found::at(root.clone());
+    // Xcode's tool takes exactly the ones listed here, so the number is one to count on.
+    let list: Vec<(PathBuf, String)> = dead.into_iter().map(|(id, name)| (root.join(id), name)).filter(|(dir, _)| dir.is_dir()).collect();
+    f.cands = cands(list, ctx.now)
+        .into_iter()
+        .map(|mut c| {
+            // What its own Safari saved is the simulator's, not yours, and Xcode's tool takes the
+            // whole simulator whatever is in it: the list says what will happen.
+            c.browser_data = false;
+            c.verdict(true, "Its system isn't installed in Xcode any more, so it can't be started")
+        })
+        .collect();
+    let going: u64 = f.cands.iter().map(|c| c.bytes).sum();
+    f.tool = Some((tally(&root).bytes, going));
+    f
+}
+
+/// What tools and browsers keep in ~/Library/Caches that has a clean-up of its own, and what's
+/// macOS's own to look after.
+const NOT_APP_CACHES: &[&str] = &[
+    "homebrew", "pip", "yarn", "go-build", "ms-playwright", "electron", "cocoapods", "google", "microsoft edge", "bravesoftware", "vivaldi", "firefox",
+    "mozilla", "chromium", "typescript", "node-gyp", "pnpm", "bun", "deno", "apple", "cloudkit", "geoservices", "familycircle", "passkit", "gamekit", "metadata",
+];
+
+/// A name macOS gives an app ("com.spotify.client"): words with dots between them.
+fn is_bundle_id(name: &str) -> bool {
+    name.matches('.').count() >= 2 && !name.starts_with('.') && !name.ends_with('.') && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
+/// Each app's folder in ~/Library/Caches: what it saved to start and load faster (and, for many,
+/// the updates it downloaded and already installed). An app that's open keeps its own.
+fn app_caches(ctx: &TrashCtx) -> Found {
+    let root = ctx.paths.caches();
+    let Some(open) = ctx.open_apps.as_ref() else { return Found::none() };
+    if !root.is_dir() {
+        return Found::none();
+    }
+    let apps = [PathBuf::from("/Applications"), ctx.paths.home.join("Applications")];
+    let is_app = |name: &str| apps.iter().any(|dir| dir.join(format!("{name}.app")).is_dir());
+    let mut f = Found::at(root.clone());
+    let mut list = Vec::new();
+    for dir in entries(&root) {
+        let name = name_of(&dir);
+        let lower = name.to_ascii_lowercase();
+        let real = std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir());
+        if !real || lower.starts_with("com.apple.") || lower.starts_with('.') || NOT_APP_CACHES.contains(&lower.as_str()) || browsers::hands_off(&name) {
+            continue;
+        }
+        if is_bundle_id(&name) || is_app(&name) {
+            list.push(dir);
+        }
+    }
+    for dir in list {
+        let name = name_of(&dir);
+        let lower = name.to_ascii_lowercase();
+        let Some(mut c) = cache_item(dir, &name, ctx) else { continue };
+        if c.bytes < 1 << 20 {
+            continue;
+        }
+        // Open, by the name macOS knows it by (a helper of it counts: "com.x.app.helper"), or by
+        // the name of its program.
+        let is_open = open.iter().any(|id| *id == lower || id.starts_with(&format!("{lower}.")) || lower.starts_with(&format!("{id}."))) || ctx.running(&lower);
+        c.sub = c.sub.take().map(|s| if name.contains('.') { format!("{s} · {name}") } else { s });
+        c.name = app_name(&name);
+        f.cands.push(if is_open {
+            c.verdict(false, "The app is open")
+        } else if c.goes {
+            c.verdict(true, "The app is closed; it rebuilds this as it needs it")
+        } else {
+            c
+        });
+    }
+    f
+}
+
+/// "com.spotify.client" -> "Spotify": the word in an app's name that says which app it is.
+fn app_name(id: &str) -> String {
+    let capital = |name: &str| match name.get(..1) {
+        Some(first) => format!("{}{}", first.to_ascii_uppercase(), &name[1..]),
+        None => name.to_string(),
+    };
+    if !is_bundle_id(id) {
+        return capital(id);
+    }
+    const SAYS_NOTHING: &[&str] = &["client", "desktop", "app", "mac", "macos", "osx", "helper", "ui", "electron", "main", "launcher", "x", "xos"];
+    let parts: Vec<&str> = id.split('.').collect();
+    let word = parts.iter().skip(1).rev().find(|p| !SAYS_NOTHING.contains(&p.to_ascii_lowercase().as_str())).copied().unwrap_or(id);
+    let mut name: String = word.replace(['-', '_'], " ");
+    if let Some(first) = name.get(..1) {
+        name = format!("{}{}", first.to_ascii_uppercase(), &name[1..]);
+    }
+    name
+}
+
 fn playwright_family(family: &str) -> String {
     match family {
         "chromium" => "Chromium".into(),
@@ -1737,7 +2094,40 @@ fn crashed_app_from_report(folder: &str) -> String {
     rest.split('_').next().unwrap_or(rest).to_string()
 }
 
-const INSTALLER_EXTS: &[&str] = &["exe", "msi", "msix", "msixbundle", "appx", "appxbundle"];
+const INSTALLER_EXTS: &[&str] = &["exe", "msi", "msix", "msixbundle", "appx", "appxbundle", "dmg", "pkg"];
+
+/// A Mac's reports of what went wrong with an app: crashes, hangs, and apps that ran away with
+/// the processor or the disk.
+fn is_mac_report(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [".ips", ".crash", ".hang", ".spin", ".diag", ".panic"].iter().any(|e| n.ends_with(e))
+}
+
+/// "Google Chrome-2026-11-20-141234.ips" -> "Google Chrome"; "node_2026-11-20-141234_Mac.diag" -> "node".
+fn crashed_app_from_mac_report(file: &str) -> String {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"^(.+?)[-_.]\d{4}-\d{2}-\d{2}[-_]\d{4,6}").unwrap());
+    match re.captures(file) {
+        Some(c) => c[1].to_string(),
+        None => file.rsplit_once('.').map(|(stem, _)| stem.to_string()).unwrap_or_else(|| file.to_string()),
+    }
+}
+
+/// "storefront-bqxkzvmpdnqouyhdnopvahhcgvzn" -> "storefront": Xcode names each project's build
+/// folder after the project, with 28 letters of its own after a dash.
+fn xcode_build_name(folder: &str) -> String {
+    match folder.rsplit_once('-') {
+        Some((project, tail)) if tail.len() == 28 && tail.chars().all(|c| c.is_ascii_lowercase()) && !project.is_empty() => project.to_string(),
+        _ => match folder.strip_suffix(".noindex") {
+            Some("ModuleCache") => "Shared module cache".into(),
+            Some("SymbolCache") => "Shared symbol cache".into(),
+            Some("CompilationCache") => "Shared compilation cache".into(),
+            Some("SDKStatCaches") => "Shared SDK cache".into(),
+            Some(other) => other.to_string(),
+            None => folder.to_string(),
+        },
+    }
+}
 
 fn is_installer(name: &str) -> bool {
     let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
@@ -1749,6 +2139,8 @@ fn installer_kind(name: &str) -> &'static str {
     match ext.as_str() {
         "msi" => "Windows Installer package",
         "exe" => "Setup program",
+        "dmg" => "Disk image",
+        "pkg" => "Installer package",
         _ => "App package",
     }
 }
@@ -1840,13 +2232,16 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
     let unmeasured_items = goes.iter().filter(|c| c.unmeasured).count() as u64;
     let scale = ctx.list_scale.clamp(1, MAX_SCALE);
     let items = goes.into_iter().take(MAX_GOES * scale).chain(stays.into_iter().take(MAX_STAYS * scale)).map(Cand::into_item).collect();
+    // Said in this system's words ("the Trash" on a Mac). Only what mom says herself: the names
+    // and paths of what she found are never reworded.
+    let say = |text: &str| ctx.paths.say(text);
     Spot {
         id: def.id.into(),
-        label: def.label.into(),
-        detail: def.detail.into(),
+        label: say(def.label),
+        detail: say(def.detail),
         group: def.group.into(),
-        what: def.what.split_whitespace().collect::<Vec<_>>().join(" "),
-        effect,
+        what: say(&def.what.split_whitespace().collect::<Vec<_>>().join(" ")),
+        effect: say(&effect),
         action: def.action.into(),
         safety: def.safety.into(),
         path: f.root.map(|r| r.to_string_lossy().to_string()),
@@ -1864,7 +2259,7 @@ fn spot_from(def: &Def, f: Found, ctx: &TrashCtx) -> Spot {
         available: f.available,
         measured_at: ctx.now,
         took_ms: 0,
-        note: f.note,
+        note: f.note.map(|n| say(&n)),
         items,
     }
 }
@@ -2016,6 +2411,15 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
         "nuget-cache" => whole_cache_effect(n, bytes, "NuGet's HTTP cache", "Installed packages stay; NuGet fetches package lists again as needed."),
         "gradle-cache" => whole_cache_effect(n, bytes, "Gradle's caches", "The next build downloads its dependencies again, so it takes longer once."),
         "electron-cache" => whole_cache_effect(n, bytes, "the Electron download cache", "Electron downloads again the next time a project needs it."),
+        "homebrew-cache" => whole_cache_effect(n, bytes, "Homebrew's downloads", "What you installed with Homebrew stays installed; it downloads a package again if you reinstall it."),
+        "cocoapods-cache" => whole_cache_effect(n, bytes, "the CocoaPods cache", "Your projects keep their pods; `pod install` downloads again when it needs to."),
+        "xcode-builds" if n == 0 => nothing("no Xcode build folder has gone a day without changing, or Xcode is building."),
+        "xcode-builds" => format!(
+            "Deletes {} of what Xcode built, {forever}: the products, indexes and logs it keeps for each project \
+             (DerivedData). Your projects and their source aren't touched. Xcode builds a project again, from scratch, \
+             the next time you open it, so that first build takes longer. Folders changed in the last day stay.",
+            count_size(n, "build folder", "build folders", bytes)
+        ),
         "cargo-cache" if n == 0 => nothing("Cargo is busy, or there's nothing downloaded."),
         "cargo-cache" => format!(
             "Deletes Cargo's downloaded crate archives and git checkouts ({}), {forever}. Your projects, their builds and \
@@ -2046,6 +2450,27 @@ fn effect_of(id: &str, goes: &[Cand], stays: &[Cand], reclaimable: u64, ctx: &Tr
              tick. Images a container uses can't be ticked, and volumes (where databases keep their data) are never \
              touched. Images share layers, so a little less may come back.",
             count_size(n, "thing", "things", bytes)
+        ),
+        "puppeteer-old" if n == 0 => nothing("only the newest version of each browser is there."),
+        "puppeteer-old" => format!(
+            "Deletes {} that Puppeteer downloaded, {forever}. The newest version of each browser stays, so scripts and \
+             browser tools keep working; Puppeteer downloads an old one again if a project asks for it.",
+            count_size(n, "older browser", "older browsers", bytes)
+        ),
+        "simulators" if n == 0 => nothing("every simulator is one Xcode can still start."),
+        "simulators" => format!(
+            "Runs `xcrun simctl delete unavailable`, Xcode's own way of removing the {} whose iOS version isn't \
+             installed any more, with the apps and data in them (about {}). Simulators Xcode can still start aren't \
+             touched, and it makes new ones whenever you install a system.",
+            if n == 1 { "simulator".to_string() } else { format!("{n} simulators") },
+            human_bytes(bytes)
+        ),
+        "app-caches" if n == 0 => nothing("the apps with caches worth clearing are open, or there's nothing in them."),
+        "app-caches" => format!(
+            "Empties the caches of {} ({}), {forever}. Each app makes or downloads what it needs again, so the next \
+             start of one may be a little slower. Apps that are open keep theirs; untick any you'd rather leave.",
+            if n == 1 { "1 app".to_string() } else { format!("{n} apps") },
+            human_bytes(bytes)
         ),
         "playwright-old" if n == 0 => nothing("only the newest build of each browser is installed."),
         "playwright-old" => format!(
@@ -2326,7 +2751,7 @@ pub fn clean(id: &str, ctx: &TrashCtx, pick: Option<&Pick>) -> CleanReport {
     } else if def.action == "recycle" {
         // Too big for the bin, Windows would delete it for good without asking: it stays.
         let room = std::cell::RefCell::new(bin::Room::default());
-        each(false, &|c: &Cand| c.targets.iter().all(|t| !t.exists() || (room.borrow_mut().fits(t, c.bytes) && ::trash::delete(t).is_ok())))
+        each(false, &|c: &Cand| c.targets.iter().all(|t| !t.exists() || (room.borrow_mut().fits(t, c.bytes) && crate::util::to_bin(t).is_ok())))
     } else if recycle {
         recycle_chosen(&chosen, live, &mut big, &|c| (id != "browser-cache" || browsers::still_closed(&c.path, ctx)) && update_allowed(c), &|i, ok| match ok {
             Some(ok) => settle(i, ok, false), // it counts the files of each batch itself
@@ -2493,7 +2918,7 @@ fn recycle_chosen(chosen: &[&Cand], live: Option<&Live>, big: &mut [bool], allow
             .flat_map(|c| c.targets.iter()).collect();
         if !targets.is_empty() {
             // Whatever couldn't go (in use) shows up below as still there.
-            let _ = ::trash::delete_all(&targets);
+            let _ = crate::util::to_bin_all(&targets);
         }
         if let Some(l) = live {
             l.files_gone(files);
@@ -2767,6 +3192,11 @@ fn run_tool(id: &str, ctx: &TrashCtx, mut r: CleanReport) -> CleanReport {
             },
             None => Err("pnpm isn't on your PATH.".into()),
         },
+        "simulators" => match crate::util::run("/usr/bin/xcrun", &["simctl", "delete", "unavailable"], Duration::from_secs(600)) {
+            Ok(out) if out.ok() => Ok(()),
+            Ok(out) => Err(format!("Xcode's simulator tool didn't finish: {}", out.err_text().trim())),
+            Err(e) => Err(format!("couldn't run Xcode's simulator tool: {e}")),
+        },
         _ => Err(format!("mom doesn't know how to clean {id}")),
     };
     match result {
@@ -2775,6 +3205,7 @@ fn run_tool(id: &str, ctx: &TrashCtx, mut r: CleanReport) -> CleanReport {
             r.deleted = u64::from(r.freed > 0);
             r.message = match (id, r.freed) {
                 (_, 0) => "Ran it. Nothing needed pruning; already spotless.".to_string(),
+                ("simulators", f) => format!("Xcode removed the simulators it can't start any more: {} back.", human_bytes(f)),
                 (_, f) => format!("pnpm pruned its store: {} back.", human_bytes(f)),
             };
         }
@@ -2896,6 +3327,7 @@ mod tests {
             live: None,
             list_scale: 1,
             uv: Default::default(),
+            open_apps: Some(HashSet::new()),
             windows_update_probe: None,
         }
     }
@@ -2940,6 +3372,133 @@ mod tests {
 
     fn item<'s>(spot: &'s Spot, name_part: &str) -> &'s Item {
         spot.items.iter().find(|i| i.name.contains(name_part)).unwrap_or_else(|| panic!("no item like {name_part:?} in {:#?}", spot.items))
+    }
+
+    #[test]
+    fn a_mac_keeps_its_caches_elsewhere_and_mom_finds_them_there() {
+        let root = fixture("mac-layout");
+        let paths = Paths::under_mac(&root);
+        let cfg = TrashConfig::default();
+        write(&paths.home.join(".npm").join("_cacache").join("a.bin"), 1000, 40);
+        write(&paths.caches().join("pip").join("http").join("b.bin"), 500, 40);
+        write(&paths.caches().join("Homebrew").join("downloads").join("c.tar.gz"), 700, 40);
+        let derived = paths.library().join("Developer").join("Xcode").join("DerivedData");
+        write(&derived.join("storefront-abcdefghijklmnopqrstuvwxyzab").join("Build").join("x.o"), 300, 10);
+        write(&derived.join("nimbus-abcdefghijklmnopqrstuvwxyzab").join("Build").join("x.o"), 200, 0);
+        for version in ["mac-141.0.7390.76", "mac-143.0.7499.169"] {
+            write(&paths.home.join(".cache").join("puppeteer").join("chrome").join(version).join("chrome"), 400, 10);
+        }
+        // A folder of links, as every node_modules has on a Mac, is still a cache that can go.
+        write(&paths.home.join(".bun").join("install").join("cache").join("pkg").join("index.js"), 250, 40);
+        link(&paths.home.join(".bun").join("install").join("cache").join("pkg").join("linked"), &paths.downloads);
+        let reports = paths.library().join("Logs").join("DiagnosticReports");
+        write(&reports.join("Steam Helper-2026-11-20-141234.ips"), 100, 5);
+        write(&reports.join("notes.txt"), 100, 5); // not a report: not listed
+        let ctx = ctx(&paths, &cfg);
+        let can_go = |id: &str| measure(id, &ctx).map(|s| (s.available, s.reclaimable_bytes));
+        assert_eq!(can_go("npm-cache"), Some((true, 1000)));
+        assert_eq!(can_go("pip-cache"), Some((true, 500)));
+        assert_eq!(can_go("homebrew-cache"), Some((true, 700)));
+        assert_eq!(can_go("bun-cache"), Some((true, 250)), "links inside don't keep it on a Mac");
+        let xcode = measure("xcode-builds", &ctx).unwrap();
+        assert!(item(&xcode, "storefront").goes && item(&xcode, "storefront").name == "storefront");
+        assert!(!item(&xcode, "nimbus").goes && item(&xcode, "nimbus").optional, "built today: kept, but yours to tick");
+        assert!(xcode.effect.contains("don't go to the Trash"), "{}", xcode.effect);
+        let puppeteer = measure("puppeteer-old", &ctx).unwrap();
+        assert!(item(&puppeteer, "Chrome 141.0.7390.76").goes && !item(&puppeteer, "Chrome 143.0.7499.169").goes);
+        let crashes = measure("crash-dumps", &ctx).unwrap();
+        assert!(item(&crashes, "Steam Helper").goes && crashes.items.len() == 1);
+        // What only Windows has isn't offered on a Mac, and the other way round.
+        for id in NOT_ON_A_MAC {
+            assert!(!measure(id, &ctx).unwrap().available, "{id}");
+        }
+        let windows = Paths::under(&root.join("pc"));
+        let on_windows = super::tests::ctx(&windows, &cfg);
+        for id in ONLY_ON_A_MAC {
+            assert!(!measure(id, &on_windows).unwrap().available, "{id}");
+        }
+        // Cleaning takes what it said, and leaves the link's target alone.
+        write(&paths.downloads.join("precious.txt"), 9, 1);
+        assert_eq!(clean("bun-cache", &ctx, None).freed, 250);
+        assert!(paths.downloads.join("precious.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_app_that_is_open_keeps_its_cache_on_a_mac() {
+        let root = fixture("mac-app-caches");
+        let paths = Paths::under_mac(&root);
+        let cfg = TrashConfig::default();
+        let caches = paths.caches();
+        let mb = 1 << 20;
+        write(&caches.join("com.spotify.client").join("Data").join("a.bin"), 2 * mb, 3);
+        write(&caches.join("com.nimbus.editor").join("org.sparkle-project.Sparkle").join("update.zip"), 3 * mb, 3);
+        write(&caches.join("com.apple.Safari").join("x.bin"), 2 * mb, 3); // macOS's own
+        write(&caches.join("Homebrew").join("x.bin"), 2 * mb, 3); // has a clean-up of its own
+        write(&caches.join("com.small.thing").join("x.bin"), 10, 3); // too small to mention
+        write(&caches.join("NotAnApp").join("x.bin"), 2 * mb, 3); // nobody mom knows
+        let mut c = ctx(&paths, &cfg);
+        c.open_apps = Some(HashSet::from(["com.spotify.client".to_string()]));
+        let spot = measure("app-caches", &c).unwrap();
+        assert_eq!((spot.safety.as_str(), spot.items.len()), ("review", 2), "{:#?}", spot.items);
+        let (open, closed) = (item(&spot, "Spotify"), item(&spot, "Editor"));
+        assert!(!open.goes && !open.optional && open.reason == "The app is open");
+        assert!(closed.goes && closed.bytes == 3 * mb as u64);
+        // The cache is emptied; its folder stays for the app to fill again.
+        assert_eq!(clean("app-caches", &c, None).freed, 3 * mb as u64);
+        assert!(caches.join("com.nimbus.editor").is_dir() && !caches.join("com.nimbus.editor").join("org.sparkle-project.Sparkle").exists());
+        assert!(caches.join("com.spotify.client").join("Data").join("a.bin").exists());
+        // When macOS won't say which apps are open, none is called closed.
+        c.open_apps = None;
+        assert!(!measure("app-caches", &c).unwrap().available);
+        assert_eq!(app_name("com.openai.codex"), "Codex");
+        assert_eq!(app_name("us.zoom.xos"), "Zoom");
+        assert_eq!(app_name("Steam"), "Steam");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_macs_browser_keeps_its_cache_while_it_is_open() {
+        let root = fixture("mac-browser");
+        let paths = Paths::under_mac(&root);
+        let cfg = TrashConfig::default();
+        let chrome = paths.appdata.join("Google").join("Chrome");
+        // A Mac keeps the profile in Application Support and its pages under Caches.
+        write(&chrome.join("Default").join("Preferences"), 10, 1);
+        write(&chrome.join("Default").join("Cookies"), 10, 1);
+        write(&chrome.join("Default").join("GPUCache").join("data_0"), 100, 1);
+        write(&paths.caches().join("Google").join("Chrome").join("Default").join("Cache").join("Cache_Data").join("f_0001"), 1000, 1);
+        let lock = chrome.join("SingletonLock");
+        let mut c = ctx(&paths, &cfg);
+        let chrome_now = |c: &TrashCtx| {
+            let spot = measure("browser-cache", c).unwrap();
+            let i = item(&spot, "Chrome");
+            (i.goes, i.bytes, i.reason.clone())
+        };
+        assert_eq!(chrome_now(&c), (true, 1100, "Rebuilt as you browse".to_string()));
+        // Chrome's own lock, naming a process that's running (this one): it's open.
+        std::os::unix::fs::symlink(format!("some-mac.local-{}", std::process::id()), &lock).unwrap();
+        if crate::procs::started(std::process::id()).is_some() {
+            assert_eq!(chrome_now(&c), (false, 1100, "Chrome is open".to_string()));
+            assert_eq!(clean("browser-cache", &c, None).freed, 0);
+        }
+        // A lock left behind by a Chrome that's gone holds nothing.
+        std::fs::remove_file(&lock).unwrap();
+        std::os::unix::fs::symlink("some-mac.local-4000000000", &lock).unwrap();
+        if crate::procs::started(std::process::id()).is_some() {
+            assert!(chrome_now(&c).0);
+        }
+        std::fs::remove_file(&lock).unwrap();
+        // Open by its name, with no lock to go by.
+        c.running_exes.insert("google chrome".into());
+        assert_eq!(chrome_now(&c).2, "Chrome is open");
+        c.running_exes.clear();
+        // Closed: the caches go, and nothing else in the profile does.
+        assert_eq!(clean("browser-cache", &c, None).freed, 1100);
+        assert!(chrome.join("Default").join("Cookies").exists() && chrome.join("Default").join("Preferences").exists());
+        assert!(!chrome.join("Default").join("GPUCache").join("data_0").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -3263,10 +3822,12 @@ mod tests {
         let ctx = ctx(&paths, &cfg);
         let spot = measure("claude-temp", &ctx).unwrap();
         let a = item(&spot, "Session aaaaaaaa");
-        assert!(!a.goes && a.optional && a.reason == r"1 change in scratchpad\fix nobody committed", "{a:?}");
+        // Said with the slashes this system writes its paths with.
+        let within = |name: &str| Path::new("scratchpad").join(name).display().to_string();
+        assert!(!a.goes && a.optional && a.reason == format!("1 change in {} nobody committed", within("fix")), "{a:?}");
         assert!(item(&spot, "Session bbbbbbbb").goes, "all committed: its work is in its project");
         let c = item(&spot, "Session cccccccc");
-        assert!(!c.goes && c.optional && c.reason == r"1 change in scratchpad\wt-head nobody committed", "{c:?}");
+        assert!(!c.goes && c.optional && c.reason == format!("1 change in {} nobody committed", within("wt-head")), "{c:?}");
         let d = item(&spot, "Session dddddddd");
         assert!(!d.goes && d.optional && d.reason.starts_with("Holds a git checkout mom couldn't check"), "{d:?}");
         let e = item(&spot, "Session eeeeeeee");

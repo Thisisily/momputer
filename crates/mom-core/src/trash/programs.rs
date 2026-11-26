@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn games_are_found_named_and_told_apart_from_uninstalled_ones() {
-        let root = std::env::temp_dir().join(format!("mom-programs-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-programs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let mut paths = Paths::under(&root);
         let e = root.join("e");

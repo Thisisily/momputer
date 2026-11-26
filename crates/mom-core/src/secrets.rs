@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn a_history_file_is_said_in_counts_and_blanked_in_place() {
-        let root = std::env::temp_dir().join(format!("mom-secrets-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-secrets-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let paths = Paths::under(&root);
         let dir = psreadline_dir(&paths);
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn only_files_in_real_folders_of_the_project_are_read() {
-        let root = std::env::temp_dir().join(format!("mom-secrets-inside-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-secrets-inside-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let repo = root.join("copperline");
         std::fs::create_dir_all(repo.join("config")).unwrap();
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn files_git_keeps_are_looked_at_by_name_and_said_without_their_keys() {
         let Some(git) = crate::repos::git() else { return };
-        let root = std::env::temp_dir().join(format!("mom-secrets-git-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-secrets-git-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let repo = root.join("storefront");
         std::fs::create_dir_all(repo.join("config")).unwrap();

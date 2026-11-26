@@ -243,12 +243,25 @@ pub(crate) fn protects_destination(path: &Path, directory: bool) -> bool {
 /// or partly unreadable, stays in place.
 pub(crate) fn tree_is_safe(path: &Path) -> bool {
     if protects_path(path) { return false; }
+    let root = path;
     let mut stack = vec![path.to_path_buf()];
     let mut left = 2_000_000usize;
     while let Some(path) = stack.pop() {
         if left == 0 { return false; }
         left -= 1;
-        let Some(meta) = plain_metadata(&path) else { return false };
+        let Some(meta) = plain_metadata(&path) else {
+            // On a Mac a link inside a folder is ordinary: every node_modules has a folder of
+            // them, every app is held together by them. It goes as a link, and mom never goes
+            // where it leads (see walk.rs). The folder itself must be real, and a link under
+            // one of a browser's own names still stops everything.
+            let ordinary_link = cfg!(unix)
+                && path != root
+                && std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink())
+                && !marks_browser_data(&path, false)
+                && !marks_browser_data(&path, true);
+            if ordinary_link { continue; }
+            return false;
+        };
         if marks_browser_data(&path, meta.is_dir()) { return false; }
         if !meta.is_dir() { continue; }
         if protected_boundary(&path) { return false; }

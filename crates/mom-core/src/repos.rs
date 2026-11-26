@@ -527,7 +527,8 @@ fn askable_checkout(co: &Path) -> bool {
         return false;
     }
     let Ok(text) = std::fs::read_to_string(&dot) else { return false };
-    let Some(admin) = text.trim().strip_prefix("gitdir:").map(|p| PathBuf::from(p.trim().replace('/', "\\"))) else { return false };
+    // Git writes the pointer with forward slashes everywhere; Windows' own are the other way.
+    let Some(admin) = text.trim().strip_prefix("gitdir:").map(|p| PathBuf::from(if cfg!(windows) { p.trim().replace('/', "\\") } else { p.trim().to_string() })) else { return false };
     // Before anything looks there: only a folder on this PC's own disks. A pointer to a share or
     // a device would have Windows reach out to another computer, as you, just to look.
     if !crate::util::local_disk(&admin) || !admin.is_absolute() || admin.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::CurDir)) {
@@ -733,7 +734,7 @@ mod tests {
     use super::*;
 
     fn fixture(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("mom-repos-{name}-{}", std::process::id()));
+        let root = crate::util::temp_dir().join(format!("mom-repos-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root

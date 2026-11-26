@@ -2345,6 +2345,7 @@ dependencies = [
  "chrono",
  "dirs 7.0.0",
  "junction",
+ "libc",
  "regex",
  "rusqlite",
  "serde",

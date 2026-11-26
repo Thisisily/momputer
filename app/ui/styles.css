@@ -237,6 +237,16 @@ textarea:focus-visible,
   cursor: default;
 }
 
+/* On a Mac the window's own close, minimise and zoom buttons sit at the top left, over the page.
+   The name moves along, and mom's own "tuck away" button goes: the red one does that. */
+.mac-window .titlebar {
+  padding-left: 84px;
+}
+
+.mac-window #btn-hide {
+  display: none;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -2918,6 +2928,12 @@ button.row-name:hover {
   background: var(--card);
   color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+/* The strip scrolls sideways, so it cuts off whatever is drawn outside it: the focus ring goes
+   inside the pill, where it's whole wherever the tab is. */
+.subtab:focus-visible {
+  outline-offset: -2px;
 }
 
 .subtab::after {

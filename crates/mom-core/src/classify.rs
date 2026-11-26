@@ -101,26 +101,32 @@ impl Category {
     }
 }
 
+/// Browsers, by the name of their program without ".exe" (see `Proc::stem`).
 const BROWSERS: &[&str] = &[
-    "chrome.exe",
-    "msedge.exe",
-    "chromium.exe",
-    "chrome-headless-shell.exe",
-    "headless_shell.exe",
-    "firefox.exe",
-    "brave.exe",
+    "chrome",
+    "msedge",
+    "chromium",
+    "chrome-headless-shell",
+    "headless_shell",
+    "firefox",
+    "brave",
+    // as a Mac names them
+    "google chrome",
+    "google chrome for testing",
+    "microsoft edge",
+    "brave browser",
 ];
 
 /// Browsers count only when a robot is driving them. Your own browser is none of mom's business.
 pub fn is_automated_browser(p: &Proc) -> bool {
-    let name = p.lname();
-    if matches!(name.as_str(), "chromedriver.exe" | "msedgedriver.exe" | "geckodriver.exe") {
+    let name = p.stem();
+    if matches!(name.as_str(), "chromedriver" | "msedgedriver" | "geckodriver") {
         return true;
     }
     if !BROWSERS.contains(&name.as_str()) || p.cmd.iter().any(|a| a.starts_with("--type=")) {
         return false;
     }
-    if name == "chrome-headless-shell.exe" || name == "headless_shell.exe" {
+    if name == "chrome-headless-shell" || name == "headless_shell" || name == "google chrome for testing" {
         return true;
     }
     let exe = p.lexe();
@@ -135,7 +141,7 @@ pub fn is_automated_browser(p: &Proc) -> bool {
             || a == "--enable-automation"
             || a.starts_with("-marionette")
             || (a.starts_with("--user-data-dir=")
-                && (a.contains("playwright") || a.contains("puppeteer") || a.contains("\\temp\\")))
+                && (a.contains("playwright") || a.contains("puppeteer") || a.contains("\\temp\\") || a.contains("/tmp/") || a.contains("/var/folders/")))
     })
 }
 
@@ -144,8 +150,8 @@ fn is_tunnel_ssh(p: &Proc) -> bool {
 }
 
 pub fn kind_of(p: &Proc) -> Option<Kind> {
-    let name = p.lname();
-    let stem = name.trim_end_matches(".exe");
+    let name = p.stem();
+    let stem = name.as_str();
     let exe = p.lexe();
     let k = match stem {
         "node" | "node_repl" | "nodemon" => Kind::Node,
@@ -156,7 +162,7 @@ pub fn kind_of(p: &Proc) -> Option<Kind> {
         | "flask" | "gradio" => Kind::Python,
         s if s.starts_with("python3.") => Kind::Python,
         "chromedriver" | "msedgedriver" | "geckodriver" => Kind::Browser,
-        _ if BROWSERS.contains(&name.as_str()) => {
+        _ if BROWSERS.contains(&stem) => {
             if is_automated_browser(p) {
                 Kind::Browser
             } else {
@@ -185,8 +191,9 @@ pub fn kind_of(p: &Proc) -> Option<Kind> {
         | "mingw32-make" | "tsc" | "vite" | "wrangler" | "playwright" | "supabase" => Kind::Tool,
         "bash" | "sh" | "zsh" | "dash" | "fish" | "cmd" | "powershell" | "pwsh" | "nu" => Kind::Shell,
         _ => {
-            // Console entry points installed into a Python venv (e.g. `.venv\Scripts\blender-mcp.exe`).
-            if exe.contains("\\scripts\\") && (exe.contains("\\.venv\\") || exe.contains("\\venv\\")) {
+            // Console entry points installed into a Python venv (e.g. `.venv\Scripts\blender-mcp.exe`,
+            // or `.venv/bin/blender-mcp` on a Mac).
+            if (exe.contains("\\scripts\\") || exe.contains("\\bin\\")) && (exe.contains("\\.venv\\") || exe.contains("\\venv\\")) {
                 Kind::Python
             } else {
                 return None;
@@ -201,6 +208,17 @@ pub fn is_app_bundled(p: &Proc) -> bool {
     let exe = p.lexe();
     if exe.is_empty() {
         return false;
+    }
+    // A Mac path (lexe spells every path with backslashes): inside an app, or the system's own.
+    if exe.starts_with('\\') && !exe.starts_with("\\\\") {
+        let inside = exe.contains(".app\\contents\\")
+            || ["\\system\\", "\\usr\\libexec\\", "\\library\\apple\\"].iter().any(|d| exe.starts_with(d));
+        const DEV_APPS: &[&str] = &[
+            "\\python.framework\\", "\\python3.framework\\", "\\xcode", "\\postgres", "\\ollama", "\\blender", "\\docker",
+            "\\orbstack", "\\redis", "\\mongodb", "\\mysql", "\\mariadb", "\\ffmpeg", "\\imagemagick", "\\virtualbox",
+            "\\vmware", "\\qemu", "\\utm.app\\", "\\ngrok", "\\cloudflared", "\\stripe", "\\nginx", "\\caddy", "\\nodejs",
+        ];
+        return inside && !DEV_APPS.iter().any(|d| exe.contains(d));
     }
     let in_program_files = exe.starts_with("c:\\program files\\")
         || exe.starts_with("c:\\program files (x86)\\")
@@ -221,16 +239,24 @@ pub fn is_app_bundled(p: &Proc) -> bool {
     !DEV_HOMES.iter().any(|d| exe.contains(d))
 }
 
-/// Windows' own plumbing. Mom never touches these.
+/// The system's own plumbing, and the terminals you type in. Mom never touches these.
 pub fn is_critical(p: &Proc) -> bool {
+    let stem = p.stem();
     matches!(
-        p.lname().as_str(),
-        "system" | "idle" | "smss.exe" | "csrss.exe" | "wininit.exe" | "winlogon.exe" | "services.exe"
-            | "lsass.exe" | "svchost.exe" | "dwm.exe" | "explorer.exe" | "fontdrvhost.exe" | "sihost.exe"
-            | "taskhostw.exe" | "runtimebroker.exe" | "searchhost.exe" | "startmenuexperiencehost.exe"
-            | "ctfmon.exe" | "registry" | "memory compression" | "lsaiso.exe" | "wudfhost.exe"
-            | "audiodg.exe" | "spoolsv.exe" | "conhost.exe" | "openconsole.exe" | "windowsterminal.exe"
-    )
+        stem.as_str(),
+        "system" | "idle" | "smss" | "csrss" | "wininit" | "winlogon" | "services"
+            | "lsass" | "svchost" | "dwm" | "explorer" | "fontdrvhost" | "sihost"
+            | "taskhostw" | "runtimebroker" | "searchhost" | "startmenuexperiencehost"
+            | "ctfmon" | "registry" | "memory compression" | "lsaiso" | "wudfhost"
+            | "audiodg" | "spoolsv" | "conhost" | "openconsole" | "windowsterminal"
+    ) || (cfg!(unix)
+        && matches!(
+            stem.as_str(),
+            "launchd" | "kernel_task" | "windowserver" | "loginwindow" | "finder" | "dock" | "systemuiserver" | "controlcenter"
+                | "notificationcenter" | "spotlight" | "coreaudiod" | "cfprefsd" | "distnoted" | "launchservicesd" | "login"
+                | "sshd" | "systemd" | "init" | "terminal" | "iterm2" | "ghostty" | "wezterm-gui" | "alacritty" | "kitty"
+                | "tmux" | "screen" | "zellij"
+        ))
 }
 
 // ---------------------------------------------------------------- naming
@@ -408,7 +434,7 @@ fn name_from_js(args: &[String], cwd: Option<&str>, runtime: &str) -> String {
 }
 
 fn name_from_python(p: &Proc, args: &[String], cwd: Option<&str>) -> String {
-    let stem = p.lname().trim_end_matches(".exe").to_string();
+    let stem = p.stem();
     if !matches!(stem.as_str(), "python" | "pythonw" | "python3" | "py" | "pyw") && !stem.starts_with("python3.") {
         if stem == "uv" || stem == "uvx" {
             let rest: Vec<String> = after_flags(args, &["--directory", "--project", "--python", "--with", "-p"]).to_vec();
@@ -465,7 +491,7 @@ fn wrapped_eval(inner: &str) -> Option<String> {
 fn name_from_shell(args: &[String]) -> String {
     let joined = format!(" {}", args.join(" "));
     let lower = joined.to_ascii_lowercase();
-    for marker in [" /c ", " -c ", " -command ", " /k "] {
+    for marker in [" /c ", " -c ", " -lc ", " -ic ", " -lic ", " -ilc ", " -command ", " /k "] {
         if let Some(i) = lower.find(marker) {
             let inner = joined[i + marker.len()..].trim().trim_matches('"').to_string();
             if let Some(cmd) = wrapped_eval(&inner) {
@@ -491,9 +517,13 @@ fn name_from_shell(args: &[String]) -> String {
 
 pub fn display_name(p: &Proc) -> String {
     let kind = kind_of(p);
+    // It named itself ("npm run dev", "next-server (v15.1.0)"): that's its name.
+    if p.retitled && !p.cmd.is_empty() && kind != Some(Kind::Shell) {
+        return crate::util::ellipsize(&p.cmd.join(" "), 48);
+    }
     let args: Vec<String> = p.cmd.iter().skip(1).cloned().collect();
     let cwd = p.cwd.as_deref();
-    let stem = p.lname().trim_end_matches(".exe").to_string();
+    let stem = p.stem();
     let name = match kind {
         Some(Kind::Node) if stem == "node_repl" => "node REPL".to_string(),
         Some(Kind::Node) => name_from_js(&args, cwd, "node"),
@@ -587,11 +617,11 @@ pub fn category_of(p: &Proc, has_ports: bool, role: Role) -> Category {
     if mentions_mcp(&cmd) || (role == Role::Harness && !has_ports) {
         return Category::McpServer;
     }
-    if (p.lname() == "tail.exe" || cmd.starts_with("tail "))
+    if (p.stem() == "tail" || cmd.starts_with("tail "))
         && p.cmd.iter().any(|a| a.starts_with('-') && a.to_ascii_lowercase().contains('f')) {
             return Category::LogFollower;
         }
-    if p.lname() == "sleep.exe" {
+    if p.stem() == "sleep" {
         return Category::Sleeper;
     }
     let watching = p.cmd.iter().any(|a| a == "--watch" || a == "-w" || a == "watch")

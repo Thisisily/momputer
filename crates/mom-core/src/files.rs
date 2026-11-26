@@ -257,11 +257,22 @@ const PROJECT_MARKERS: &[&str] = &[
     "makefile",
 ];
 
+/// Folders a Mac shows as one thing: a photo library, an app, a project of GarageBand's or Final
+/// Cut's. What's inside is the app's to arrange (a photo library keeps the original and the
+/// edited copy of a picture on purpose), so mom doesn't look in.
+const MAC_PACKAGES: &[&str] = &[
+    ".photoslibrary", ".app", ".musiclibrary", ".tvlibrary", ".imovielibrary", ".fcpbundle", ".logicx", ".band", ".framework", ".bundle", ".xcodeproj",
+    ".xcworkspace", ".sparsebundle", ".rtfd", ".photolibrary", ".aplibrary", ".migratedphotolibrary", ".theater", ".playground", ".dsym",
+];
+
 fn protected_directory_name(path: &Path) -> bool {
     let Some(name) = path.file_name() else { return false };
     let name = name.to_string_lossy().to_lowercase();
     name.starts_with('.') || SKIP_DIRS.contains(&name.as_str())
         || (path.parent().is_some_and(is_drive_root) && SKIP_AT_DRIVE_ROOT.contains(&name.as_str()))
+        || MAC_PACKAGES.iter().any(|kind| name.ends_with(kind))
+        // A Mac's Library, in your own folder: every app's settings and data.
+        || (name == "library" && path.parent().and_then(Path::parent).is_some_and(|users| users == Path::new("/Users")))
 }
 
 /// A chosen subfolder cannot bypass the exclusions applied when its parent is scanned.
@@ -356,7 +367,8 @@ fn known_folders(paths: &Paths) -> Vec<(PathBuf, &'static str)> {
         (known(dirs::document_dir, "Documents"), "Documents"),
         (known(dirs::desktop_dir, "Desktop"), "Desktop"),
         (known(dirs::picture_dir, "Pictures"), "Pictures"),
-        (known(dirs::video_dir, "Videos"), "Videos"),
+        // The same folder goes by another name on a Mac.
+        (known(dirs::video_dir, if paths.is_mac() { "Movies" } else { "Videos" }), if paths.is_mac() { "Movies" } else { "Videos" }),
         (known(dirs::audio_dir, "Music"), "Music"),
         (onedrive, "OneDrive"),
     ]
@@ -855,7 +867,7 @@ fn full_hash(path: &Path, cancel: &AtomicBool, read: &mut dyn FnMut(u64)) -> Has
 /// whatever is ticked. Never deletes anything for good. The saved scan is updated.
 pub fn recycle(paths: &Paths, files: &[PathBuf], keep: &[String]) -> RecycleReport {
     let mut room = crate::trash::bin::Room::default();
-    recycle_with(paths, files, keep, &mut |p, size| room.fits(p, size), &mut |p| ::trash::delete(p).is_ok())
+    recycle_with(paths, files, keep, &mut |p, size| room.fits(p, size), &mut |p| crate::util::to_bin(p).is_ok())
 }
 
 /// Marks what you said to keep in a scan that's about to be shown, so it can't be ticked. In a
@@ -1146,7 +1158,7 @@ mod tests {
         assert!(!chosen_roots(&paths, &cfg).iter().any(|r| same_path(r, &paths.downloads)));
         set_place(&paths, &mut cfg, &paths.downloads, true).unwrap();
         assert!(cfg.skip.is_empty());
-        assert!(is_drive_root(Path::new(r"D:\")) && !is_drive_root(&photos));
+        assert!(is_drive_root(Path::new(if cfg!(windows) { r"D:\" } else { "/" })) && !is_drive_root(&photos));
         std::fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1450,6 +1462,10 @@ mod tests {
             }
         }
         assert!(protected_directory_name(Path::new(r"D:\tools\node_modules")));
+        // What a Mac shows as one thing isn't looked into.
+        assert!(protected_directory_name(Path::new("/Users/me/Pictures/Photos Library.photoslibrary")));
+        assert!(protected_directory_name(Path::new("/Users/me/Downloads/Some.app")) && protected_directory_name(Path::new("/Users/me/Library")));
+        assert!(!protected_directory_name(Path::new("/Users/me/Documents/Library")) && !protected_directory_name(Path::new("/Users/me/Documents/apple")));
         assert!(!protected_directory_name(Path::new(r"D:\tools\node_modules-old")));
         assert!(!protected_directory_name(Path::new(r"D:Windows")));
         assert!(!protected_directory_name(Path::new(r"\\server\share\Windows")));

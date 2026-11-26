@@ -66,10 +66,109 @@ struct Profile {
     label: String,
     home: PathBuf,
     targets: Vec<PathBuf>,
+    /// On a Mac, the link a Chromium browser keeps in its folder while it has it open
+    /// (SingletonLock, which names the process). While that process runs, the cache stays.
+    lock: Option<PathBuf>,
+}
+
+/// Chromium browsers on a Mac: name, its program as it shows when running, and where its
+/// profiles are under ~/Library/Application Support. A Mac keeps a profile's pages and scripts
+/// apart from it, in the same place under ~/Library/Caches.
+const MAC_CHROMIUM: &[(&str, &str, &[&str])] = &[
+    ("Chrome", "google chrome", &["Google", "Chrome"]),
+    ("Edge", "microsoft edge", &["Microsoft Edge"]),
+    ("Brave", "brave browser", &["BraveSoftware", "Brave-Browser"]),
+    ("Vivaldi", "vivaldi", &["Vivaldi"]),
+    ("Chromium", "chromium", &["Chromium"]),
+];
+
+/// The same apps as APP_EXES, by the names their programs run under on a Mac. (VS Code and
+/// Windsurf run as "Electron": anything of that name open keeps their caches.)
+const MAC_APP_EXES: &[(&str, &[&str])] = &[
+    ("Code", &["electron", "code"]),
+    ("Code - Insiders", &["electron", "code - insiders"]),
+    ("Cursor", &["cursor"]),
+    ("Windsurf", &["electron", "windsurf"]),
+    ("Antigravity", &["antigravity"]),
+    ("Slack", &["slack"]),
+    ("Claude", &["claude"]),
+    ("Codex", &["codex"]),
+    ("discord", &["discord"]),
+    ("Microsoft Teams", &["teams", "msteams", "microsoft teams"]),
+    ("ai.opencode.desktop", &["opencode"]),
+    ("Notion", &["notion"]),
+    ("Figma", &["figma"]),
+    ("obsidian", &["obsidian"]),
+];
+
+/// Every profile with a cache, wherever this system keeps them.
+fn profiles_of(paths: &crate::paths::Paths) -> Vec<Profile> {
+    if paths.is_mac() {
+        mac_profiles(&paths.appdata, &paths.caches())
+    } else {
+        profiles(&paths.local_appdata, &paths.appdata)
+    }
+}
+
+/// A Mac's: Chromium browsers, Firefox, then apps built like browsers.
+fn mac_profiles(support: &Path, caches: &Path) -> Vec<Profile> {
+    let mut out = Vec::new();
+    for (browser, exe, rel) in MAC_CHROMIUM {
+        let data = rel.iter().fold(support.to_path_buf(), |p, r| p.join(r));
+        let saved = rel.iter().fold(caches.to_path_buf(), |p, r| p.join(r));
+        let names = profile_names(&data);
+        for dir in real_entries(&data) {
+            let n = name_of(&dir);
+            if !real_directory(&dir) || !is_profile_dir(&n) {
+                continue;
+            }
+            // In the profile itself, what the graphics card was given; under Caches, the pages.
+            let mut targets = existing(APP_CACHE_DIRS.iter().map(|c| dir.join(c)));
+            if real_directory(&saved.join(&n)) {
+                targets.extend(existing(CACHE_DIRS.iter().map(|c| saved.join(&n).join(c))));
+            }
+            if targets.is_empty() {
+                continue;
+            }
+            let label = match names.iter().find(|(k, _)| *k == n) {
+                Some((_, shown)) if !shown.is_empty() && *shown != n => format!("{shown} ({n})"),
+                _ => default_label(&n),
+            };
+            out.push(Profile { browser: browser.to_string(), exes: vec![exe.to_string()], label, home: dir, targets, lock: Some(data.join("SingletonLock")) });
+        }
+    }
+    for dir in real_entries(&caches.join("Firefox").join("Profiles")) {
+        let cache = dir.join("cache2");
+        if !real_directory(&dir) || existing([cache.clone()]).is_empty() {
+            continue;
+        }
+        let n = name_of(&dir);
+        let shown = n.split_once('.').map(|(_, p)| p).unwrap_or(&n);
+        out.push(Profile { browser: "Firefox".into(), exes: vec!["firefox".into()], label: format!("{shown} profile"), home: dir.clone(), targets: vec![cache], lock: None });
+    }
+    out.extend(apps(support, support, true));
+    out
+}
+
+/// Is the browser that keeps this lock still running? The link reads "<computer>-<process
+/// number>". One that can't be read counts as held; one left by a process that's gone doesn't.
+fn locked(p: &Profile) -> bool {
+    let Some(lock) = &p.lock else { return false };
+    let Ok(holder) = std::fs::read_link(lock) else { return std::fs::symlink_metadata(lock).is_ok() };
+    let Some(pid) = holder.to_string_lossy().rsplit('-').next().and_then(|n| n.parse::<u32>().ok()) else { return true };
+    #[cfg(unix)]
+    {
+        crate::procs::started(pid).is_none_or(|running| running.is_some())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
 }
 
 pub(super) fn find(ctx: &TrashCtx) -> Found {
-    let profiles = profiles(&ctx.paths.local_appdata, &ctx.paths.appdata);
+    let profiles = profiles_of(ctx.paths);
     if profiles.is_empty() {
         return Found::none();
     }
@@ -95,6 +194,7 @@ pub(super) fn find(ctx: &TrashCtx) -> Found {
             continue;
         }
         let mut c = Cand::new(p.home.clone(), format!("{}, {}", p.browser, p.label), &t, ctx.now);
+        let held = locked(&p);
         c.targets = p.targets;
         let c = if !safe {
             c.verdict(false, "Cache path is linked, protected, or could not be checked")
@@ -102,7 +202,7 @@ pub(super) fn find(ctx: &TrashCtx) -> Found {
             c.verdict(false, "Cache contents could not be fully checked or contain links")
         } else if p.exes.is_empty() {
             c.verdict(false, "App process identity is unknown; clear its cache in the app")
-        } else if p.exes.iter().any(|e| ctx.running(e)) {
+        } else if p.exes.iter().any(|e| ctx.running(e)) || held {
             if !open.contains(&p.browser) {
                 open.push(p.browser.clone());
             }
@@ -142,8 +242,8 @@ pub(super) fn open_names(stays: &[Cand]) -> Vec<&str> {
 /// A size scan can take long enough for the app to start. Recheck immediately before each
 /// browser cleanup item, rather than relying only on the process snapshot that began it.
 pub(super) fn still_closed(home: &Path, ctx: &TrashCtx) -> bool {
-    let Some(profile) = profiles(&ctx.paths.local_appdata, &ctx.paths.appdata).into_iter().find(|p| p.home == home) else { return false };
-    if profile.exes.is_empty() || ctx.in_use(home) { return false; }
+    let Some(profile) = profiles_of(ctx.paths).into_iter().find(|p| p.home == home) else { return false };
+    if profile.exes.is_empty() || ctx.in_use(home) || locked(&profile) { return false; }
     #[cfg(not(test))]
     let running = crate::procs::running_names_now();
     // Tests use their isolated fake process table, never the person's real browsers.
@@ -200,7 +300,7 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
                 Some((_, shown)) if !shown.is_empty() && *shown != n => format!("{shown} ({n})"),
                 _ => default_label(&n),
             };
-            out.push(Profile { browser: browser.to_string(), exes: vec![exe.to_string()], label, home: dir, targets });
+            out.push(Profile { browser: browser.to_string(), exes: vec![exe.to_string()], label, home: dir, targets, lock: None });
         }
     }
     // Opera keeps its cache in Local and the rest of the profile in Roaming, and older versions
@@ -244,7 +344,7 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
         }
         for (profile, targets) in by_profile {
             let home = targets[0].parent().map(Path::to_path_buf).unwrap_or_default();
-            out.push(Profile { browser: browser.clone(), exes: vec!["opera.exe".into()], label: default_label(&profile), home, targets });
+            out.push(Profile { browser: browser.clone(), exes: vec!["opera.exe".into()], label: default_label(&profile), home, targets, lock: None });
         }
     }
     let ff = local.join("Mozilla").join("Firefox").join("Profiles");
@@ -262,16 +362,17 @@ fn profiles(local: &Path, roaming: &Path) -> Vec<Profile> {
             label: format!("{shown} profile"),
             home: dir.clone(),
             targets: vec![cache],
+            lock: None,
         });
     }
-    out.extend(apps(local, roaming));
+    out.extend(apps(local, roaming, false));
     out.extend(epic(local));
     out
 }
 
 /// Electron apps: any folder in %APPDATA% (or a Store app's copy of it) with a browser cache in
 /// it. One item per app, its built-in browser tabs' caches included.
-fn apps(local: &Path, roaming: &Path) -> Vec<Profile> {
+fn apps(local: &Path, roaming: &Path, mac: bool) -> Vec<Profile> {
     let mut homes: Vec<PathBuf> = real_entries(roaming).into_iter().filter(|d| !NOT_APPS.contains(&name_of(d).as_str())).collect();
     for pkg in real_entries(&local.join("Packages")) {
         homes.extend(real_entries(&pkg.join("LocalCache").join("Roaming")));
@@ -298,12 +399,16 @@ fn apps(local: &Path, roaming: &Path) -> Vec<Profile> {
         if targets.is_empty() {
             continue;
         }
-        let exes = match APP_EXES.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)) {
+        let known = if mac { MAC_APP_EXES } else { APP_EXES };
+        let exes = match known.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)) {
             Some((_, e)) => e.iter().map(|x| x.to_string()).collect(),
             None => Vec::new(),
         };
         let label = if home.join("Partitions").is_dir() { "app and built-in browser" } else { "app" };
-        out.push(Profile { browser: name, exes, label: label.into(), home, targets });
+        let lock = mac.then(|| home.join("SingletonLock"));
+        // A Mac's apps often keep their folder under the name macOS knows them by.
+        let name = if mac { super::app_name(&name) } else { name };
+        out.push(Profile { browser: name, exes, label: label.into(), home, targets, lock });
     }
     out
 }
@@ -319,14 +424,14 @@ fn epic(local: &Path) -> Vec<Profile> {
         if !is_webcache || !real_directory(&home) { continue; }
         let targets = existing(APP_CACHE_DIRS.iter().map(|c| home.join(c)));
         if !targets.is_empty() {
-            out.push(Profile { browser: "Epic Games launcher".into(), exes: EPIC_EXES.iter().map(|s| s.to_string()).collect(), label: name, home, targets });
+            out.push(Profile { browser: "Epic Games launcher".into(), exes: EPIC_EXES.iter().map(|s| s.to_string()).collect(), label: name, home, targets, lock: None });
         }
     }
     let home = local.join("Epic Games").join("EOSOverlay").join("BrowserCache");
     if real_directory(&home) {
         let targets = existing(APP_CACHE_DIRS.iter().map(|c| home.join(c)));
         if !targets.is_empty() {
-            out.push(Profile { browser: "Epic Games overlay".into(), exes: EPIC_EXES.iter().map(|s| s.to_string()).collect(), label: "browser cache".into(), home, targets });
+            out.push(Profile { browser: "Epic Games overlay".into(), exes: EPIC_EXES.iter().map(|s| s.to_string()).collect(), label: "browser cache".into(), home, targets, lock: None });
         }
     }
     out

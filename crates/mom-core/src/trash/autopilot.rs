@@ -121,7 +121,20 @@ pub fn away_secs() -> Option<u64> {
     Some(u64::from(now.wrapping_sub(info.time)) / 1000)
 }
 
-#[cfg(not(windows))]
+/// On a Mac, the window system keeps the time since anything was pressed or moved.
+#[cfg(target_os = "macos")]
+pub fn away_secs() -> Option<u64> {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state: i32, event: u32) -> f64;
+    }
+    // Everything this login session has seen (0), of any kind of input (all ones).
+    // SAFETY: two numbers in, one out; it reads a counter and touches nothing.
+    let secs = unsafe { CGEventSourceSecondsSinceLastEventType(0, u32::MAX) };
+    (secs.is_finite() && secs >= 0.0).then_some(secs as u64)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn away_secs() -> Option<u64> {
     None
 }
@@ -155,13 +168,38 @@ pub fn on_mains() -> Option<bool> {
     }
 }
 
-#[cfg(not(windows))]
+/// On a Mac, the power manager says what it's drawing from. (A Mac with no battery only ever
+/// draws from the wall.)
+#[cfg(target_os = "macos")]
+pub fn on_mains() -> Option<bool> {
+    let out = crate::util::run("/usr/bin/pmset", &["-g", "ps"], std::time::Duration::from_secs(4)).ok().filter(|o| o.ok())?;
+    let said = out.text();
+    let first = said.lines().next()?;
+    if first.contains("'AC Power'") {
+        Some(true)
+    } else if first.contains("'Battery Power'") || first.contains("'UPS Power'") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn on_mains() -> Option<bool> {
     None
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_mac_says_how_long_youve_been_away_and_what_it_runs_on() {
+        // The window system always has an answer. (What the power manager says depends on the
+        // Mac: one that only builds and tests may have nothing to say.)
+        assert!(super::away_secs().is_some());
+        let _ = super::on_mains();
+    }
+
     use super::super::tests::{ctx, fixture, write};
     use super::*;
     use crate::config::TrashConfig;
